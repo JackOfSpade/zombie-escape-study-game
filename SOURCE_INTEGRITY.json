@@ -1,0 +1,32 @@
+{
+  "original_filename": "Product_Engineer_Interview_Prep(1).md",
+  "bundled_filename": "interview_prep_roadmap.md",
+  "document_id": "interview_prep_roadmap",
+  "revision": 9,
+  "updated_on": "2026-09-19",
+  "byte_length": 430167,
+  "line_count": 2991,
+  "whole_file_sha256": "645d41c58c9211a9a37e0ae749361ac4a6341aaa05336ffffe6050d6d68889ef",
+  "byte_identical_to_original_upload": true,
+  "protected_blocks": {
+    "merge_rules_sha256": {
+      "declared": "9b9356e55f49e72a2112b3178c4626b74577d2667e6e486fcc18211ef6e44be9",
+      "computed": "9b9356e55f49e72a2112b3178c4626b74577d2667e6e486fcc18211ef6e44be9",
+      "matches": true
+    },
+    "py_curriculum_sha256": {
+      "declared": "ee4404756df4a42ce6eb9100939ba32cc1193f52ab2f686984e39e6a0c752737",
+      "computed": "ee4404756df4a42ce6eb9100939ba32cc1193f52ab2f686984e39e6a0c752737",
+      "matches": true
+    },
+    "pe_curriculum_sha256": {
+      "declared": "c62ed312b1e982b236eda4b897f8a7281264823ae7c09c7fb105f6b1f67d15ee",
+      "computed": "c62ed312b1e982b236eda4b897f8a7281264823ae7c09c7fb105f6b1f67d15ee",
+      "matches": true
+    }
+  },
+  "curriculum_or_evidence_changed": false,
+  "study_session_started_by_handoff": false,
+  "verification_scope": "Byte equality and protected-block digests against supplied upload only; no verification of unavailable earlier ancestors or inherited external sources.",
+  "game_implementation_tests_executed": false
+}
