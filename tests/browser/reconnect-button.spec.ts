@@ -64,7 +64,11 @@ test("Reconnect ChatGPT runs the whole sequence itself, keeps Settings closed, r
           configured: true,
           linked: relay.linked,
           workerActive: false,
-          terminalRelay: { sessions: relay.sessions, pendingTurns: 0 },
+          terminalRelay: {
+            sessions: relay.sessions,
+            activeSessions: relay.sessions,
+            pendingTurns: 0,
+          },
           mcpUrl: "https://synthetic.lullascape.com/mcp",
           pairingOpen: false,
           diagnostics: [],
@@ -139,7 +143,7 @@ test("Reconnect ChatGPT reports what it cannot do on its own when the connector 
           configured: true,
           linked: false,
           workerActive: false,
-          terminalRelay: { sessions: 0, pendingTurns: 0 },
+          terminalRelay: { sessions: 0, activeSessions: 0, pendingTurns: 0 },
         },
         tunnel: { state: "off", verified: false, error: null },
       },
@@ -159,4 +163,62 @@ test("Reconnect ChatGPT reports what it cannot do on its own when the connector 
   await expect(page.locator("#connect-completion")).toBeVisible({
     timeout: 15_000,
   });
+});
+
+test("a queued terminal message says when nothing in ChatGPT is listening", async ({
+  page,
+}) => {
+  let activeSessions = 0;
+  await page.route("**/api/status", (route) =>
+    route.fulfill({
+      json: {
+        mode: "chatgpt-handoff",
+        label: "ChatGPT handoff",
+        capabilities: ["tutor"],
+        detail: "Synthetic handoff",
+      },
+    }),
+  );
+  await page.route("**/api/bridge", (route) =>
+    route.fulfill({
+      status: 202,
+      json: { status: "pending", handoff: { id: "synthetic-job", hash: "h" } },
+    }),
+  );
+  await page.route("**/api/bridge/result**", (route) =>
+    route.fulfill({ status: 202, json: { status: "pending" } }),
+  );
+  await page.route("**/api/handoff/status", (route) =>
+    route.fulfill({
+      json: {
+        enabled: true,
+        queued: 1,
+        working: 0,
+        done: 0,
+        recent: [{ id: "synthetic-job", operation: "tutor", status: "queued" }],
+        public: {
+          configured: true,
+          linked: true,
+          workerActive: false,
+          terminalRelay: { sessions: 1, activeSessions, pendingTurns: 0 },
+        },
+        tunnel: { state: "connected", verified: true, error: null },
+      },
+    }),
+  );
+  await openSoloTerminal(page);
+  await page.locator("#chat-input").fill("hi");
+  await page.locator("#chat-form button").click();
+  await expect(page.locator("#tutor-request-status")).toContainText(
+    "nothing is listening in ChatGPT",
+    { timeout: 15_000 },
+  );
+  activeSessions = 1;
+  await expect(page.locator("#tutor-request-status")).toContainText(
+    "Queued for ChatGPT. Keep the study terminal app open",
+    { timeout: 15_000 },
+  );
+  await expect(page.locator("#tutor-request-status")).not.toContainText(
+    "nothing is listening",
+  );
 });

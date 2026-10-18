@@ -381,6 +381,23 @@ test("owners are isolated, sessions are bounded and oversized packets omit conte
   );
 });
 
+test("status counts only app sessions that are still calling in as active", () => {
+  let clock = 1_000_000;
+  const queue = createHandoffQueue();
+  const app = createTerminalRelayApp({ queue, now: () => clock });
+  const s = state(app.call("open_study_terminal", {}, owner));
+  assert.deepEqual(app.status(), {
+    sessions: 1,
+    activeSessions: 1,
+    pendingTurns: 0,
+  });
+  clock += 21_000;
+  assert.equal(app.status().activeSessions, 0, "a paused app is not listening");
+  assert.equal(app.status().sessions, 1);
+  app.call("read_study_terminal", { relayId: s.relayId }, owner);
+  assert.equal(app.status().activeSessions, 1);
+});
+
 test("chunked terminal packets are reassembled and all parts are read before a reply is accepted", () => {
   const { queue, open, claim, reply } = setup({ promptLimit: 2_000_000 });
   queue.enable(true);

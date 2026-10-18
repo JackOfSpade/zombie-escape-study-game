@@ -106,11 +106,14 @@ export const terminalRelayTools = () =>
 const isTerminalDialogue = (job) =>
   job.operation === "tutor" && job.payload?.mode === "terminal-dialogue";
 
+/** An app session counts as listening only while its UI keeps calling in. */
+export const ACTIVE_WINDOW_MS = 20_000;
 export function createTerminalRelayApp({
   queue,
   now = Date.now,
   maxSessions = 64,
   promptLimit = PROMPT_LIMIT,
+  activeWindowMs = ACTIVE_WINDOW_MS,
 } = {}) {
   if (!queue) throw Error("The terminal relay requires the handoff queue");
   const sessions = new Map();
@@ -324,6 +327,9 @@ export function createTerminalRelayApp({
     },
     status: () => ({
       sessions: sessions.size,
+      activeSessions: [...sessions.values()].filter(
+        (s) => now() - s.updated <= activeWindowMs,
+      ).length,
       pendingTurns: [...sessions.values()].filter(
         (s) => s.turn?.status === "claimed",
       ).length,

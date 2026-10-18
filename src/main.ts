@@ -1,3 +1,4 @@
+import { relayListening, relayServes } from "./bridge-client";
 import { terminalChannel, submissionView } from "./terminal-view";
 import { FramePerformance } from "./frame-performance";
 import gameShell from "./game-shell.html?raw";
@@ -740,7 +741,9 @@ function renderTerminal(force = false) {
           `<p>${
             j.state === "pending"
               ? j.transportPhase === "queued"
-                ? "Queued for ChatGPT. Keep the study terminal app open in a regular ChatGPT chat, or a bridge chat actively serving requests; a connected tunnel cannot generate replies. Survival continues."
+                ? relayListening() === false
+                  ? "Queued, but nothing is listening in ChatGPT. Open a ChatGPT chat with the zombie-escape-study-game app and ask it to open your study terminal (or resume it if it paused); a connected tunnel cannot generate replies. Survival continues."
+                  : "Queued for ChatGPT. Keep the study terminal app open in a regular ChatGPT chat, or a bridge chat actively serving requests; a connected tunnel cannot generate replies. Survival continues."
                 : j.transportPhase === "working"
                   ? "Picked up by ChatGPT; waiting for its reply. Survival continues."
                   : "Waiting for a reply. Survival continues."
@@ -1322,12 +1325,10 @@ async function reconnectChatGpt() {
       throw Error("The study bridge did not switch to the ChatGPT handoff.");
     for (let i = 0; i < 400 && game === requestGame; i++) {
       info = await handoffStatus();
-      const ready =
-        (info.public?.terminalRelay?.sessions ?? 0) > 0 ||
-        info.public?.workerActive === true;
+      const ready = relayServes(info);
       if (ready) break;
       reportReconnect(
-        "Connected and released. In ChatGPT, open a chat with the zombie-escape-study-game app and ask it to open your study terminal; this notice clears when it is ready.",
+        "Connected and released, but nothing is listening yet. In ChatGPT, open a chat with the zombie-escape-study-game app and ask it to open your study terminal (or press Resume if it paused); this notice clears when it is ready.",
       );
       await wait(3000);
     }

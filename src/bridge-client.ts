@@ -42,6 +42,14 @@ export async function checkBridge() {
   return bridgeStatus;
 }
 export type HandoffProgress = "queued" | "working" | "unknown";
+/** Whether a study terminal app or worker chat is currently serving the relay,
+ * from the last metadata poll. null until a poll has answered. */
+let listening: boolean | null = null;
+export const relayListening = () => listening;
+export const relayServes = (info: any) =>
+  (info?.public?.terminalRelay?.activeSessions ??
+    info?.public?.terminalRelay?.sessions ??
+    0) > 0 || info?.public?.workerActive === true;
 export async function bridgeRequest(
   operation: string,
   payload: unknown,
@@ -99,6 +107,7 @@ export async function bridgeRequest(
           });
           if (!health.ok) throw Error("Status unavailable");
           const info = await health.json();
+          listening = relayServes(info);
           const phase = info.recent?.find(
             (job: { id: string }) => job.id === receipt.id,
           )?.status;
@@ -106,6 +115,7 @@ export async function bridgeRequest(
             phase === "queued" || phase === "working" ? phase : "unknown",
           );
         } catch {
+          listening = null;
           onProgress("unknown");
         }
       }
