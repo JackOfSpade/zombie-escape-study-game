@@ -1,8 +1,8 @@
 import { expect, test, type Page } from "@playwright/test";
+import { enterLegacyBuilding } from "./helpers/legacy-world";
 
 async function safeRun(page: Page) {
-  await page.goto("/");
-  await page.getByRole("button", { name: "Enter the building" }).click();
+  await enterLegacyBuilding(page);
   await page.evaluate(() => {
     const g = (window as any).__deadAir.game,
       a = g.survivors[0],

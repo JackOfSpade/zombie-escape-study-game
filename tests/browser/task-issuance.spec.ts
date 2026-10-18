@@ -1,5 +1,6 @@
 // Real UI lifecycle with a synthetic provider; no native identity/semantic claim.
 import { expect, test } from "@playwright/test";
+import { enterLegacyBuilding } from "./helpers/legacy-world";
 test("unanswered native task keeps its ID through leave/reload/death and gets a fresh linked question", async ({
   page,
 }) => {
@@ -45,8 +46,7 @@ test("unanswered native task keeps its ID through leave/reload/death and gets a 
         json: { error: "Unused fixture operation" },
       });
   });
-  await page.goto("/");
-  await page.getByRole("button", { name: "Enter the building" }).click();
+  await enterLegacyBuilding(page);
   const baseline = await page.evaluate(() => {
     const g = (window as any).__deadAir.game,
       a = g.survivors[0],

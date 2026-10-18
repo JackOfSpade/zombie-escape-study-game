@@ -122,7 +122,7 @@ header {
 }
 main {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 320px;
+  grid-template-columns: minmax(0, 1fr);
   max-width: 1920px;
   margin: auto;
   padding: 25px 30px 12px;
@@ -130,6 +130,14 @@ main {
 }
 .world {
   min-width: 0;
+  /* Without the side column the frame is capped so the play area keeps the
+     scale it was tuned for; the canvas resolution follows its CSS size. */
+  max-width: 1034px;
+  width: 100%;
+  margin: 0 auto;
+}
+.terminal-open .world {
+  max-width: none;
 }
 .world-top {
   display: flex;
@@ -216,9 +224,96 @@ kbd {
   margin: 12px 0;
   min-height: 20px;
 }
+/* The dashboard keeps the data elements the game writes to; while playing
+   the survivor status lives in the in-frame HUD instead of a side panel. */
 .dashboard {
-  border-left: 1px solid var(--line);
-  padding-left: 25px;
+  display: none;
+}
+.hud {
+  position: absolute;
+  left: 15px;
+  top: 15px;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 8px 12px;
+  background: rgba(11, 20, 24, 0.72);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  font: 12px monospace;
+  color: var(--ink);
+  pointer-events: none;
+  text-shadow: 0 1px 2px #000;
+  will-change: transform;
+}
+.hud-health {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.hud-health strong {
+  font:
+    500 18px "Space Grotesk",
+    sans-serif;
+  min-width: 36px;
+}
+.hud-track {
+  width: 90px;
+  height: 4px;
+  background: var(--line);
+  border-radius: 2px;
+  overflow: hidden;
+}
+#hud-health-fill {
+  height: 100%;
+  background: var(--accent);
+}
+.hud > *,
+.hud-chip,
+.hud-item {
+  white-space: nowrap;
+}
+.hud-item {
+  color: var(--muted);
+}
+/* Equipment controls overlay the frame's bottom edge; keys-only runs show nothing. */
+.inventory {
+  position: absolute;
+  right: 15px;
+  bottom: 15px;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+  align-items: center;
+  max-width: 50%;
+  will-change: transform;
+}
+.inventory:empty {
+  display: none;
+}
+/* Narrow viewports (terminal open, phones): stack the HUD rows. */
+.terminal-open .hud {
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+}
+.hud-chip {
+  color: var(--accent);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 3px 6px;
+  font-size: 9px;
+  letter-spacing: 0.5px;
+}
+@media (max-width: 600px) {
+  .hud {
+    gap: 8px;
+    padding: 6px 8px;
+  }
+  .hud-track {
+    width: 50px;
+  }
 }
 .dashboard > section {
   border-bottom: 1px solid var(--line);
@@ -627,11 +722,8 @@ body.reduced * {
 @media (max-width: 1000px) {
   main {
     padding: 18px;
-    grid-template-columns: minmax(0, 1fr) 260px;
+    grid-template-columns: minmax(0, 1fr);
     gap: 18px;
-  }
-  .dashboard {
-    padding-left: 18px;
   }
   .header-right {
     gap: 7px;
@@ -685,16 +777,7 @@ body.reduced * {
     height: 55vh;
     min-height: 350px;
   }
-  .dashboard {
-    border-left: 0;
-    padding-left: 0;
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 20px;
-  }
-  .dashboard > section {
-    padding: 12px 0;
-  }
+
   .terminal-open #terminal {
     max-height: none;
   }

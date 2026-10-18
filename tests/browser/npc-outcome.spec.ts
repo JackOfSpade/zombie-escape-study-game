@@ -1,6 +1,7 @@
 import { restoreTerminalMode } from "./helpers/terminal-mode";
 // Actual consumed-terminal UI, synthetic generation/validation. No native identity claim.
 import { expect, test } from "@playwright/test";
+import { enterLegacyBuilding } from "./helpers/legacy-world";
 for (const provider of ["study-mode", "chatgpt-handoff"])
   for (const failure of [false, true])
     test(`NPC-only solution inspection ${provider}: ${failure ? "deferred validation and exact retry" : "saved validated reconstruction"}`, async ({
@@ -87,8 +88,7 @@ for (const provider of ["study-mode", "chatgpt-handoff"])
             json: { error: "Unused fixture route" },
           });
       });
-      await page.goto("/");
-      await page.getByRole("button", { name: "Enter the building" }).click();
+      await enterLegacyBuilding(page);
       const before = await page.evaluate(async () => {
         const d = (window as any).__deadAir,
           g = d.game,

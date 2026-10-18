@@ -1,9 +1,9 @@
 import { expect, test } from "@playwright/test";
+import { enterLegacyBuilding } from "./helpers/legacy-world";
 test("a real-time stair landing barricade is attacked before the zombie appears on the upper floor", async ({
   page,
 }) => {
-  await page.goto("/");
-  await page.getByRole("button", { name: "Enter the building" }).click();
+  await enterLegacyBuilding(page);
   const baseline = await page.evaluate(() => {
     const g = (window as any).__deadAir.game,
       a = g.survivors[0],

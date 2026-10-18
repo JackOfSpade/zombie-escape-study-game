@@ -1,7 +1,7 @@
 import { expect, test, type Page } from "@playwright/test";
+import { enterLegacyBuilding } from "./helpers/legacy-world";
 async function setup(page: Page) {
-  await page.goto("/");
-  await page.locator("#start").click();
+  await enterLegacyBuilding(page);
   await page.evaluate(() => {
     const g = (window as any).__deadAir.game,
       a = g.survivors[0],

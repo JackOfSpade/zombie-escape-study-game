@@ -26,6 +26,9 @@ test("earned shields and real keyboard controls extract from a crowded rooftop a
     const root = "/src/",
       { save } = await import(root + "persistence.ts");
     const current = (window as any).__deadAir.game;
+    // The captured ascent is a legacy world; a fresh run's force-field rules
+    // must not leak into it through the save.
+    delete current.rules;
     Object.assign(current, captured);
     await save(current);
   }, captured);

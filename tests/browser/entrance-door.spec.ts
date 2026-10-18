@@ -57,8 +57,9 @@ test("opening countdown prevents all zombie spawns until ten simulation seconds"
 }) => {
   await page.goto("/");
   await page.locator("#start").click();
+  // Fresh runs use the force-field swarm wording; legacy worlds say zombies.
   await expect(page.locator("#next-description")).toContainText(
-    "Zombies spawn in",
+    /(Swarm begins|Zombies spawn) in/,
   );
   const result = await page.evaluate(async () => {
     const { createGame } = await import("/src/world.ts" as string),

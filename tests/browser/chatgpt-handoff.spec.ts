@@ -30,8 +30,9 @@ test("ChatGPT handoff UI: exact generation survives reload, tutoring stays priva
       },
       body: JSON.stringify(body),
     });
-    expect(response.ok).toBe(true);
-    return response.json();
+    const data = await response.json();
+    expect(response.ok, JSON.stringify(data)).toBe(true);
+    return data;
   };
   const sideWorker = "controlled-public-side-worker";
   const isRecordedJob = (job: any) =>
@@ -156,7 +157,14 @@ test("ChatGPT handoff UI: exact generation survives reload, tutoring stays priva
       await page.waitForFunction(() => !!(window as any).__deadAir);
       return page.evaluate(() => {
         const g = (window as any).__deadAir.game,
-          s = g.floors[0].stations[0];
+          s = g.floors[0].stations[0],
+          e = g.encounters[s.encounter];
+        // Legacy shared-save fixture: this flow covers the public group chat,
+        // shared editor and frozen complete operation. Fresh worlds give each
+        // station a solo puzzle, so re-link the second seat to the same room.
+        e.mode = "shared";
+        delete e.owner;
+        g.floors[0].stations[1].encounter = e.id;
         Object.assign(g.survivors[0], { x: s.x, y: s.y });
         for (const a of g.survivors.slice(1)) a.escaped = true; // Isolate transport; no NPC/balance claim.
       });
@@ -273,16 +281,21 @@ test("ChatGPT handoff UI: exact generation survives reload, tutoring stays priva
     expect(q.snapshot().queued).toBe(0);
     await answer(tutor, {
       text: "PRIVATE_HANDOFF_HINT: consider the assumptions for an empty input.",
+      // Solo terminals use the terminal-dialogue contract: an explicit decision is required.
+      ...(tutor.payload.mode === "terminal-dialogue"
+        ? { complete: false }
+        : {}),
     });
     await expect(page.locator("#messages")).toContainText(
       "PRIVATE_HANDOFF_HINT",
     );
+    // The solo conversation has no separate editor; the shared room does.
+    await restoreTerminalMode(page, "group");
     await page
       .locator("#workspace")
       .fill(
         "Human-authored synthetic reasoning after a supplied boundary hint; this does not demonstrate independent mastery.",
       );
-    await restoreTerminalMode(page, "group");
     await page.evaluate(() => {
       const g = (window as any).__deadAir.game,
         f = g.floors[0],

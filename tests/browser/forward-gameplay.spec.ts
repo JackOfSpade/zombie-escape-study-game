@@ -23,13 +23,11 @@ test("new runs use forward layouts and retain their geometry after pause/save/re
     };
   });
   expect(
-    before.floors
-      .slice(0, 4)
-      .every(
-        (f: any) =>
-          f.generation.version === 2 &&
-          f.rooms.every((r: any) => r.forwardExit),
-      ),
+    before.floors.slice(0, 4).every(
+      (f: any) =>
+        // Fresh force-field runs use the version 3 forward layout.
+        f.generation.version === 3 && f.rooms.every((r: any) => r.forwardExit),
+    ),
   ).toBe(true);
   await page.keyboard.press("Escape");
   await expect(page.locator("#pause-save-status")).toContainText("saved");
@@ -55,8 +53,12 @@ test("the actual Space key climbs a two-object barricade and records its attempt
   await page.locator("#start").click();
   await page.evaluate(async (s) => {
     const { TestRunner } = await import("/src/gametest/runner.ts" as string);
-    const g = (window as any).__deadAir.game;
-    Object.assign(g, new TestRunner(s, (window as any).__deadAir.roadmap).game);
+    const g = (window as any).__deadAir.game,
+      scenario = new TestRunner(s, (window as any).__deadAir.roadmap).game;
+    Object.assign(g, scenario);
+    // The legacy barricade scenario has no rules field; a fresh run's
+    // force-field rules must not survive the swap, since they disable vaulting.
+    g.rules = scenario.rules;
   }, stacked);
   await page.locator("#world").focus();
   await page.keyboard.press("Space");

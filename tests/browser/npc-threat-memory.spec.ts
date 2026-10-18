@@ -1,9 +1,9 @@
 import { expect, test } from "@playwright/test";
+import { enterLegacyBuilding } from "./helpers/legacy-world";
 test("an NPC retains a recent actual sighting after cover occludes its view while the player can see through that cover", async ({
   page,
 }) => {
-  await page.goto("/");
-  await page.getByRole("button", { name: "Enter the building" }).click();
+  await enterLegacyBuilding(page);
   const baseline = await page.evaluate(async () => {
     const g = (window as any).__deadAir.game,
       f = g.floors[0],

@@ -1,10 +1,10 @@
 import { expect, test } from "@playwright/test";
+import { enterLegacyBuilding } from "./helpers/legacy-world";
 
 test("a late player can use an initially generated opportunity after nineteen NPC completions and retain the exact draft on reload", async ({
   page,
 }) => {
-  await page.goto("/");
-  await page.getByRole("button", { name: "Enter the building" }).click();
+  await enterLegacyBuilding(page);
   const baseline = await page.evaluate(async () => {
     const root = "/src/",
       { complete } = await import(root + "engine.ts"),
@@ -54,7 +54,8 @@ test("a late player can use an initially generated opportunity after nineteen NP
   const problem = await page.locator("#problem").textContent();
   const draft =
     "Late arrival: my independent reasoning stays at this exact terminal.";
-  await page.locator("#workspace").fill(draft);
+  // Solo terminals keep the learner's unsent text in the conversation composer.
+  await page.locator("#chat-input").fill(draft);
   const time = await page.evaluate(() => (window as any).__deadAir.game.time);
   await expect
     .poll(() => page.evaluate(() => (window as any).__deadAir.game.time))
@@ -65,7 +66,7 @@ test("a late player can use an initially generated opportunity after nineteen NP
   await page.locator("#world").focus();
   await page.keyboard.press("e");
   await expect(page.locator("#terminal")).toBeVisible();
-  await expect(page.locator("#workspace")).toHaveValue(draft);
+  await expect(page.locator("#chat-input")).toHaveValue(draft);
   await expect(page.locator("#problem")).toHaveText(problem!);
   const after = await page.evaluate((id) => {
     const g = (window as any).__deadAir.game;

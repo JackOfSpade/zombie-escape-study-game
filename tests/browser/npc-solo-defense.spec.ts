@@ -1,10 +1,10 @@
 import { expect, test } from "@playwright/test";
+import { enterLegacyBuilding } from "./helpers/legacy-world";
 
 test("a solo NPC physically fortifies, reloads mid-move, and resumes private study without a defense credential", async ({
   page,
 }) => {
-  await page.goto("/");
-  await page.getByRole("button", { name: "Enter the building" }).click();
+  await enterLegacyBuilding(page);
   const baseline = await page.evaluate(async () => {
     const root = "/src/",
       { actor } = await import(root + "world.ts"),

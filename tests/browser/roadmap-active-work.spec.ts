@@ -2,6 +2,7 @@
 import { expect, test } from "@playwright/test";
 import { readFile } from "node:fs/promises";
 import { reviewRoadmap } from "../../src/roadmap-review";
+import { enterLegacyBuilding } from "./helpers/legacy-world";
 for (const scenario of ["unchanged", "stale", "new-work"])
   test(`current attempt reconciliation: ${scenario}`, async ({ page }) => {
     const stale = scenario === "stale";
@@ -155,8 +156,7 @@ for (const scenario of ["unchanged", "stale", "new-work"])
         json: { error: "Unused fixture operation" },
       });
     });
-    await page.goto("/");
-    await page.getByRole("button", { name: "Enter the building" }).click();
+    await enterLegacyBuilding(page);
     await page.evaluate(() => {
       const g = (window as any).__deadAir.game,
         s = g.floors[0].stations.find((s: any) => s.encounter === "f0-room0");
@@ -363,13 +363,13 @@ for (const scenario of ["unchanged", "stale", "new-work"])
     });
     await page.evaluate(() => {
       const g = (window as any).__deadAir.game,
-        s = g.floors[0].stations.find((s: any) => s.encounter === "f0-room1");
+        s = g.floors[0].stations.find((s: any) => s.encounter === "f0-room3");
       Object.assign(g.survivors[0], { x: s.x, y: s.y, station: undefined });
     });
     await page.locator("#world").focus();
     await page.keyboard.press("e");
     await expect(page.locator("#problem")).toContainText(
-      "Synthetic task for f0-room1",
+      "Synthetic task for f0-room3",
     );
     await page.locator("#workspace").fill("Fresh next eligible question draft");
     expect(

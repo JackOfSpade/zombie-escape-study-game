@@ -133,6 +133,10 @@ const panelReturnFocus = new Map<string, HTMLElement>();
 function panelToggle(id: string) {
   return $(id === "settings" ? "#settings-toggle" : "#curriculum-button");
 }
+function setText(selector: string, text: string) {
+  const el = $(selector);
+  if (el.textContent !== text) el.textContent = text;
+}
 function openPanel(id: string, focus: string) {
   const panel = $(`#${id}`);
   if (panel.hidden && document.activeElement instanceof HTMLElement)
@@ -453,8 +457,13 @@ function renderTerminal(force = false) {
   const chatPending = (e.tutorRequests ?? []).some(
     (j) => j.state === "pending",
   );
+  // A visible NPC-outcome reconstruction supplies the question for chat too.
+  const discussable =
+    !!e.problem ||
+    (outcomeIsVisible(game, e, roadmap) &&
+      !!e.outcomeInspection?.candidate?.problem);
   $<HTMLButtonElement>("#chat-form button").disabled =
-    !e.problem || (dialogue && chatPending);
+    !discussable || (dialogue && chatPending);
   $("#chat-input").setAttribute(
     "aria-label",
     dialogue ? "Message Terminal AI" : "Message",
@@ -599,11 +608,13 @@ function renderTerminal(force = false) {
     e.submissions.some((s) => s.status === "pending");
   const disconnected =
     status().mode === "development" && e.state !== "consumed";
-  $("#completion-connection").hidden = !disconnected;
-  $("#completion-connection").textContent = disconnected
-    ? "ChatGPT is disconnected. Your work is saved, but replies require reconnecting. Restarting the bridge turns sharing off until you enable it again. Game-server restarts reuse a running bridge."
-    : "";
-  $("#connect-completion").hidden = !disconnected;
+  $("#completion-connection").hidden = !disconnected && !reconnectProgress;
+  $("#completion-connection").textContent =
+    reconnectProgress ??
+    (disconnected
+      ? "ChatGPT is disconnected. Your work is saved, but replies require reconnecting. Restarting the bridge turns sharing off until you enable it again. Game-server restarts reuse a running bridge."
+      : "");
+  $("#connect-completion").hidden = !disconnected || reconnectBusy;
   const lastSubmission = e.submissions.at(-1),
     retryCompletion = $<HTMLButtonElement>("#retry-submission");
   retryCompletion.hidden =
@@ -795,12 +806,7 @@ $("#run-code").onclick = () => {
   renderTerminal();
 };
 $("#connect-completion").onclick = () => {
-  // Opening the existing connection controls does not release any study data.
-  if ($("#settings").hidden) $("#settings-toggle").click();
-  const enable = $("#handoff-enable");
-  const details = enable.closest("details");
-  if (details) details.open = true;
-  enable.focus();
+  void reconnectChatGpt();
 };
 $("#submit").onclick = () => {
   if (!active) return;
@@ -1250,6 +1256,95 @@ $("#handoff-copy").onclick = () => {
         "Select and copy the worker instructions above.";
     });
 };
+let reconnectProgress: string | null = null,
+  reconnectBusy = false;
+function reportReconnect(text: string | null) {
+  reconnectProgress = text;
+  if (active) renderTerminal();
+}
+async function handoffStatus() {
+  const response = await fetch("/api/handoff/status", {
+    signal: AbortSignal.timeout(10000),
+  });
+  if (!response.ok) throw Error("The local study bridge is not reachable");
+  return response.json();
+}
+async function handoffAction(body: Record<string, unknown>) {
+  const response = await fetch("/api/handoff/control", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+    signal: AbortSignal.timeout(15000),
+  });
+  const result = await response.json();
+  if (!response.ok) throw Error(result.error ?? "Handoff control failed");
+  return result;
+}
+const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+/** One click does the whole reconnect: start the public connector if needed,
+ * release live study requests, then wait for a study terminal or worker to
+ * be ready in ChatGPT. Settings stay closed; progress is reported in place. */
+async function reconnectChatGpt() {
+  if (reconnectBusy) return;
+  reconnectBusy = true;
+  const requestGame = game;
+  try {
+    reportReconnect("Reconnecting ChatGPT… checking the local study bridge.");
+    let info = await handoffStatus();
+    if (!info.public?.configured)
+      throw Error(
+        "No ChatGPT connector is configured on this server yet. Open Settings → ChatGPT connector setup once to provision it.",
+      );
+    if (!info.public.linked)
+      throw Error(
+        "ChatGPT is not paired with this game. Open Settings → ChatGPT connector setup, open pairing and approve the connector in ChatGPT once; afterwards this button reconnects on its own.",
+      );
+    if (!info.tunnel?.verified) {
+      reportReconnect("Reconnecting ChatGPT… starting the public connector.");
+      await handoffAction({ action: "start-public" });
+      for (let i = 0; i < 40 && !info.tunnel?.verified; i++) {
+        await wait(1500);
+        info = await handoffStatus();
+        if (info.tunnel?.error) throw Error(String(info.tunnel.error));
+      }
+      if (!info.tunnel?.verified)
+        throw Error(
+          "The public connector did not verify in time. Try Reconnect again.",
+        );
+    }
+    if (!info.enabled) {
+      reportReconnect("Reconnecting ChatGPT… releasing live study requests.");
+      await handoffAction({ action: "enable", enabled: true });
+    }
+    await checkBridge();
+    $("#bridge-detail").textContent = status().detail;
+    if (status().mode !== "chatgpt-handoff")
+      throw Error("The study bridge did not switch to the ChatGPT handoff.");
+    for (let i = 0; i < 400 && game === requestGame; i++) {
+      info = await handoffStatus();
+      const ready =
+        (info.public?.terminalRelay?.sessions ?? 0) > 0 ||
+        info.public?.workerActive === true;
+      if (ready) break;
+      reportReconnect(
+        "Connected and released. In ChatGPT, open a chat with the zombie-escape-study-game app and ask it to open your study terminal; this notice clears when it is ready.",
+      );
+      await wait(3000);
+    }
+    reportReconnect(
+      "Done. ChatGPT is connected and your study terminal is ready; send a message below.",
+    );
+    await wait(6000);
+    if (reconnectProgress?.startsWith("Done.")) reportReconnect(null);
+  } catch (error) {
+    reportReconnect(String(error instanceof Error ? error.message : error));
+    await wait(8000);
+    reportReconnect(null);
+  } finally {
+    reconnectBusy = false;
+    if (active) renderTerminal();
+  }
+}
 $("#settings-toggle").onclick = () => {
   void refreshHandoff();
   if ($("#settings").hidden) openPanel("settings", "#volume");
@@ -1421,7 +1516,17 @@ function ui() {
     `${String(Math.floor(game.time / 60)).padStart(2, "0")}:${String(Math.floor(game.time % 60)).padStart(2, "0")}`;
   $("#health").textContent = String(Math.ceil(a.hp));
   $("#health-fill").style.width = `${a.hp}%`;
-  $("#access").textContent =
+  // The HUD overlays the canvas; write to it only when a value changes so the
+  // overlay layer is not repainted every frame.
+  setText("#hud-health", String(Math.ceil(a.hp)));
+  const fill = `${Math.round(a.hp)}%`;
+  if ($("#hud-health-fill").style.width !== fill)
+    $("#hud-health-fill").style.width = fill;
+  setText(
+    "#hud-keys",
+    `${a.keys ?? 0} ${(a.keys ?? 0) === 1 ? "key" : "keys"}`,
+  );
+  const accessLabel =
     game.status === "escaped"
       ? "EXTRACTED"
       : game.status === "dead"
@@ -1431,6 +1536,8 @@ function ui() {
           : a.access.includes(a.floor)
             ? "STAIRS OPEN"
             : "ACCESS LOCKED";
+  $("#access").textContent = accessLabel;
+  setText("#hud-access", accessLabel);
   $("#alive").textContent = String(
     game.survivors.filter((a) => a.alive && !a.escaped).length,
   );
@@ -1473,6 +1580,9 @@ function ui() {
             ? `BOARDING · ${4 - game.helicopter.passengers.length} seats · ${Math.ceil(game.helicopter.until - game.time)}s`
             : `NEXT PICKUP · ${Math.ceil(game.helicopter.next - game.time)}s`
           : "";
+  setText("#hud-pickup", $("#pickup").textContent ?? "");
+  if ($("#hud-pickup").hidden !== !$("#pickup").textContent)
+    $("#hud-pickup").hidden = !$("#pickup").textContent;
   $("#weight").textContent =
     game.rules === "force-fields"
       ? `${a.keys ?? 0} KEYS`
@@ -1483,7 +1593,7 @@ function ui() {
     inventorySignature = sig;
     $("#inventory").innerHTML =
       game.rules === "force-fields"
-        ? `<p class="muted">${a.keys ?? 0} keys · E at a red field spends one for permanent personal access. Solo puzzles award another key.</p>`
+        ? "" // Keys are shown in the in-frame HUD.
         : a.inventory
             .map(
               (it) =>

@@ -10,7 +10,10 @@ test("Space cannot create a vault or physical work event after the player's deat
     const g = (window as any).__deadAir.game,
       a = g.survivors[0],
       f = g.floors[0],
-      chair = f.furniture.find((o: any) => o.kind === "chair");
+      // Fresh force-field worlds keep only door/gate fields; any solid object
+      // beside the dead player serves the same purpose as the old chair.
+      chair =
+        f.furniture.find((o: any) => o.kind === "chair") ?? f.furniture[0];
     f.tiles = Array.from({ length: 34 }, () => Array(44).fill(0));
     Object.assign(chair, { x: 12.5, y: 10.5 });
     f.furniture = [chair];

@@ -10,10 +10,11 @@ test("Space continues past five mixed barricades when each blocks the previous l
   await page.locator("#start").click();
   await page.evaluate(async (s) => {
     const { TestRunner } = await import("/src/gametest/runner.ts" as string);
-    Object.assign(
-      (window as any).__deadAir.game,
-      new TestRunner(s, (window as any).__deadAir.roadmap).game,
-    );
+    const g = (window as any).__deadAir.game,
+      scenario = new TestRunner(s, (window as any).__deadAir.roadmap).game;
+    Object.assign(g, scenario);
+    // A fresh run's force-field rules disable vaulting; use the scenario's.
+    g.rules = scenario.rules;
   }, fixture);
   await page.locator("#world").focus();
   await page.keyboard.press("Space");

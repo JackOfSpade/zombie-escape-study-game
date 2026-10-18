@@ -2,6 +2,7 @@ import { restoreTerminalMode } from "./helpers/terminal-mode";
 import { expect, test, type Page } from "@playwright/test";
 import { readFile, writeFile } from "node:fs/promises";
 import { tier4RoadmapFixture } from "../fixtures/tier4-roadmap";
+import { enterLegacyBuilding, useLegacyWorld } from "./helpers/legacy-world";
 async function expectHumanDrawn(page: Page) {
   await expect
     .poll(() =>
@@ -24,11 +25,7 @@ test("real browser: launch, playable movement, no typing capture, exact resume, 
 }) => {
   const errors: string[] = [];
   page.on("pageerror", (e) => errors.push(e.message));
-  await page.goto("/");
-  await expect(
-    page.getByRole("button", { name: "Enter the building" }),
-  ).toBeVisible();
-  await page.getByRole("button", { name: "Enter the building" }).click();
+  await enterLegacyBuilding(page);
   await expectHumanDrawn(page);
   const start = await page.evaluate(
     () => (window as any).__deadAir.game.survivors[0].y,
@@ -101,8 +98,7 @@ test("real browser: launch, playable movement, no typing capture, exact resume, 
 test("terminal use respects wall/door occlusion and keeps the draft when access is blocked", async ({
   page,
 }) => {
-  await page.goto("/");
-  await page.getByRole("button", { name: "Enter the building" }).click();
+  await enterLegacyBuilding(page);
   await page.evaluate(() => {
     const g = (window as any).__deadAir.game,
       a = g.survivors[0],
@@ -372,8 +368,7 @@ test("finite 360 vision: see through closed doors in both palettes, walls and di
 test("development partial work survives actual outside combat death and a fresh run without transferring its lock", async ({
   page,
 }) => {
-  await page.goto("/");
-  await page.getByRole("button", { name: "Enter the building" }).click();
+  await enterLegacyBuilding(page);
   await page.evaluate(() => {
     const g = (window as any).__deadAir.game,
       s = g.floors[0].stations[0];
@@ -589,12 +584,13 @@ for (const fixtureKind of ["checkpoint", "transfer", "historical"] as const) {
       }
       await route.fulfill({ json: { text: "Fixture guidance" } });
     });
-    await page.goto("/");
-    await page.getByRole("button", { name: "Enter the building" }).click();
+    await enterLegacyBuilding(page);
     await page.getByRole("button", { name: "Settings", exact: true }).click();
     await page
       .getByRole("button", { name: "Start a live study run", exact: true })
       .click();
+    // A new live run is a fresh force-field world; keep the legacy fixture.
+    await useLegacyWorld(page);
     await page.evaluate(
       (flags) => {
         const g = (window as any).__deadAir.game,
@@ -821,12 +817,13 @@ test("group proposal fixture: private tutor context stays private and replies be
         json: { error: "Unexpected fixture operation" },
       });
   });
-  await page.goto("/");
-  await page.getByRole("button", { name: "Enter the building" }).click();
+  await enterLegacyBuilding(page);
   await page.getByRole("button", { name: "Settings", exact: true }).click();
   await page
     .getByRole("button", { name: "Start a live study run", exact: true })
     .click();
+  // A new live run is a fresh force-field world; keep the legacy fixture.
+  await useLegacyWorld(page);
   await page.evaluate(() => {
     const g = (window as any).__deadAir.game,
       f = g.floors[0],
@@ -853,28 +850,39 @@ test("group proposal fixture: private tutor context stays private and replies be
     "Synthetic group workspace",
   );
   await restoreTerminalMode(page, "tutor");
-  await page
-    .getByRole("textbox", { name: "Message", exact: true })
-    .fill("PRIVATE_TUTOR_QUESTION");
+  // The solo composer is labelled "Message Terminal AI".
+  await page.locator("#chat-input").fill("PRIVATE_TUTOR_QUESTION");
   await page.locator("#chat-form button").click();
   await expect.poll(() => tutorQueued).toBe(true);
-  await restoreTerminalMode(page, "group");
-  // Restored solo history temporarily releases group workers; re-establish the
-  // synthetic shared respondent after restoring the shared terminal fixture.
-  await page.evaluate(() => {
-    const g = (window as any).__deadAir.game,
-      e = g.encounters["f0-room0"],
-      a = g.survivors[1];
-    a.intent = e.id;
-    a.thought = 10;
-    a.activity = "working";
-  });
+  // A private terminal-dialogue reply applies only while the room is still the
+  // learner's solo conversation, so it lands while the terminal is closed and
+  // nothing is displayed; the room then reopens as the shared group fixture.
+  await page.locator("#leave").click();
+  await expect(page.locator("#terminal")).toBeHidden();
   releaseTutor();
   await page.waitForFunction(() =>
     (window as any).__deadAir.game.encounters["f0-room0"].tutor.some(
       (m: any) => m.text === "PRIVATE_TUTOR_REPLY",
     ),
   );
+  await page.evaluate(async () => {
+    const g = (window as any).__deadAir.game,
+      e = g.encounters["f0-room0"],
+      a = g.survivors[1],
+      root = "/src/";
+    const { openChat } = await import(/* @vite-ignore */ root + "ai.ts");
+    e.mode = "shared";
+    delete e.owner;
+    void openChat(g, e);
+    // Restored solo history temporarily releases group workers; re-establish
+    // the synthetic shared respondent for the shared terminal fixture.
+    a.intent = e.id;
+    a.thought = 10;
+    a.activity = "working";
+  });
+  await page.locator("#world").focus();
+  await page.keyboard.press("e");
+  await expect(page.locator("#conversation-title")).toHaveText("Group chat");
   expect(
     await page.evaluate(
       () =>
@@ -1079,6 +1087,8 @@ for (const provider of ["study-mode", "chatgpt-handoff"])
     await page
       .getByRole("button", { name: "Start a live study run", exact: true })
       .click();
+    // A new live run is a fresh force-field world; keep the legacy fixture.
+    await useLegacyWorld(page);
     await page.evaluate(() => {
       const g = (window as any).__deadAir.game,
         e = g.encounters["f0-room0"],
@@ -1645,8 +1655,7 @@ test("audio and accessibility: real sound output, mute, stable reduced-motion ca
 test("equipment UI: readable effects, no wasted healing or blocked shots, physical door access and saved charges", async ({
   page,
 }) => {
-  await page.goto("/");
-  await page.getByRole("button", { name: "Enter the building" }).click();
+  await enterLegacyBuilding(page);
   await page.evaluate(() => {
     const g = (window as any).__deadAir.game;
     g.zombies = [];
@@ -1859,8 +1868,7 @@ for (const provider of ["study-mode", "chatgpt-handoff"])
         },
       });
     });
-    await page.goto("/");
-    await page.getByRole("button", { name: "Enter the building" }).click();
+    await enterLegacyBuilding(page);
     await page.evaluate(async () => {
       const g = (window as any).__deadAir.game,
         r = (window as any).__deadAir.roadmap,
@@ -2164,8 +2172,7 @@ test("shared reading and private tutoring preserve an exact question through del
       });
     else throw Error(`Unexpected lifecycle operation ${operation}`);
   });
-  await page.goto("/");
-  await page.getByRole("button", { name: "Enter the building" }).click();
+  await enterLegacyBuilding(page);
   await page.evaluate(async () => {
     const g = (window as any).__deadAir.game,
       root = "/src/",
@@ -2228,7 +2235,7 @@ test("shared reading and private tutoring preserve an exact question through del
   );
   await restoreTerminalMode(page, "tutor");
   await page
-    .getByRole("textbox", { name: "Message", exact: true })
+    .locator("#chat-input")
     .fill("Help me reason without writing a solution.");
   await page.locator("#chat-form button").click();
   await expect(page.locator("#messages")).toContainText(
@@ -2296,8 +2303,7 @@ test("observed NPC review finishes without idle generation or private-context re
       },
     });
   });
-  await page.goto("/");
-  await page.getByRole("button", { name: "Enter the building" }).click();
+  await enterLegacyBuilding(page);
   await page.evaluate(async () => {
     const d = (window as any).__deadAir,
       g = d.game,
@@ -2477,8 +2483,7 @@ for (const provider of ["study-mode", "chatgpt-handoff"])
           });
         }
       });
-      await page.goto("/");
-      await page.getByRole("button", { name: "Enter the building" }).click();
+      await enterLegacyBuilding(page);
       await page.evaluate(
         async ({ executable, provider }) => {
           const { game: g, roadmap: r } = (window as any).__deadAir,

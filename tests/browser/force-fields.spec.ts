@@ -47,17 +47,21 @@ test("fresh run uses force fields, personal keys and a solo study workspace", as
   });
   await page.locator("#world").focus();
   await page.keyboard.press("e");
-  await expect(page.locator("#workspace")).toBeVisible();
+  // Solo stations use the single Terminal AI conversation, with no separate
+  // answer editor; keys are shown in the in-frame HUD, not a side panel.
+  await expect(page.locator("#chat-input")).toBeVisible();
+  await expect(page.locator("#workspace")).toBeHidden();
   await expect(page.locator("#conversation-title")).toHaveText("Terminal AI");
   await expect(page.locator("#conversation-context")).toContainText("@study");
-  await expect(page.locator("#weight")).toContainText("KEYS");
+  await expect(page.locator("#hud-keys")).toHaveText("0 keys");
+  await expect(page.locator(".dashboard")).toBeHidden();
   const answer = page.locator(".answer-panel"),
     chat = page.locator(".conversation-panel");
   const a = (await answer.boundingBox())!,
     c = (await chat.boundingBox())!;
   expect(c.x).toBeGreaterThan(a.x + a.width);
-  await page.locator("#workspace").fill("A synthetic answer draft");
-  await expect(page.locator("#workspace")).toHaveValue(
+  await page.locator("#chat-input").fill("A synthetic answer draft");
+  await expect(page.locator("#chat-input")).toHaveValue(
     "A synthetic answer draft",
   );
   await page.screenshot({
@@ -65,7 +69,7 @@ test("fresh run uses force fields, personal keys and a solo study workspace", as
     fullPage: true,
   });
   await page.setViewportSize({ width: 390, height: 844 });
-  await expect(page.locator("#workspace")).toBeVisible();
+  await expect(page.locator("#chat-input")).toBeVisible();
   expect(
     await page.evaluate(
       () => document.documentElement.scrollWidth <= innerWidth,

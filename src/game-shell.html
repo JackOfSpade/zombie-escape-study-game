@@ -6,6 +6,13 @@
   >
   <div class="header-right">
     <span class="live-dot"></span><span id="bridge-label"></span
+    ><button
+      id="curriculum-button"
+      class="quiet"
+      aria-controls="inspector"
+      aria-expanded="false"
+    >
+      Inspect ↗</button
     ><button id="pause-toggle" class="quiet">Pause · Esc</button
     ><button
       id="settings-toggle"
@@ -43,6 +50,16 @@
         aria-atomic="true"
       ></div>
       <div class="north">N ↑</div>
+      <div id="hud" class="hud" aria-label="Survivor status">
+        <div class="hud-health">
+          <div class="hud-track"><div id="hud-health-fill"></div></div>
+          <strong id="hud-health">100</strong>
+        </div>
+        <span id="hud-keys" class="hud-item">0 keys</span
+        ><span id="hud-access" class="hud-chip"></span
+        ><span id="hud-pickup" class="hud-item" hidden></span>
+      </div>
+      <div id="inventory" class="inventory" aria-label="Equipment"></div>
     </div>
     <div class="controls">
       <span><kbd>WASD</kbd> move</span><span><kbd>E</kbd> interact</span
@@ -51,7 +68,7 @@
     </div>
     <p id="notice" role="status"></p>
   </section>
-  <aside class="dashboard">
+  <aside class="dashboard" hidden aria-hidden="true">
     <section class="vitals">
       <div class="eyebrow">SURVIVOR / YOU</div>
       <div class="vital-row">
@@ -79,19 +96,10 @@
         <span class="eyebrow">ACCESS / <span id="weight"></span></span
         ><span class="muted">personal access</span>
       </div>
-      <div id="inventory"></div>
     </section>
     <section class="curriculum">
       <div class="section-row">
-        <span class="eyebrow">LEARNING CONTINUITY</span
-        ><button
-          id="curriculum-button"
-          class="quiet"
-          aria-controls="inspector"
-          aria-expanded="false"
-        >
-          Inspect ↗
-        </button>
+        <span class="eyebrow">LEARNING CONTINUITY</span>
       </div>
       <div class="track">
         <span>PY</span>

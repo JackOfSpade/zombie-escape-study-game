@@ -14,7 +14,7 @@ npm run import:curriculum
 npm run dev
 ```
 
-Open http://127.0.0.1:5173. The HTTP bridge relay binds only to 127.0.0.1:4318. No API key is needed for development mode. `npm run build` creates `dist`; `npm run preview` serves the client without a live bridge relay. Offline practice lets you read and draft; completing a human puzzle requires the connected AI reviewer.
+Open http://127.0.0.1:5173. While playing there is no side panel: health, keys, access and the helicopter pickup are drawn in a small HUD inside the game frame, and the learning-continuity inspector is behind the Inspect button in the header. The HTTP bridge relay binds only to 127.0.0.1:4318. No API key is needed for development mode. `npm run build` creates `dist`; `npm run preview` serves the client without a live bridge relay. Offline practice lets you read and draft; completing a human puzzle requires the connected AI reviewer.
 
 ## ChatGPT connector
 
