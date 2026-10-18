@@ -1,0 +1,399 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+import { createHandoffQueue } from "../scripts/chatgpt-handoff-queue.mjs";
+import {
+  createTerminalRelayApp,
+  terminalRelayTools,
+  TERMINAL_RELAY_URI,
+} from "../scripts/terminal-relay-app.mjs";
+const owner = { linkId: "synthetic-owner" },
+  other = { linkId: "synthetic-other" };
+const state = (r) => r.structuredContent;
+const dialoguePayload = (requestId, messages, extra = {}) => ({
+  requestId,
+  sessionId: "synthetic-game/e1/private",
+  mode: "terminal-dialogue",
+  responseFormat: { text: "string", complete: "boolean" },
+  instruction: "@study: Continue this private puzzle conversation.",
+  problem: {
+    title: "Synthetic window",
+    prompt: "Readings are [1,2,3]; window of two. Largest total?",
+    rubric: ["Largest total is 5", "Subtract outgoing, add incoming"],
+    starter: "",
+  },
+  workspace: "",
+  draftRevision: 3,
+  submissions: [],
+  messages,
+  executions: [],
+  learning: { track: "PY", objective: "synthetic-objective" },
+  studyPrompt: "@study",
+  prompt: "@study\n" + messages.at(-1).text,
+  curriculum: "Synthetic curriculum text.",
+  progressContext: "Synthetic progress text.",
+  ...extra,
+});
+const human = (text, seq) => ({ kind: "human", author: "human", text, seq });
+function setup(options = {}) {
+  const queue = createHandoffQueue();
+  const app = createTerminalRelayApp({ queue, ...options });
+  const open = (grant = owner) =>
+    state(app.call("open_study_terminal", {}, grant));
+  const claim = (relayId, revision, grant = owner) =>
+    state(app.call("claim_study_terminal_turn", { relayId, revision }, grant));
+  const reply = (relayId, turnId, text, complete, grant = owner) =>
+    state(
+      app.call(
+        "reply_study_terminal_job",
+        { relayId, turnId, text, complete },
+        grant,
+      ),
+    );
+  return { queue, app, open, claim, reply };
+}
+
+test("live relay tools are separate from the demo and legacy worker tools", () => {
+  const tools = terminalRelayTools();
+  assert.deepEqual(
+    tools.map((t) => t.name),
+    [
+      "open_study_terminal",
+      "claim_study_terminal_turn",
+      "read_study_terminal",
+      "read_study_terminal_context",
+      "reply_study_terminal_job",
+    ],
+  );
+  assert.equal(tools[0]._meta.ui.resourceUri, TERMINAL_RELAY_URI);
+  assert.ok(tools.every((t) => !t.inputSchema.required.includes("session")));
+  assert.deepEqual(
+    tools.find((t) => t.name === "claim_study_terminal_turn")._meta.ui
+      .visibility,
+    ["app"],
+  );
+  assert.equal(
+    tools.find((t) => t.name === "reply_study_terminal_job")._meta.ui,
+    undefined,
+  );
+  const { app } = setup();
+  const resource = app.resource(TERMINAL_RELAY_URI).contents[0];
+  assert.equal(resource.mimeType, "text/html;profile=mcp-app");
+  assert.match(resource.text, /claim_study_terminal_turn/);
+  assert.match(resource.text, /ui\/message/);
+  assert.throws(() => app.resource("file:///private"), /Unknown UI/);
+  assert.throws(() => app.call("open_study_terminal", {}, {}), /Authenticated/);
+  assert.throws(() => createTerminalRelayApp(), /requires the handoff queue/);
+});
+
+test("opening the relay releases nothing; claims need explicit sharing and only take terminal-dialogue jobs", () => {
+  const { queue, app, open, claim } = setup();
+  const s = open();
+  assert.equal(s.live, true);
+  assert.equal(s.released, false);
+  assert.equal(s.turn, null);
+  assert.equal(queue.snapshot().enabled, false);
+  assert.deepEqual(claim(s.relayId, s.revision).turn, null);
+  queue.enable(true);
+  queue.enqueue("generate", {
+    requestId: "synthetic-generate",
+    contract: {},
+  });
+  queue.enqueue("tutor", {
+    requestId: "synthetic-group-tutor",
+    problem: { prompt: "Not a terminal dialogue" },
+    messages: [],
+  });
+  assert.equal(claim(s.relayId, s.revision).turn, null);
+  assert.equal(queue.snapshot().working, 0);
+  assert.equal(queue.snapshot().queued, 2);
+  const job = queue.enqueue(
+    "tutor",
+    dialoguePayload("synthetic-dialogue-1", [human("I think [2,3]", 1)]),
+  );
+  const claimed = claim(s.relayId, s.revision);
+  assert.equal(claimed.turn.status, "claimed");
+  assert.equal(claimed.turn.requestId, "synthetic-dialogue-1");
+  assert.match(claimed.turn.prompt, /^@study\n/);
+  assert.match(claimed.turn.prompt, /reply_study_terminal_job/);
+  const packet = JSON.parse(
+    claimed.turn.prompt.split("\n").slice(2).join("\n"),
+  );
+  assert.equal(packet.relayId, s.relayId);
+  assert.equal(packet.turnId, claimed.turn.turnId);
+  assert.deepEqual(packet.question.rubric, [
+    "Largest total is 5",
+    "Subtract outgoing, add incoming",
+  ]);
+  assert.deepEqual(packet.learning, {
+    track: "PY",
+    objective: "synthetic-objective",
+  });
+  assert.equal(packet.messages.length, 1);
+  assert.equal(packet.curriculum, "Synthetic curriculum text.");
+  assert.equal(packet.draftRevision, 3);
+  assert.equal(queue.snapshot().working, 1);
+  assert.deepEqual(claimed.turn.messages, [
+    { role: "learner", text: "I think [2,3]" },
+  ]);
+  // The queue's secret claim stays server-side: only the turnId reaches chat.
+  const secret = queue.get("app-anything-else-", undefined, () => false);
+  assert.equal(secret.status, "waiting");
+  assert.equal(
+    JSON.stringify(claimed).includes('"claim"'),
+    false,
+    "snapshot must not expose the queue claim",
+  );
+  assert.equal(
+    /[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[0-9a-f]{4}-[0-9a-f]{12}/.test(
+      claimed.turn.prompt
+        .replaceAll(claimed.turn.turnId, "")
+        .replaceAll(s.relayId, ""),
+    ),
+    false,
+    "prompt must not carry any other UUID such as the job claim",
+  );
+  // Reclaiming is idempotent: same turn, same job, no second claim.
+  const again = claim(s.relayId, claimed.revision);
+  assert.equal(again.turn.turnId, claimed.turn.turnId);
+  assert.equal(queue.snapshot().working, 1);
+  assert.throws(
+    () => claim(s.relayId, claimed.revision + 5),
+    /Invalid terminal revision/,
+  );
+  assert.equal(queue.result(job.id, job.hash).status, "pending");
+  assert.equal(
+    state(app.call("read_study_terminal", { relayId: s.relayId }, owner)).turn
+      .turnId,
+    claimed.turn.turnId,
+  );
+});
+
+test("replies deliver into the same queue job once, idempotently, and keep correction and retry paths", () => {
+  const { queue, app, open, claim, reply } = setup();
+  queue.enable(true);
+  const s = open();
+  const job = queue.enqueue(
+    "tutor",
+    dialoguePayload("synthetic-dialogue-2", [human("I think [2,3]", 1)]),
+  );
+  const claimed = claim(s.relayId, s.revision);
+  const turnId = claimed.turn.turnId;
+  assert.throws(
+    () => reply(s.relayId, "unknown-turn", "Solved", true),
+    /does not match/,
+  );
+  assert.throws(() => reply(s.relayId, turnId, "Solved", "true"), /complete/);
+  assert.throws(
+    () => reply(s.relayId, turnId, "Solved", true, other),
+    /unavailable/,
+  );
+  const answered = reply(s.relayId, turnId, "What is its total?", false);
+  assert.equal(answered.turn.status, "answered");
+  assert.deepEqual(answered.turn.reply, {
+    text: "What is its total?",
+    complete: false,
+  });
+  assert.equal(answered.answered, 1);
+  assert.deepEqual(queue.result(job.id, job.hash), {
+    status: "done",
+    answer: { text: "What is its total?", complete: false },
+  });
+  assert.deepEqual(
+    reply(s.relayId, turnId, "What is its total?", false),
+    answered,
+  );
+  assert.throws(
+    () => reply(s.relayId, turnId, "Different", false),
+    /Conflicting/,
+  );
+  assert.equal(queue.snapshot().done, 1);
+  // The player asks for a correction: the same job comes back with its note.
+  queue.reopen(job.id);
+  const corrected = claim(s.relayId, answered.revision);
+  assert.equal(corrected.turn.status, "claimed");
+  assert.equal(corrected.turn.requestId, "synthetic-dialogue-2");
+  assert.notEqual(corrected.turn.turnId, turnId);
+  assert.equal(corrected.turn.correction.round, 1);
+  assert.match(corrected.turn.prompt, /corrected response/);
+  assert.equal(corrected.recent.length, 1);
+  assert.equal(corrected.recent[0].complete, false);
+  // A stale reply for the superseded turn is still refused.
+  assert.throws(
+    () => reply(s.relayId, turnId, "Late reply", true),
+    /Conflicting/,
+  );
+  const done = reply(s.relayId, corrected.turn.turnId, "Solved", true);
+  assert.equal(queue.result(job.id, job.hash).answer.complete, true);
+  assert.equal(done.answered, 2);
+  // Next claim with nothing queued clears the answered turn into history.
+  const idle = claim(s.relayId, done.revision);
+  assert.equal(idle.turn, null);
+  assert.equal(idle.recent.length, 2);
+  assert.equal(idle.recent[1].complete, true);
+});
+
+test("stopping sharing releases app claims; a relay restart recovers its own working job without a second claim", () => {
+  const { queue, app, open, claim, reply } = setup();
+  queue.enable(true);
+  const s = open();
+  const job = queue.enqueue(
+    "tutor",
+    dialoguePayload("synthetic-dialogue-3", [human("partial", 1)]),
+  );
+  const claimed = claim(s.relayId, s.revision);
+  queue.enable(false);
+  assert.throws(
+    () => reply(s.relayId, claimed.turn.turnId, "Solved", true),
+    /disabled/,
+  );
+  assert.equal(queue.snapshot().working, 1);
+  app.release();
+  assert.equal(queue.snapshot().working, 0);
+  assert.equal(queue.snapshot().queued, 1);
+  const released = state(
+    app.call("read_study_terminal", { relayId: s.relayId }, owner),
+  );
+  assert.equal(released.turn, null);
+  assert.equal(released.recent[0].status, "released");
+  assert.equal(released.released, false);
+  assert.throws(
+    () => reply(s.relayId, claimed.turn.turnId, "Solved", true),
+    /does not match/,
+  );
+  queue.enable(true);
+  const reclaimed = claim(s.relayId, released.revision);
+  assert.notEqual(reclaimed.turn.turnId, claimed.turn.turnId);
+  assert.equal(reclaimed.turn.requestId, "synthetic-dialogue-3");
+  // Relay process restart: in-memory sessions are lost but the queue persists.
+  const restarted = createTerminalRelayApp({ queue });
+  const fresh = state(restarted.call("open_study_terminal", {}, owner));
+  assert.notEqual(fresh.relayId, s.relayId);
+  const recovered = state(
+    restarted.call(
+      "claim_study_terminal_turn",
+      { relayId: fresh.relayId, revision: fresh.revision },
+      owner,
+    ),
+  );
+  assert.equal(recovered.turn.requestId, "synthetic-dialogue-3");
+  assert.equal(queue.snapshot().working, 1);
+  assert.equal(queue.snapshot().queued, 0);
+  state(
+    restarted.call(
+      "reply_study_terminal_job",
+      {
+        relayId: fresh.relayId,
+        turnId: recovered.turn.turnId,
+        text: "Solved",
+        complete: true,
+      },
+      owner,
+    ),
+  );
+  assert.equal(queue.result(job.id, job.hash).answer.complete, true);
+  // The old relay instance cannot deliver a second reply to the finished job.
+  assert.throws(
+    () => reply(s.relayId, reclaimed.turn.turnId, "Another", false),
+    /Conflicting|Wrong worker/,
+  );
+});
+
+test("owners are isolated, sessions are bounded and oversized packets omit context behind a read tool", () => {
+  const { queue, app, open, claim, reply } = setup({
+    maxSessions: 1,
+    promptLimit: 2000,
+  });
+  queue.enable(true);
+  const s = open();
+  assert.throws(() => open(other), /capacity/);
+  assert.throws(
+    () => app.call("read_study_terminal", { relayId: s.relayId }, other),
+    /unavailable/,
+  );
+  assert.throws(
+    () =>
+      app.call(
+        "claim_study_terminal_turn",
+        { relayId: s.relayId, revision: 0, shell: "bad" },
+        owner,
+      ),
+    /Unknown/,
+  );
+  const messages = Array.from({ length: 120 }, (_, i) =>
+    human(`message ${i} ${"x".repeat(40)}`, i + 1),
+  );
+  queue.enqueue(
+    "tutor",
+    dialoguePayload("synthetic-dialogue-4", messages, {
+      curriculum: "C".repeat(3000),
+      progressContext: "P".repeat(3000),
+    }),
+  );
+  const claimed = claim(s.relayId, s.revision);
+  assert.deepEqual(claimed.turn.omitted, ["progressContext", "curriculum"]);
+  const packet = JSON.parse(
+    claimed.turn.prompt.split("\n").slice(2).join("\n"),
+  );
+  assert.equal(packet.curriculum, undefined);
+  assert.ok(packet.messages.length < 80);
+  assert.ok(packet.messagesOmitted > 40);
+  assert.equal(packet.messages.at(-1).text, messages.at(-1).text);
+  assert.ok(claimed.turn.prompt.length <= 2000 + 1200);
+  assert.throws(
+    () =>
+      app.call(
+        "read_study_terminal_context",
+        { relayId: s.relayId, turnId: "wrong", part: "curriculum" },
+        owner,
+      ),
+    /not pending/,
+  );
+  const read = JSON.parse(
+    app.call(
+      "read_study_terminal_context",
+      { relayId: s.relayId, turnId: claimed.turn.turnId, part: "curriculum" },
+      owner,
+    ).content[0].text,
+  );
+  assert.equal(read.text, "C".repeat(3000));
+  assert.throws(
+    () =>
+      app.call(
+        "read_study_terminal_context",
+        {
+          relayId: s.relayId,
+          turnId: claimed.turn.turnId,
+          part: "curriculum",
+        },
+        other,
+      ),
+    /unavailable/,
+  );
+  reply(s.relayId, claimed.turn.turnId, "ok", false);
+  assert.throws(
+    () =>
+      app.call(
+        "read_study_terminal_context",
+        { relayId: s.relayId, turnId: claimed.turn.turnId, part: "curriculum" },
+        owner,
+      ),
+    /not pending/,
+  );
+});
+
+test("chunked terminal packets are reassembled and all parts are read before a reply is accepted", () => {
+  const { queue, open, claim, reply } = setup({ promptLimit: 2_000_000 });
+  queue.enable(true);
+  const s = open();
+  const job = queue.enqueue(
+    "tutor",
+    dialoguePayload("synthetic-dialogue-5", [human("big", 1)], {
+      curriculum: "K".repeat(600_000),
+    }),
+  );
+  const claimed = claim(s.relayId, s.revision);
+  assert.equal(claimed.turn.requestId, "synthetic-dialogue-5");
+  assert.equal(claimed.turn.question.title, "Synthetic window");
+  reply(s.relayId, claimed.turn.turnId, "Noted", false);
+  assert.equal(queue.result(job.id, job.hash).status, "done");
+});

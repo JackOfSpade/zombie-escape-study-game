@@ -1,0 +1,53 @@
+{
+  "name": "zombie-study-escape",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "node scripts/dev.mjs",
+    "client": "vite --host 127.0.0.1",
+    "build": "npm run import:curriculum && tsc --noEmit && vite build",
+    "typecheck": "tsc --noEmit",
+    "test": "tsx --test tests/*.test.ts tests/*.test.mjs",
+    "test:browser": "playwright test",
+    "import:curriculum": "node --import tsx scripts/import-curriculum.mjs",
+    "preview": "vite preview --host 127.0.0.1",
+    "predev": "npm run import:curriculum",
+    "pretest": "npm run import:curriculum",
+    "format:check": "prettier --check src scripts tests",
+    "benchmark:defense": "tsx scripts/benchmark-defense.ts",
+    "test:runner": "node --import tsx --test --test-concurrency=1 tests/runner/*.test.mjs",
+    "test:browser:runner": "RUN_CONTAINER_BROWSER=1 playwright test --grep \"container workspace\"",
+    "benchmark:roof": "tsx scripts/replay-roof.ts",
+    "benchmark:npc": "SIM_SECONDS=1800 tsx scripts/simulate.ts",
+    "prebenchmark:npc": "npm run import:curriculum",
+    "prebenchmark:defense": "npm run import:curriculum",
+    "prebenchmark:roof": "npm run import:curriculum",
+    "benchmark:exploration": "tsx scripts/replay-exploration.ts",
+    "prebenchmark:exploration": "npm run import:curriculum",
+    "benchmark:retreat": "tsx scripts/replay-retreat.ts",
+    "prebenchmark:retreat": "npm run import:curriculum",
+    "benchmark:cooperation": "tsx scripts/replay-cooperation.ts",
+    "prebenchmark:cooperation": "npm run import:curriculum",
+    "benchmark:npc-work": "tsx scripts/benchmark-npc-work.ts",
+    "prebenchmark:npc-work": "npm run import:curriculum",
+    "bridge:mcp": "node scripts/chatgpt-handoff-mcp.mjs",
+    "bridge:configure": "node scripts/chatgpt-tunnel-config.mjs",
+    "test:game": "tsx scripts/game-test.ts",
+    "test:agents": "tsx scripts/game-test.ts --json - --artifacts .artifacts/game-tests",
+    "bridge:start": "node scripts/bridge-service.mjs start",
+    "bridge:status": "node scripts/bridge-service.mjs status",
+    "bridge:stop": "node scripts/bridge-service.mjs stop"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.56.0",
+    "@types/node": "^24.0.0",
+    "prettier": "^3.9.10",
+    "tsx": "^4.20.0",
+    "typescript": "^5.9.0",
+    "vite": "^7.1.0"
+  },
+  "dependencies": {
+    "planck": "1.5.1"
+  }
+}

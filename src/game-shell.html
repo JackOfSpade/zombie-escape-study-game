@@ -1,0 +1,314 @@
+<header>
+  <a class="brand" href="#" aria-label="zombie-escape-study-game home"
+    ><span class="brand-mark">◈</span>
+    <span class="brand-title">zombie-escape-study-game</span>
+    <small>STUDY / ESCAPE</small></a
+  >
+  <div class="header-right">
+    <span class="live-dot"></span><span id="bridge-label"></span
+    ><button id="pause-toggle" class="quiet">Pause · Esc</button
+    ><button
+      id="settings-toggle"
+      class="quiet"
+      aria-controls="settings"
+      aria-expanded="false"
+    >
+      Settings</button
+    ><button id="save-button" class="quiet">Save run</button>
+  </div>
+</header>
+<main>
+  <section class="world">
+    <div class="world-top">
+      <div>
+        <span class="eyebrow" id="floor-label"></span>
+        <h1 id="floor-name"></h1>
+      </div>
+      <div class="timer">
+        <span class="eyebrow">RUN TIME</span
+        ><strong id="run-time">00:00</strong>
+      </div>
+    </div>
+    <div class="viewport">
+      <canvas
+        id="world"
+        aria-label="Top-down survival game. Use WASD or arrow keys to move."
+        tabindex="0"
+      ></canvas>
+      <div id="start-card" class="overlay"></div>
+      <div
+        id="world-caption"
+        role="status"
+        aria-live="polite"
+        aria-atomic="true"
+      ></div>
+      <div class="north">N ↑</div>
+    </div>
+    <div class="controls">
+      <span><kbd>WASD</kbd> move</span><span><kbd>E</kbd> interact</span
+      ><span><kbd>Space</kbd> jump barricade</span
+      ><span><kbd>Esc</kbd> pause / restart</span>
+    </div>
+    <p id="notice" role="status"></p>
+  </section>
+  <aside class="dashboard">
+    <section class="vitals">
+      <div class="eyebrow">SURVIVOR / YOU</div>
+      <div class="vital-row">
+        <strong id="health">100</strong><span>HEALTH</span
+        ><span id="access" class="chip"></span>
+      </div>
+      <div class="health-track"><div id="health-fill"></div></div>
+      <div class="population">
+        <div><strong id="alive"></strong><span>STILL HERE</span></div>
+        <div><strong id="rescued">0</strong><span>EXTRACTED</span></div>
+        <div><strong id="lost">0</strong><span>LOST</span></div>
+      </div>
+    </section>
+    <section class="objective">
+      <span class="eyebrow">NEXT MOVE</span>
+      <h2 id="next-title">Make it inside.</h2>
+      <p id="next-description">
+        Stay ahead of the horde. Prepare a room, earn your stair credential, and
+        keep climbing.
+      </p>
+      <div id="pickup"></div>
+    </section>
+    <section>
+      <div class="section-row">
+        <span class="eyebrow">ACCESS / <span id="weight"></span></span
+        ><span class="muted">personal access</span>
+      </div>
+      <div id="inventory"></div>
+    </section>
+    <section class="curriculum">
+      <div class="section-row">
+        <span class="eyebrow">LEARNING CONTINUITY</span
+        ><button
+          id="curriculum-button"
+          class="quiet"
+          aria-controls="inspector"
+          aria-expanded="false"
+        >
+          Inspect ↗
+        </button>
+      </div>
+      <div class="track">
+        <span>PY</span>
+        <div>
+          <strong id="py-phase">Tier 1 · repair & verify</strong
+          ><small id="py-count">2 / 80 D1 checkpoints verified</small>
+        </div>
+        <span class="track-count" id="py-total">02</span>
+      </div>
+      <div class="track">
+        <span>PE</span>
+        <div>
+          <strong id="pe-phase">Tier 1 · diagnose all</strong
+          ><small id="pe-count">8 / 112 D1 checkpoints verified</small>
+        </div>
+        <span class="track-count" id="pe-total">08</span>
+      </div>
+      <p class="muted" id="schedule"></p>
+      <div class="integrity">◇ Original roadmap preserved · revision 9</div>
+    </section>
+    <section class="feed">
+      <span class="eyebrow">BUILDING FREQUENCY</span>
+      <div id="event-feed"></div>
+    </section>
+  </aside>
+  <section id="terminal" hidden>
+    <div class="terminal-heading">
+      <div>
+        <span class="eyebrow" id="terminal-type"></span>
+        <h2 id="problem-title">Connecting…</h2>
+      </div>
+      <button id="leave" class="quiet">Leave terminal</button>
+    </div>
+    <div id="terminal-provenance" class="provenance"></div>
+    <div id="terminal-body">
+      <div class="terminal-layout">
+        <section class="answer-panel" aria-label="Room question">
+          <article id="problem"></article>
+          <section id="npc-outcome" hidden>
+            <p id="npc-outcome-status" class="muted"></p>
+            <button id="inspect-npc-outcome" class="quiet">
+              Inspect survivor solution
+            </button>
+            <div id="npc-outcome-body"></div>
+          </section>
+          <details id="saved-answer" hidden>
+            <summary>Previously saved work</summary>
+            <pre id="saved-answer-text"></pre>
+          </details>
+          <div id="legacy-answer">
+            <label class="editor-label" for="workspace"
+              >Answer to submit <span id="revision"></span></label
+            ><textarea
+              id="workspace"
+              spellcheck="false"
+              aria-label="Answer to submit"
+              placeholder="Write your answer here. Explain your reasoning where the question asks for it."
+              aria-describedby="answer-context"
+            ></textarea>
+            <p id="answer-context" class="muted"></p>
+            <div class="submit-row">
+              <button id="submit">Submit answer</button
+              ><button id="run-code" class="quiet" hidden>Run code</button
+              ><span
+                id="submission-status"
+                role="status"
+                aria-live="polite"
+              ></span>
+            </div>
+          </div>
+          <p id="completion-connection" class="muted" role="status" hidden></p>
+          <button id="connect-completion" class="quiet" hidden>
+            Reconnect ChatGPT
+          </button>
+          <p id="submission-help" class="muted"></p>
+          <button id="retry-submission" class="quiet" hidden>
+            Retry answer check
+          </button>
+          <details id="execution-results" hidden>
+            <summary>Saved code runs</summary>
+            <figure id="execution-preview" hidden></figure>
+            <pre id="execution-output"></pre>
+          </details>
+          <div id="loot"></div>
+        </section>
+        <aside class="conversation-panel" aria-labelledby="conversation-title">
+          <h3 id="conversation-title">Terminal AI</h3>
+          <p id="dialogue-status" class="muted" role="status" hidden></p>
+          <p id="conversation-context" class="muted"></p>
+          <div id="workspace-proposals" hidden></div>
+          <div id="messages" aria-live="polite"></div>
+          <p id="catchup-status" class="muted" hidden></p>
+          <button id="retry-catchup" class="quiet" hidden>
+            Retry group catch-up
+          </button>
+          <p id="team-work-status" class="muted" hidden></p>
+          <button id="retry-team-work" class="quiet" hidden>
+            Retry saved team work
+          </button>
+          <details id="work-log" hidden>
+            <summary>Recorded group work</summary>
+            <div id="work-log-body"></div>
+          </details>
+          <div id="tutor-request-status" hidden></div>
+          <form id="chat-form">
+            <textarea
+              rows="3"
+              id="chat-input"
+              autocomplete="off"
+              aria-label="Message"
+              placeholder="Work through the question here… Shift+Enter for a new line"
+            ></textarea
+            ><button type="submit">Send ↑</button>
+          </form>
+        </aside>
+      </div>
+    </div>
+  </section>
+</main>
+<div id="inspector" role="dialog" aria-labelledby="inspector-title" hidden>
+  <div class="inspector-head">
+    <h2 id="inspector-title" tabindex="-1">Learning continuity</h2>
+    <button id="close-inspector" class="quiet">Close</button>
+  </div>
+  <p class="muted">Survival continues. Press Esc to pause the game.</p>
+  <div id="inspector-content"></div>
+</div>
+<div id="settings" role="dialog" aria-labelledby="settings-title" hidden>
+  <h2 id="settings-title">Transmission settings</h2>
+  <p class="muted">Survival continues. Press Esc to pause the game.</p>
+  <p id="audio-status" class="muted"></p>
+  <label
+    >Sound level
+    <input id="volume" type="range" min="0" max="1" step="0.05" /></label
+  ><label
+    ><input id="captions" type="checkbox" /> Surge visual cues & sound
+    captions</label
+  ><label><input id="reduced" type="checkbox" /> Reduced motion</label>
+  <details>
+    <summary>ChatGPT handoff connection</summary>
+    <p>
+      Allow a connected ChatGPT worker to read your requested task, draft,
+      relevant tutor history and curriculum. Prompts request @study tutoring.
+      Requested survivor-solution inspections share public context only. Legacy
+      shared saves retain public group requests. Requested practical reviews
+      share your saved observation, attached output and relevant assistance.
+      Native Study Mode is unverified.
+    </p>
+    <label
+      ><input id="handoff-enable" type="checkbox" /> Release live study requests
+      to ChatGPT</label
+    ><label
+      ><input id="handoff-autonomous" type="checkbox" disabled /> Allow
+      unattended NPC drafts, code runs and submissions</label
+    >
+    <p>
+      In legacy shared runs, unattended work shares public task context for
+      puzzles you have joined. Seated survivors may edit and submit while you
+      are away; their work earns no personal mastery. It starts off on every
+      server launch. Turning it off holds queued work and rejects late results.
+    </p>
+    <p id="handoff-status" role="status"></p>
+    <div id="handoff-replies"></div>
+    <button id="handoff-requeue" class="quiet">
+      Recover interrupted worker
+    </button>
+    <details>
+      <summary>ChatGPT connector setup</summary>
+      <p id="handoff-public-status"></p>
+      <input
+        id="handoff-mcp-url"
+        readonly
+        aria-label="ChatGPT connector URL"
+      /><button id="handoff-start-public" class="quiet">
+        Start game connector</button
+      ><button id="handoff-stop-public" class="quiet">
+        Stop game connector</button
+      ><button id="handoff-pair" class="quiet">Open ChatGPT pairing</button>
+      <p id="handoff-pairing-code" role="status"></p>
+      <button id="handoff-close-pair" class="quiet">Close pairing window</button
+      ><button id="handoff-worker" class="quiet">
+        Create worker instructions</button
+      ><button id="handoff-stop-worker" class="quiet">
+        Stop worker &amp; sharing</button
+      ><button id="handoff-revoke" class="quiet">
+        Revoke ChatGPT connection
+      </button>
+      <p>
+        Connect this project's MCP worker to ChatGPT using the setup guide, then
+        paste these instructions in its dedicated chat.
+      </p>
+      <textarea
+        id="handoff-starter"
+        readonly
+        aria-label="ChatGPT worker instructions"
+      ></textarea
+      ><button id="handoff-copy" class="quiet">Copy worker instructions</button>
+    </details>
+  </details>
+  <button id="reconnect" class="quiet">Recheck study connection</button
+  ><button id="live-profile" class="quiet">Start a live study run</button
+  ><button id="export" class="quiet">Export full run & evidence</button
+  ><label class="file-label"
+    >Import run save
+    <input id="import" type="file" accept="application/json" /></label
+  ><button id="download-logs" class="quiet">Download last 3 game logs</button>
+  <p><a href="/lab.html" target="_blank" rel="noopener">Open Test Lab ↗</a></p>
+  <p id="log-status" class="muted"></p>
+  <button id="settings-close">Done</button>
+  <p id="bridge-detail"></p>
+</div>
+<dialog id="pause-menu" aria-labelledby="pause-title">
+  <h2 id="pause-title">Game paused</h2>
+  <p>The building is frozen. Your learning progress and work are saved.</p>
+  <button id="resume-game">Resume · Esc</button
+  ><button id="restart-game" class="quiet">
+    Restart run · keep learning progress</button
+  ><button id="pause-logs" class="quiet">Download last 3 game logs</button>
+  <p id="pause-save-status" role="status"></p>
+</dialog>

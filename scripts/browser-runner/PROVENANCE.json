@@ -1,0 +1,21 @@
+{
+  "source": "https://raw.githubusercontent.com/moby/profiles/4b8214fc4971e06172938a1f1554ccff6647ee80/seccomp/default.json",
+  "commit": "4b8214fc4971e06172938a1f1554ccff6647ee80",
+  "sourceDocumentation": "https://docs.docker.com/engine/security/seccomp/",
+  "sha256": "6416b47770785a41ac59073cdc77d9fe98517df2799dc83ef207e622de3053f6",
+  "playwrightReference": {
+    "source": "https://raw.githubusercontent.com/microsoft/playwright/v1.64.0/utils/docker/seccomp_profile.json",
+    "sha256": "cc3e61cabda6bbc1e53e54d27ba4d55a9d3be829b6dd1a596f4a7b31b1cc7849",
+    "note": "Unmodified older profile retained as the failed initial preflight reference only; it is not used by the runner."
+  },
+  "derivedProfile": {
+    "path": "seccomp-browser.json",
+    "sha256": "37f9361697bfe9cb07ad41cfea33b331d4f0392b470b53c997e0724d39d0d3e2",
+    "changes": [
+      "Add namespace clone/setns/unshare/chroot allows required by Chromium inner sandbox; retain zero outer capabilities.",
+      "Remove socketcall from all allowlists; preserve current Moby socket-family restrictions, including denial of AF_ALG and AF_VSOCK.",
+      "All other original rules and default deny retained."
+    ],
+    "chromiumSource": "https://chromium.googlesource.com/chromium/src/+/290486f6ce9270fd05316988f76de73e4083e50c/sandbox/linux/services/credentials.cc"
+  }
+}

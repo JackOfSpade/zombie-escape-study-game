@@ -1,0 +1,914 @@
+import { trafficVelocity } from "./local-traffic";
+import { fieldAllows, updateFields } from "./force-fields";
+import {
+  Box,
+  Circle,
+  FrictionJoint,
+  RevoluteJoint,
+  RopeJoint,
+  Vec2,
+  World,
+  type Body,
+  type Joint,
+} from "planck";
+import { DOOR_SWING, doorPose, ensureDoor, latchDoor } from "./doors";
+import {
+  H,
+  W,
+  distance,
+  type Actor,
+  type Furniture,
+  type Game,
+  type Point,
+  type Zombie,
+} from "./model";
+import { move, solid } from "./spatial";
+
+export const BODY_RADIUS = 0.26;
+type Entity = Actor | Zombie | Furniture;
+const furniture = (e: Entity): e is Furniture => "kind" in e;
+const actor = (e: Entity): e is Actor => "alive" in e;
+const active = (e: Entity) =>
+  furniture(e)
+    ? !e.destroyed &&
+      (!e.open || !!e.door) &&
+      !(e.kind === "gate" && e.turning < 0)
+    : actor(e)
+      ? e.alive && !e.escaped
+      : e.hp > 0;
+interface RecordBody {
+  entity: Entity;
+  body: Body;
+  shape: string;
+  radius?: number;
+  floor: number;
+  hinge?: RevoluteJoint;
+  friction?: FrictionJoint;
+  published: { x: number; y: number; angle: number };
+  start: {
+    x: number;
+    y: number;
+    angle: number;
+    moved: number;
+    blocked: number;
+    vault?: Actor["vault"];
+  };
+  drive?: Point;
+}
+interface FloorPhysics {
+  world: World;
+  ground: Body;
+  walls: Body;
+  signature: string;
+}
+const layers = new WeakMap<Game, PhysicsLayer>();
+export function physicsActive(g: Game) {
+  return layers.get(g)?.running ?? false;
+}
+export function beginPhysics(g: Game) {
+  let layer = layers.get(g);
+  if (!layer) {
+    layer = new PhysicsLayer(g);
+    layers.set(g, layer);
+  }
+  layer.begin();
+}
+export function finishPhysics(g: Game, dt: number) {
+  return layers.get(g)!.finish(dt);
+}
+export function physicsKick(g: Game, z: Zombie, from: Point) {
+  let layer = layers.get(g);
+  if (!layer) {
+    layer = new PhysicsLayer(g);
+    layers.set(g, layer);
+  }
+  layer.kick(z, from);
+}
+/** Snapshot boundaries discard solver caches so live and restored branches start identically. */
+export function checkpointPhysics(g: Game) {
+  if (!layers.get(g)?.running) layers.delete(g);
+}
+export function cancelPhysics(g: Game) {
+  const layer = layers.get(g);
+  if (layer) layer.running = false;
+}
+/** During a frame, controllers state their desired motion; the solver owns actual contact movement. */
+export function physicsMove(
+  g: Game,
+  e: Actor | Zombie,
+  dx: number,
+  dy: number,
+  steer = false,
+) {
+  const layer = layers.get(g);
+  if (!layer?.running) return false;
+  layer.drive(e, dx, dy, steer);
+  return true;
+}
+export function physicsFloor(g: Game, floor: number) {
+  const f = g.floors[floor];
+  return { ...f, furniture: [] };
+}
+
+class PhysicsLayer {
+  running = false;
+  private floors: FloorPhysics[] = [];
+  private records = new Map<Entity, RecordBody>();
+  private grips = new Map<
+    Actor,
+    { object: Furniture; joint: Joint; state: NonNullable<Actor["grip"]> }
+  >();
+  private movedBy = new Map<Furniture, Set<string>>();
+  constructor(private g: Game) {}
+  private floor(index: number, refresh = false) {
+    const f = this.g.floors[index];
+    let p = this.floors[index];
+    // Walls can change between ticks (including imported/debug worlds), but
+    // synchronizing each body must not rescan the same floor's tiles.
+    if (p && !refresh) return p;
+    if (!p) {
+      const world = new World(Vec2(0, 0));
+      world.setWarmStarting(false);
+      world.setContinuousPhysics(true);
+      const ground = world.createBody();
+      p = { world, ground, walls: world.createBody(), signature: "" };
+      this.floors[index] = p;
+      world.on("pre-solve", (contact) => {
+        const a = contact.getFixtureA().getBody().getUserData() as
+            Entity | undefined,
+          b = contact.getFixtureB().getBody().getUserData() as
+            Entity | undefined;
+        if (!a || !b) return;
+        for (const [person, object] of [
+          [a, b],
+          [b, a],
+        ])
+          if (actor(person) && furniture(object)) {
+            if (object.field && fieldAllows(object, person))
+              contact.setEnabled(false);
+            const vault = person.vault ?? this.records.get(person)?.start.vault;
+            if (
+              vault?.obstacle === object.id ||
+              vault?.obstacles?.includes(object.id)
+            )
+              contact.setEnabled(false);
+          }
+      });
+      world.on("post-solve", (contact) => {
+        const a = contact.getFixtureA().getBody().getUserData() as
+            Entity | undefined,
+          b = contact.getFixtureB().getBody().getUserData() as
+            Entity | undefined;
+        if (!a || !b) return;
+        for (const [person, object] of [
+          [a, b],
+          [b, a],
+        ])
+          if (actor(person) && furniture(object) && object.speed > 0) {
+            const r = this.records.get(person),
+              v = r?.drive;
+            if (
+              person.grip?.object === object.id ||
+              (v &&
+                v.x * (object.x - person.x) + v.y * (object.y - person.y) > 0)
+            ) {
+              let movers = this.movedBy.get(object);
+              if (!movers) this.movedBy.set(object, (movers = new Set()));
+              movers.add(person.id);
+            }
+          }
+      });
+    }
+    const signature = f.tiles.map((row) => row.join("")).join(";");
+    if (signature !== p.signature) {
+      p.world.destroyBody(p.walls);
+      p.walls = p.world.createBody();
+      p.signature = signature;
+      // Merge horizontal runs: fewer fixtures without changing the authored wall silhouette.
+      for (let y = 0; y < H; y++)
+        for (let x = 0; x < W;) {
+          if (f.tiles[y]?.[x] === 0) {
+            x++;
+            continue;
+          }
+          const start = x;
+          while (x < W && f.tiles[y]?.[x] !== 0) x++;
+          p.walls.createFixture(
+            new Box(
+              (x - start) / 2 - 0.01,
+              0.49,
+              Vec2((start + x) / 2, y + 0.5),
+            ),
+            { friction: 0.1 },
+          );
+        }
+      for (const box of [
+        { x: -0.5, y: H / 2, w: 1, h: H + 2 },
+        { x: W + 0.5, y: H / 2, w: 1, h: H + 2 },
+        { x: W / 2, y: -0.5, w: W + 2, h: 1 },
+        { x: W / 2, y: H + 0.5, w: W + 2, h: 1 },
+      ])
+        p.walls.createFixture(
+          new Box(box.w / 2 - 0.01, box.h / 2 - 0.01, Vec2(box.x, box.y)),
+          { friction: 0.1 },
+        );
+    }
+    return p;
+  }
+  private remove(e: Entity) {
+    const r = this.records.get(e);
+    if (!r) return;
+    for (const [a, grip] of this.grips)
+      if (a === e || grip.object === e) {
+        this.floors[r.floor].world.destroyJoint(grip.joint);
+        this.grips.delete(a);
+      }
+    this.floors[r.floor].world.destroyBody(r.body);
+    this.records.delete(e);
+  }
+  private sync(e: Entity) {
+    if (furniture(e)) ensureDoor(e, this.g.floors[e.floor]);
+    if (!active(e)) {
+      this.remove(e);
+      return;
+    }
+    const p = this.floor(e.floor),
+      angle = furniture(e) ? (e.angle ?? 0) : 0,
+      shape = furniture(e) ? `${e.kind}/${e.w}/${e.h}` : "character";
+    let r = this.records.get(e);
+    if (r && (r.floor !== e.floor || r.shape !== shape)) {
+      this.remove(e);
+      r = undefined;
+    }
+    if (!r) {
+      const radius = furniture(e)
+        ? undefined
+        : (e.physics?.radius ??
+          Math.max(
+            0.06,
+            Math.min(
+              BODY_RADIUS,
+              ...[...this.g.survivors, ...this.g.zombies]
+                .filter(
+                  (other) =>
+                    other !== e && active(other) && other.floor === e.floor,
+                )
+                .map((other) => distance(e, other) / 2 - 0.002),
+            ),
+          ));
+      const dynamic = !furniture(e) || !!e.door || e.speed > 0,
+        body = p.world.createBody({
+          type: dynamic ? "dynamic" : "static",
+          position: Vec2(e.x, e.y),
+          angle,
+          bullet: true,
+          fixedRotation: !furniture(e),
+          linearDamping: furniture(e) ? 4 : actor(e) ? 0 : 4,
+          angularDamping: 5,
+          userData: e,
+        });
+      body.createFixture(
+        furniture(e)
+          ? new Box(
+              Math.max(0.005, e.w / 2 - 0.01),
+              Math.max(0.005, e.h / 2 - 0.01),
+            )
+          : new Circle(radius!),
+        {
+          density: furniture(e) ? (e.door ? 4 / (e.w * e.h) : 1) : 8,
+          friction: furniture(e) ? 0.35 : 0,
+          restitution: 0,
+        },
+      );
+      if (furniture(e) && e.speed > 0) {
+        const mass = 20 / e.speed;
+        body.setMassData({
+          mass,
+          center: Vec2(0, 0),
+          I: (mass * (e.w * e.w + e.h * e.h)) / 12,
+        });
+      }
+      r = {
+        entity: e,
+        body,
+        floor: e.floor,
+        shape,
+        radius,
+        published: { x: e.x, y: e.y, angle },
+        start: {
+          x: e.x,
+          y: e.y,
+          angle,
+          moved: furniture(e) ? e.moved : 0,
+          blocked: actor(e) ? (e.blockedTime ?? 0) : 0,
+        },
+      };
+      this.records.set(e, r);
+      if (furniture(e) && e.door) {
+        const d = e.door;
+        r.hinge = p.world.createJoint(
+          new RevoluteJoint({
+            bodyA: p.ground,
+            bodyB: body,
+            localAnchorA: d.hinge,
+            localAnchorB: {
+              x: d.hinge.x - d.frame.x,
+              y: d.hinge.y - d.frame.y,
+            },
+            referenceAngle: 0,
+            enableLimit: true,
+            lowerAngle: d.latched ? 0 : -DOOR_SWING,
+            upperAngle: d.latched ? 0 : DOOR_SWING,
+          }),
+        )!;
+      } else if (furniture(e) && e.speed > 0) {
+        r.friction = p.world.createJoint(
+          new FrictionJoint(
+            { maxForce: body.getMass() * 6, maxTorque: body.getMass() * 2 },
+            p.ground,
+            body,
+            body.getPosition(),
+          ),
+        )!;
+      }
+      if (e.physics) {
+        body.setLinearVelocity(e.physics);
+        body.setAngularVelocity(e.physics.angular);
+        body.setAwake(e.physics.awake);
+      }
+    } else if (
+      Math.abs(e.x - r.published.x) +
+        Math.abs(e.y - r.published.y) +
+        Math.abs(angle - r.published.angle) >
+      1e-7
+    ) {
+      r.body.setTransform(Vec2(e.x, e.y), angle);
+      r.body.setLinearVelocity(e.physics ?? Vec2(0, 0));
+      r.body.setAngularVelocity(e.physics?.angular ?? 0);
+      r.body.setAwake(true);
+    }
+    return r;
+  }
+  begin() {
+    this.running = true;
+    this.movedBy.clear();
+    for (let i = 0; i < this.g.floors.length; i++) this.floor(i, true);
+    const entities: Entity[] = [
+        ...this.g.floors.flatMap((f) => f.furniture),
+        ...this.g.survivors,
+        ...this.g.zombies,
+      ],
+      present = new Set(entities);
+    for (const e of this.records.keys())
+      if (!present.has(e) || !active(e)) this.remove(e);
+    for (const e of entities) {
+      const r = this.sync(e);
+      if (!r) continue;
+      r.start = {
+        x: e.x,
+        y: e.y,
+        angle: furniture(e) ? (e.angle ?? 0) : 0,
+        moved: furniture(e) ? e.moved : 0,
+        blocked: actor(e) ? (e.blockedTime ?? 0) : 0,
+        vault: actor(e) && e.vault ? { ...e.vault } : undefined,
+      };
+      r.drive = undefined;
+    }
+  }
+  drive(e: Actor | Zombie, dx: number, dy: number, steer: boolean) {
+    const r = this.records.get(e);
+    if (!r) return;
+    if (actor(e) && e.bodyTrailFloor !== e.floor) {
+      delete e.bodyTrail;
+      delete e.bodyYield;
+      e.bodyTrailFloor = e.floor;
+    }
+    if (steer && actor(e) && Math.hypot(dx, dy) > 1e-8) {
+      const requested = Math.hypot(dx, dy);
+      let length = requested;
+      const nx = dx / length,
+        ny = dy / length,
+        f = this.g.floors[e.floor];
+      const people = this.g.survivors.filter(
+        (other) =>
+          other !== e &&
+          other.alive &&
+          !other.escaped &&
+          other.floor === e.floor &&
+          distance(other, e) < 2.4,
+      );
+      const threats = this.g.zombies.filter(
+        (z) => z.hp > 0 && z.floor === e.floor && distance(z, e) < 1.1,
+      );
+      const inLane = (other: Point) => {
+        const x = other.x - e.x,
+          y = other.y - e.y;
+        return x * nx + y * ny > 0 && Math.abs(x * ny - y * nx) < 0.52;
+      };
+      // Follow traffic travelling in the same direction instead of orbiting
+      // every nearby body. Only crossing/oncoming traffic needs a sidestep.
+      const following = people.filter(
+        (other) =>
+          inLane(other) &&
+          other.heading.x * nx + other.heading.y * ny > 0.65 &&
+          (other.activity === "exploring" ||
+            other.activity === "climbing" ||
+            other.activity === "fleeing" ||
+            (other.physics?.x ?? 0) * nx + (other.physics?.y ?? 0) * ny >
+              0.25) &&
+          other.activity !== "studying" &&
+          other.activity !== "waiting" &&
+          other.activity !== "defending",
+      );
+      for (const other of following) {
+        const gap = (other.x - e.x) * nx + (other.y - e.y) * ny;
+        length = Math.min(
+          length,
+          requested * Math.min(1, Math.max(0.15, (gap - 0.48) / 0.27)),
+        );
+      }
+      if (length < requested) {
+        dx = nx * length;
+        dy = ny * length;
+      }
+      const ahead = [
+        ...people.filter(
+          (other) => !following.includes(other) && inLane(other),
+        ),
+        // A nearby attacker remains dangerous outside the walking lane. Keep
+        // the established broad threat response while narrowing friendly traffic.
+        ...threats.filter((z) => (z.x - e.x) * nx + (z.y - e.y) * ny > 0),
+      ];
+      const sides = [1, -1]
+        .map((side) => {
+          const x = nx - ny * side * 0.9,
+            y = ny + nx * side * 0.9,
+            n = Math.hypot(x, y);
+          return { x: x / n, y: y / n };
+        })
+        .filter(
+          (v) => !solid(f, { x: e.x + v.x * 0.65, y: e.y + v.y * 0.65 }, 0.26),
+        );
+      if (
+        e.bodyYield &&
+        (this.g.time >= e.bodyYield.until || (ahead.length && sides.length))
+      )
+        delete e.bodyYield;
+      if (people.length && sides.length && !e.bodyYield && !threats.length) {
+        const desired = {
+          x: (dx / requested) * e.speed,
+          y: (dy / requested) * e.speed,
+        };
+        const v = trafficVelocity(
+          this.g,
+          e,
+          desired,
+          people
+            .filter((other) => !following.includes(other))
+            .map((other) => {
+              const record = this.records.get(other);
+              return {
+                id: other.id,
+                x: record?.start.x ?? other.x,
+                y: record?.start.y ?? other.y,
+                velocity: {
+                  x: other.physics?.x ?? 0,
+                  y: other.physics?.y ?? 0,
+                },
+              };
+            }),
+        );
+        dx = (v.x / e.speed) * requested;
+        dy = (v.y / e.speed) * requested;
+      } else if (ahead.length && sides.length && !e.bodyYield) {
+        const chosen = sides.sort((a, b) => {
+          const score = (v: Point) =>
+            threats.reduce(
+              (n, z) =>
+                Math.min(
+                  n,
+                  distance(z, { x: e.x + v.x * 0.65, y: e.y + v.y * 0.65 }),
+                ),
+              10,
+            );
+          return score(b) - score(a);
+        })[0];
+        dx = chosen.x * length;
+        dy = chosen.y * length;
+      } else if (ahead.length && !sides.length && !e.bodyYield) {
+        const opposing = people.find(
+          (other) =>
+            (other.x - e.x) * nx + (other.y - e.y) * ny > 0 &&
+            other.heading.x * nx + other.heading.y * ny < -0.4,
+        );
+        if (opposing && e.id > opposing.id) {
+          const points = (e.bodyTrail ?? [])
+            .slice()
+            .reverse()
+            .filter((p) => distance(p, e) > 0.25);
+          if (points.length) e.bodyYield = { points, until: this.g.time + 6 };
+        }
+      }
+      if (e.bodyYield) {
+        while (
+          e.bodyYield.points[0] &&
+          distance(e, e.bodyYield.points[0]) < 0.12
+        )
+          e.bodyYield.points.shift();
+        const p = e.bodyYield.points[0];
+        if (p) {
+          const n = distance(e, p) || 1;
+          dx = ((p.x - e.x) / n) * Math.min(n, length);
+          dy = ((p.y - e.y) / n) * Math.min(n, length);
+        } else delete e.bodyYield;
+      }
+    }
+    r.drive = { x: (r.drive?.x ?? 0) + dx, y: (r.drive?.y ?? 0) + dy };
+    move(physicsFloor(this.g, e.floor), e, dx, dy);
+  }
+  kick(z: Zombie, from: Point) {
+    const r = this.sync(z);
+    if (!r) return;
+    const d = distance(z, from) || 1;
+    r.body.applyLinearImpulse(
+      Vec2(
+        ((z.x - from.x) / d) * r.body.getMass() * 8,
+        ((z.y - from.y) / d) * r.body.getMass() * 8,
+      ),
+      r.body.getPosition(),
+      true,
+    );
+    const v = r.body.getLinearVelocity();
+    z.physics = {
+      ...z.physics,
+      x: v.x,
+      y: v.y,
+      angular: 0,
+      awake: true,
+      radius: r.radius,
+    };
+  }
+  private syncGrips() {
+    for (const [a, grip] of this.grips)
+      if (
+        !a.alive ||
+        a.escaped ||
+        a.grip !== grip.state ||
+        a.grip?.object !== grip.object.id ||
+        a.floor !== grip.object.floor ||
+        !this.records.has(grip.object)
+      ) {
+        this.floors[grip.object.floor].world.destroyJoint(grip.joint);
+        this.grips.delete(a);
+      }
+    for (const a of this.g.survivors)
+      if (a.grip && !this.grips.has(a)) {
+        const object = this.g.floors[a.floor].furniture.find(
+            (o) => o.id === a.grip!.object,
+          ),
+          ra = this.records.get(a),
+          rb = object && this.records.get(object);
+        if (!object || !ra || !rb) continue;
+        const joint = this.floors[a.floor].world.createJoint(
+          object.door
+            ? new RopeJoint({
+                bodyA: ra.body,
+                bodyB: rb.body,
+                localAnchorA: Vec2(0, 0),
+                localAnchorB: a.grip.local,
+                maxLength: a.grip.length ?? 0.45,
+                collideConnected: true,
+              })
+            : new RevoluteJoint({
+                bodyA: ra.body,
+                bodyB: rb.body,
+                localAnchorA: Vec2(0, 0),
+                localAnchorB: a.grip.local,
+                referenceAngle: 0,
+                collideConnected: true,
+              }),
+        )!;
+        this.grips.set(a, { object, joint, state: a.grip });
+      }
+  }
+  finish(dt: number): Furniture[] {
+    // Arrivals, deaths, stairs and broken props can change membership during AI decisions.
+    const entities: Entity[] = [
+      ...this.g.floors.flatMap((f) => f.furniture),
+      ...this.g.survivors,
+      ...this.g.zombies,
+    ];
+    for (const e of entities) {
+      const old = this.records.get(e);
+      if (!active(e)) {
+        this.remove(e);
+        continue;
+      }
+      if (!old || old.floor !== e.floor) {
+        this.sync(e);
+        continue;
+      }
+      const r = old,
+        angle = furniture(e) ? (e.angle ?? 0) : 0,
+        delta = { x: e.x - r.start.x, y: e.y - r.start.y };
+      // Models are controller proposals until contacts are solved. Never teleport a dynamic body to that proposal.
+      if (!furniture(e)) {
+        let v = r.drive
+          ? { x: r.drive.x / dt, y: r.drive.y / dt }
+          : { x: delta.x / dt, y: delta.y / dt };
+        const max = actor(e)
+          ? Math.max(
+              e.speed,
+              r.start.vault
+                ? distance(r.start.vault.from, r.start.vault.to) /
+                    r.start.vault.duration
+                : 0,
+            )
+          : 4;
+        const speed = Math.hypot(v.x, v.y);
+        if (speed > max) {
+          v = { x: (v.x * max) / speed, y: (v.y * max) / speed };
+        }
+        if (actor(e) || e.stagger <= 0) r.body.setLinearVelocity(v);
+        if (Math.hypot(v.x, v.y) > 0) r.body.setAwake(true);
+      } else if (
+        !e.door &&
+        (distance(e, r.start) > 1e-8 || Math.abs(angle - r.start.angle) > 1e-8)
+      ) {
+        r.body.setLinearVelocity({ x: delta.x / dt, y: delta.y / dt });
+        r.body.setAngularVelocity((angle - r.start.angle) / dt);
+        r.body.setAwake(true);
+      }
+      if (furniture(e)) {
+        const held = this.g.survivors.some(
+          (a) =>
+            a.alive &&
+            !a.escaped &&
+            (a.grip?.object === e.id || a.handling === e.id),
+        );
+        r.friction?.setMaxForce(held ? 0 : r.body.getMass() * 6);
+        r.body.setLinearDamping(held && !e.door ? 0 : 4);
+        r.body.setAngularDamping(held && !e.door ? 0 : 5);
+        const braced = this.g.survivors.some(
+          (a) => a.alive && !a.escaped && a.handling === e.id && !a.grip,
+        );
+        // A deliberate balanced carry resists torque; an end grip stays free to pivot.
+        r.friction?.setMaxTorque(
+          braced ? r.body.getMass() * 100 : held ? 0 : r.body.getMass() * 2,
+        );
+        if (e.door && r.hinge) {
+          const d = e.door;
+          if (!d.latched && r.body.isStatic()) {
+            const world = this.floors[e.floor];
+            world.world.destroyJoint(r.hinge);
+            r.body.setType("dynamic");
+            r.body.setTransform(Vec2(r.start.x, r.start.y), r.start.angle);
+            r.body.setLinearVelocity(Vec2(0, 0));
+            r.body.setAngularVelocity(0);
+            r.hinge = world.world.createJoint(
+              new RevoluteJoint({
+                bodyA: world.ground,
+                bodyB: r.body,
+                localAnchorA: d.hinge,
+                localAnchorB: {
+                  x: d.hinge.x - d.frame.x,
+                  y: d.hinge.y - d.frame.y,
+                },
+                referenceAngle: 0,
+                enableLimit: true,
+                lowerAngle: -DOOR_SWING,
+                upperAngle: DOOR_SWING,
+              }),
+            )!;
+          } else r.body.setType(d.latched ? "static" : "dynamic");
+          r.hinge.setLimits(
+            d.latched ? 0 : d.side > 0 ? 0 : -DOOR_SWING,
+            d.latched ? 0 : d.side < 0 ? 0 : DOOR_SWING,
+          );
+        }
+      }
+      e.x = r.start.x;
+      e.y = r.start.y;
+      if (furniture(e)) e.angle = r.start.angle;
+    }
+    this.syncGrips();
+    // Old saves can contain tightly packed soft bodies. Expand their solid
+    // fixtures gradually rather than ejecting the whole queue in one frame.
+    for (const r of this.records.values())
+      if (r.radius !== undefined && r.radius < BODY_RADIUS) {
+        r.radius = Math.min(BODY_RADIUS, r.radius + 0.025 * dt);
+        r.body.destroyFixture(r.body.getFixtureList()!);
+        r.body.createFixture(new Circle(r.radius), {
+          density: 8,
+          friction: 0,
+          restitution: 0,
+        });
+      }
+    const steps = Math.max(1, Math.ceil(dt / (1 / 120)));
+    for (let i = 0; i < steps; i++) {
+      for (const r of this.records.values())
+        if (furniture(r.entity)) {
+          const o = r.entity,
+            v = r.body.getLinearVelocity(),
+            speed = v.length(),
+            held = this.g.survivors.some(
+              (a) => a.grip?.object === o.id || a.handling === o.id,
+            ),
+            limit = held
+              ? Math.max(
+                  3,
+                  ...this.g.survivors
+                    .filter(
+                      (a) => a.grip?.object === o.id || a.handling === o.id,
+                    )
+                    .map((a) => a.speed * 2.5),
+                )
+              : 3;
+          if (o.speed > 0 && speed > limit)
+            r.body.setLinearVelocity(
+              Vec2((v.x * limit) / speed, (v.y * limit) / speed),
+            );
+          r.body.setAngularVelocity(
+            Math.max(-2.5, Math.min(2.5, r.body.getAngularVelocity())),
+          );
+        }
+      // Supply the held object's translation as well as the player's drive.
+      // Weight still matters for impacts, but cannot tax walking speed in free
+      // space. An off-center hand keeps the natural pivot; contacts remain
+      // authoritative because these are velocities, never teleported poses.
+      for (const [a, grip] of this.grips) {
+        if (grip.object.door) continue;
+        const person = this.records.get(a),
+          object = this.records.get(grip.object);
+        if (!person || !object) continue;
+        const drive = person.drive ?? { x: 0, y: 0 },
+          v = { x: drive.x / dt, y: drive.y / dt },
+          hand = object.body.getWorldVector(grip.state.local),
+          o = grip.object,
+          inertia = (o.w * o.w + o.h * o.h) / 12,
+          turn = Math.max(
+            -2.5,
+            Math.min(
+              2.5,
+              (hand.x * v.y - hand.y * v.x) /
+                (inertia + hand.x * hand.x + hand.y * hand.y),
+            ),
+          );
+        person.body.setLinearVelocity(v);
+        object.body.setAngularVelocity(turn);
+        object.body.setLinearVelocity(
+          Vec2(v.x + turn * hand.y, v.y - turn * hand.x),
+        );
+      }
+      for (const [a, grip] of this.grips)
+        if (grip.object.door && !grip.object.door.latched) {
+          const person = this.records.get(a),
+            object = this.records.get(grip.object),
+            drive = person?.drive;
+          if (!person || !object || !drive) continue;
+          const n = Math.hypot(drive.x, drive.y);
+          if (n < 1e-8) continue;
+          const hand = object.body.getWorldPoint(a.grip!.local);
+          if (distance(hand, person.body.getPosition()) > 1.15) continue;
+          const force = Vec2((drive.x / n) * 12, (drive.y / n) * 12);
+          object.body.applyForce(force, hand, true);
+          person.body.applyForce(
+            Vec2(-force.x, -force.y),
+            person.body.getPosition(),
+            true,
+          );
+        }
+      const fieldPeople = this.g.floors.some((f) =>
+        f.furniture.some((o) => o.field && !o.destroyed),
+      )
+        ? this.g.survivors.filter(
+            (a) => a.alive && !a.escaped && this.records.has(a),
+          )
+        : [];
+      const beforeFields = new Map(
+        fieldPeople.map((a) => [
+          a.id,
+          { ...this.records.get(a)!.body.getPosition() },
+        ]),
+      );
+      for (const f of this.floors) f.world.step(dt / steps, 12, 20);
+      if (fieldPeople.length) {
+        for (const a of fieldPeople)
+          Object.assign(a, this.records.get(a)!.body.getPosition());
+        updateFields(this.g, beforeFields);
+        for (const a of fieldPeople) {
+          const body = this.records.get(a)!.body;
+          if (distance(a, body.getPosition()) > 1e-8) {
+            body.setTransform(Vec2(a.x, a.y), 0);
+            body.setLinearVelocity(Vec2(0, 0));
+            body.setAwake(true);
+          }
+        }
+      }
+      for (const r of this.records.values())
+        if (furniture(r.entity) && r.entity.door) {
+          const d = r.entity.door,
+            angle = r.body.getAngle();
+          // Choose a swing side only beyond the solver’s angular contact slop.
+          // Tiny contact corrections at release must not lock the wrong side.
+          if (!d.latched && !d.side && Math.abs(angle) > 0.06) {
+            d.side = angle > 0 ? 1 : -1;
+            r.hinge!.setLimits(
+              d.side > 0 ? 0 : -DOOR_SWING,
+              d.side > 0 ? DOOR_SWING : 0,
+            );
+          }
+          if (Math.abs(angle) > 0.06) d.swung = true;
+        }
+    }
+    const moved: Furniture[] = [];
+    for (const r of this.records.values()) {
+      const e = r.entity,
+        p = r.body.getPosition();
+      e.x = p.x;
+      e.y = p.y;
+      const velocity = r.body.getLinearVelocity();
+      e.physics = {
+        x: velocity.x,
+        y: velocity.y,
+        angular: r.body.getAngularVelocity(),
+        awake: r.body.isAwake(),
+        ...(r.radius !== undefined ? { radius: r.radius } : {}),
+      };
+      if (furniture(e)) {
+        e.angle = r.body.getAngle();
+        if (e.door && Math.abs(e.angle) < 0.045 && latchDoor(this.g, e)) {
+          const pose = doorPose(e, 0);
+          r.body.setTransform(pose, 0);
+          r.body.setLinearVelocity(Vec2(0, 0));
+          r.body.setAngularVelocity(0);
+          r.hinge!.setLimits(0, 0);
+          r.body.setType("static");
+        }
+        const amount =
+          distance(e, r.start) +
+          (Math.abs(e.angle - r.start.angle) * Math.hypot(e.w, e.h)) / 2;
+        e.moved = r.start.moved + amount;
+        if (amount > 1e-5 && e.speed > 0) {
+          e.initial ??= {
+            x: r.start.x,
+            y: r.start.y,
+            w: e.w,
+            h: e.h,
+            angle: r.start.angle,
+          };
+          e.lastMoveTick = this.g.tick;
+          for (const id of this.movedBy.get(e) ?? [])
+            if (!e.movers.includes(id)) e.movers.push(id);
+          if (e.movers.length) e.lastBy = e.movers[0];
+          moved.push(e);
+        }
+      } else if (actor(e)) {
+        if (e.bodyTrailFloor !== e.floor) {
+          delete e.bodyTrail;
+          delete e.bodyYield;
+          e.bodyTrailFloor = e.floor;
+        }
+        if (
+          !e.bodyYield &&
+          !r.start.vault &&
+          (!e.bodyTrail?.length || distance(e, e.bodyTrail.at(-1)!) > 0.3)
+        ) {
+          e.bodyTrail ??= [];
+          e.bodyTrail.push({ x: e.x, y: e.y });
+          if (e.bodyTrail.length > 18) e.bodyTrail.shift();
+        }
+        if (distance(e, r.start) > 0.001) {
+          e.blockedTime = 0;
+          e.exploreStall = 0;
+        } else if (r.drive) e.blockedTime = r.start.blocked + dt;
+        const vault = e.vault ?? r.start.vault;
+        if (vault && distance(e, vault.to) > 0.04) {
+          const dx = vault.to.x - vault.from.x,
+            dy = vault.to.y - vault.from.y,
+            n = dx * dx + dy * dy,
+            progress = Math.max(
+              0,
+              Math.min(
+                1,
+                ((e.x - vault.from.x) * dx + (e.y - vault.from.y) * dy) /
+                  (n || 1),
+              ),
+            );
+          e.vault = {
+            ...vault,
+            left: Math.max(dt, vault.duration * (1 - progress)),
+          };
+          e.cooldown = 0;
+        }
+      }
+      r.published = {
+        x: e.x,
+        y: e.y,
+        angle: furniture(e) ? (e.angle ?? 0) : 0,
+      };
+    }
+    this.running = false;
+    return moved;
+  }
+}

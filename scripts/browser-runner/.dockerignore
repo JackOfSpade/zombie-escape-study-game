@@ -1,0 +1,9 @@
+*
+!Dockerfile
+!package.json
+!package-lock.json
+!preflight.mjs
+!runner.mjs
+!spec.mjs
+
+!packet.mjs

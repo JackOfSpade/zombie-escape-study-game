@@ -1,0 +1,171 @@
+# Test Lab
+
+The Test Lab is primarily an automated framework for coding agents (Codex, Claude Code and other shell-capable tools). Agents create or modify scenario files, load existing cases, run deterministic suites against the real engine, inspect structured failures and replay them after a code fix. No dev server, browser, AI service or manual setup is required. Repository instructions are in `AGENTS.md` and `CLAUDE.md`.
+
+Each test uses a fresh synthetic memory-only world with actual engine/Planck physics. It never reads or writes real game saves, diagnostic history, learner records or ChatGPT credentials, and makes no study bridge/AI requests. The optional visual debugger at **http://127.0.0.1:5173/lab.html** (also linked in Settings and included in production builds) uses the same scenario format and runner.
+
+## Automated agent workflow
+
+```sh
+# Discover existing test definitions as machine-readable data.
+npm run --silent test:game -- --list --json -
+# Select an existing case (substring match on scenario ID).
+npm run --silent test:game -- --filter push-door --json -
+# Create/edit a JSON fixture directly, then execute it without opening the game.
+npm run --silent test:game -- --scenario tests/fixtures/gametest/drag-damage.json --json -
+# Run the complete catalog and save replay artifacts, with JSON-only stdout.
+npm run --silent test:agents
+# Reproduce a case using its generated scenario artifact.
+npm run --silent test:game -- --scenario .artifacts/game-tests/drag-damage.scenario.json --json -
+```
+
+Agents should author fixtures directly in `tests/fixtures/gametest/<unique-id>.json`, using an existing fixture or `src/gametest/presets.ts` as a starting point. Script actions and outcome assertions, reproduce the failure, fix code, then rerun the case and full suite. Both `test:agents` and normal `npm test` automatically load checked-in fixtures; no registration or UI export is necessary. Multiple `--scenario FILE` arguments run an explicit suite instead of the default catalog. `--filter` also works on that suite. Browser-local setups are not part of the repository catalog.
+
+`--json -` writes one JSON document to stdout; diagnostics are in that document. Use `npm run --silent` to suppress npm's command banner. `--json PATH` writes a JSON file and keeps human-readable console output. `--artifacts DIRECTORY` writes `report.json` and `<id>.scenario.json` / `<id>.result.json` for each executed case, including successful cases. `test:agents` defaults to `.artifacts/game-tests`, ignored by Git. Outputs for selected IDs are overwritten on repeat runs; unrelated files are never deleted. **Read the current report** to identify the cases from the latest invocation; files from previously selected cases can remain.
+
+The version 1 suite report contains:
+
+- `summary`: `total`, `passed`, `failed`, `unverified`, `errors`.
+- `results`: per-case status, seed, exact final/failing tick, checks (expected/actual/message), actions, final positions, `source`, complete validated `scenario`, and `replay` path when artifacts are enabled.
+- `errors`: `{source, error}` for invalid files, duplicate IDs, world-construction failures or invocation errors. Independent cases continue running after individual input/construction failures. Valid scenarios that fail during construction also receive replay artifacts. Invalid raw input is not copied into replay artifacts.
+
+`--list --json -` returns `{version: 1, scenarios: [{id, name, seed, maxTicks, simulation, source}], errors}`. Exit **0** means every selected case passed (or listing succeeded). Exit **1** means failure, an unverified/no-check case, invalid input/invocation, output error or no matching cases. A constructor failure is an error, not a passing or missing case. Reports are data; inspect results rather than treating the presence of a file as success.
+
+For lower-level control, TypeScript tests can instantiate `new TestRunner(scenario, roadmap)`, call `advance(n)` or `run()`, and inspect `runner.game` / `report()`. `emptyScenario()` in `src/gametest/schema.ts` supplies a blank arena. Use `parseScenario` for validation; extend the typed schema/runner for new supported actions or queries instead of evaluating code from JSON.
+
+The design follows Minecraft GameTest's pattern of a reusable structure, starting entities, scripted actions and time-bounded assertions: [official GameTest introduction and example](https://learn.microsoft.com/en-us/minecraft/creator/documents/gametestbuildyourfirstgametest?view=minecraft-bedrock-stable).
+
+## Optional visual debugging
+
+1. Load a built-in scenario or choose **Blank arena**. Building scenarios use a fixed seed and the normal generated layout/population.
+2. Choose a placement tool and click the floor to spawn a player, NPC, zombie, furniture or hinged door. Paint walls/floors one cell at a time. Use the floor selector for other levels.
+3. Select an entity to edit its coordinates, health, furniture dimensions/angle, door latch state or stair credential. Editing resets the run so results cannot be mistaken for a test of the previous setup.
+4. **Step 1 tick**, **Step 30 ticks**, or **Play / pause** to observe. Focus the canvas for WASD, E and Space; Esc pauses. Keyboard actions are recorded against simulation ticks. **Run test** resets to the setup and replays those actions. **Reset** discards unsaved live recording edits.
+5. Add assertions in **Scenario JSON** and apply it. **Run test** advances in small batches until a failure or deadline, leaving the final scene and exact failed tick visible. **Run all built-in tests** runs every built-in independently and retains the first failing scene if any fail.
+
+The full-floor diagnostic view intentionally has no player fog-of-war. NPC decisions still use the game's normal visibility rules. **Game** simulation runs normal NPC behavior, zombies, combat, handling and physics. **Motor test** simulation disables game AI and applies scripted character motors using the same native body contacts/avoidance; use it for controlled queues and opposing traffic. Motor-test results do not establish normal NPC decision quality.
+
+No assertions means **unverified**, never passed. Assertions do not replace human playtesting for feel, readability, sound or learning quality.
+
+## Save, replay and share local fixtures
+
+- **Save setup locally** keeps the newest 12 lab setups within a separate 2 MB library. It never touches the game's save keys. Built-ins remain available after reload.
+- **Export setup** saves the initial scene and its authored actions/checks. **Export recording** also includes keyboard actions added during playback. Import either JSON to replay it.
+- **Export result** includes the scenario, seed, action outcomes, check expectations/actual values, exact failing tick, and final entity positions.
+- **Capture current layout as setup** converts current walls, positions, health and door poses into a fresh arena, clearing actions/checks. This is layout capture, not a full AI-memory or study-state checkpoint. Door frames remain frames rather than being captured as thin leaves.
+- Explicit `checkpoint` actions exercise a JSON/physics boundary mid-run. They preserve synthetic game state and reset native caches without using game storage.
+
+## Run after code changes
+
+```sh
+npm run test:game
+npm run test:game -- --list
+npm run test:game -- --filter following-traffic
+npm run test:game -- --scenario /absolute/path/to/exported-setup.json
+npm run test:game -- --json /tmp/game-test-results.json
+```
+
+The CLI exits nonzero for failures, malformed scenarios, unmatched filters and unverified/no-check setups. It uses the same definitions and runner as the visual lab. The normal `npm test` suite also runs all built-ins and checked-in JSON scenarios.
+
+To turn a bug into a lasting regression:
+
+1. Author a fixture directly with a fixed seed or small arena (or use the optional visual debugger). Prefer a small specific setup; keep an actual reported-world seed when geometry matters.
+2. Add outcome checks that fail on the buggy behavior and pass after the fix. Assert forward progress and solid contact, for example, rather than only a particular internal variable.
+3. Save the scenario as `tests/fixtures/gametest/<unique-id>.json`. Files there are automatically included in `npm run test:game` and `npm test`. They can be imported into the browser lab individually. `drag-damage.json` is the checked-in example.
+4. Run the new case before and after the fix, then the full GameTest catalog and appropriate existing core/browser tests. For changes to this tool, run `tests/game-test.test.ts` and `tests/browser/game-test-lab.spec.ts` too.
+
+Built-in examples live in `src/gametest/presets.ts`. The lab's **Run all built-in tests** runs that catalog; checked-in repository JSON fixtures and browser-local setups are additional sources and are not silently treated as built-ins.
+
+## Forward layouts and barricade regressions
+
+New live runs use `createPlayableGame`: version 3 force-field floors form a rear-to-front sequence of four study rooms spanning the route (room IDs 2 → 3 → 0 → 1), followed by the stair lobby. The entry hall has no corridor past the rooms. Seeded depth allocation gives the rear study hall at least five rows and the other rooms at least four, distributing three spare rows among them. Side-wall insets, each boundary’s separate field openings and shuffled terminal slots vary independently. These rooms retain quota entrances and independent personal-credential exits. A generation validator rejects uncovered openings, external bypasses, inaccessible or crowded terminals and insufficient free study capacity before the floor is exposed. It uses a bounded grid flood at creation, not per-frame regeneration. The first free hall has 24 independent solo terminals for 20 survivors. Structural checks cover 64 seeds / 256 ordinary floors for varied room proportions/silhouettes, terminal spacing, full transverse cuts, exact field coverage and forward connectivity; 32 seeds also verify zero-key credentialed egress after all entrance quotas are exhausted. Zombies can overrun a room once they catch up; the layout removes external bypasses rather than making survivors immune or changing zombie collision rules.
+
+For version 1 scenario compatibility, `template: "building"` still defaults to legacy geometry. A building with `layout: "forward"` alone retains version 2 geometry; `layout: "forward", rules: "force-fields"` uses the current version 3 layout. `forward-room-exit.json` retains its historical geometry and furniture assertion. The new `pursuit-main-breach.json` reproduces the central-hall bypass and verifies actual zombie damage at the rear study entrance, with forward gates untouched. `pursuit-solved-egress.json` verifies a credited, zero-key survivor physically reaches the next floor after the main door breaks while the pursuer remains behind. `pursuit-randomized-egress.json` exercises another seed with different room depths and gate locations. All three use normal game AI and a checkpoint. `tests/pursuit-layout.test.ts` also exercises real partial study progress under pursuit in the narrower current rooms. Loop candidates adapt to the room’s interior bounds without increasing the search budget.
+
+Loading a saved game does not regenerate its floors or learning state. Restarting through Pause retains learning, archives unfinished human work and creates the new layout. The generator uses its own seeded stream and leaves world RNG behavior unchanged.
+
+`vault-stacked-barricade.json` exercises adjacent furniture, native contacts and a mid-vault JSON/physics checkpoint. Vaults extend past every successive movable prop blocking the landing, stopping at the first safe gap; there is no object-count or arbitrary distance cap. Walls, closed doors, floor boundaries and occupied landings remain solid. Unit cases cover all five movable furniture types at multiple angles. NPC handling regressions cover conflicting restored plans, cooperative same-goal transport, progress toward handling/route goals, bounded retry and real egress blockers. Successful and failed human Space attempts are recorded in local run diagnostics.
+
+## Terminal conversation integration
+
+`tests/terminal-dialogue-harness.test.ts` uses a forward force-field `TestRunner` world and an isolated real loopback relay, memory-only queue and authenticated synthetic worker. It checks the actual `send`/poll/result path across a follow-up, malformed reply correction, sharing revocation during a claim, worker release, save/reload, byte-identical retry and exactly one personal key/stair reward. It also verifies that development completion leaves the learner ledger unchanged. No live connector, model, real save or credentials are used. Test worlds rebind every encounter’s `runId` to the scenario’s synthetic run ID; otherwise private session validation rejects these requests before they reach the relay.
+
+## Performance investigations
+
+`lag-seed-opening.json` reproduces thirty seconds of normal NPC/zombie activity using the reported lag seed and a stationary indoor player. Its outcome checks remain deterministic; a passing result alone does not establish smooth frame pacing. For timing comparisons, use fresh synthetic worlds, warm up each build, alternate old/new runs, and compare world-state equality as well as measured costs. Measure drawing on animation frames; a tight drawing loop can force GPU synchronization and misrepresent interactive frame costs.
+
+The game records bounded local `performance` entries about every two seconds of active wall time. These contain FPS, slow-frame count, maximum frame interval, average/maximum engine/render/total work and entity counts. Pause and restart reset timing windows. Entries share the existing newest-three-run / 400-entry / 256 KB-per-run limits and are saved with normal diagnostic checkpoints; no real learner data is added to test fixtures.
+
+## Scenario format
+
+A version 1 scenario has a unique ID/name, seed, `template` (`arena` or `building`), `simulation` (`game` or `physics`), `maxTicks`, `startTime`, `naturalSpawns`, and lists named `entities`, `deleted`, `maps`, `actions` and `checks`. Every simulation tick is 1/30 second. Scenes run for at most 3,600 ticks. Timeline ticks start at 1; actions execute in array order before that tick's simulation step; assertions read the resulting world.
+
+Entities use world-unit positions and floor numbers starting at zero. The player has ID `human`; other IDs are unique. Furniture `maxHp` can preserve its original strength independently of damaged `hp`. Entity `angle` is in degrees; a door swings between −70 and +70 degrees. Its width/height describe the frame. `released` unlocks the latch without animating it. Non-door furniture can rotate. Duplicate runtime spawns fail. Character and furniture counts are bounded. Empty arenas have fixed perimeter walls; enabling natural spawns opens the outside staging lane unless an explicit map overrides it. Natural spawning still follows the game's ten-second initial delay.
+
+Maps contain `{ "floor": 0, "rows": [...] }`: exactly 34 strings of 44 cells, with `#` for walls and `.` for floor. Entity overrides replace matching generated IDs; `deleted` removes generated entities, but cannot remove the player.
+
+Actions:
+
+- `move`: `id`, `x`, `y` (−1 to +1); persists until another move action. Game mode controls only `human`; motor mode can control any character. A zero vector stops its motor. Movement updates facing before a same-tick vault.
+- `door`, `grip`, `vault`: survivor `id` and `target` entity ID. They use the actual game's reach/interaction checks. A failed interaction fails the test. `vault` accepts target `auto` for the game's faced-surface selection.
+- `spawn`: an `entity` specification, allowing timed arrivals.
+- `checkpoint`: serialize/restore the synthetic world at a tick boundary.
+
+Checks have `name`, `mode`, `query`, `op` and `expected`. Operators are `eq`, `gte` and `lte`. Modes are `at` (requires `tick`), `always` (every tick through the deadline) and `eventually` (must become true before timeout). Optional `fromTick` delays a check. A completed eventual check stays complete; always checks continue throughout the window. Tests remain running until their deadline so future assertions and invariants are not skipped.
+
+Queries:
+
+| Type | Parameters | Result |
+| --- | --- | --- |
+| `property` | `id`, `field` | `x`, `y`, `hp`, `maxHp` (furniture), `floor`, `alive`, `latched`, or `absAngle` (radians) |
+| `count` | `kind`: `npc` or `zombie` | Living, active population |
+| `region` | `kind`, `floor`, `x1`, `y1`, `x2`, `y2` | Living population inside the rectangle |
+| `separation` | At least two distinct entity `ids` | Smallest same-floor center-to-center distance |
+| `event` | `event` type | Number of matching game events |
+| `soundConnected` | `floor`, points `a` and `b` | Whether an open acoustic path exists |
+
+Fixtures are validated data, not executable scripts. Extend the typed schema and runner for new supported actions or queries, with a failing-case regression, rather than evaluating imported code. Custom TypeScript tests can also instantiate `TestRunner` directly and inspect the resulting synthetic world.
+
+## Force field scenarios
+
+Set optional scenario `rules: "force-fields"` to use the new swarm rules; building templates also receive the fresh-run redesign. Legacy scenarios are unchanged. Door spawns accept `forceField: "green" | "red" | "exit"` and optional `freeLimit` (1–100, inward direction +X in arenas). Survivor spawns accept `keys` (0–100). Exit fields also allow a survivor with `credential: true`. The `door` action spends a key through the real interaction checks. Checkpoints preserve personal authorization and quota state. Physics scenarios update the same entrance-crossing bookkeeping and use the new zombie motor speed when these rules are selected.
+
+`force-field-green.json`, `force-field-personal.json` and `force-field-entrance-quota.json` verify actual native contacts and save/checkpoint behavior. `tests/force-fields.test.ts` additionally covers normal zombie AI breaking both colors, personal rewards, navigation, exit independence and continuous replacement at the 600-zombie cap. `npx tsx scripts/benchmark-swarm.ts --dense` measures a synthetic crowd on one floor without accessing real saves or any provider.
+
+`force-field-first-touch.json` closes the entrance at the first physical touch, before traversal completes. `force-field-midway-rejection.json` starts two survivors inside the field and verifies immediate ejection of the later entrant, retention of the first NPC's passage and checkpoint persistence. Native physics resolves field admission after every substep; script/actor array order does not grant priority. Additional TypeScript cases supply exact previous positions to verify swept touch ordering and migration of legacy uncharged grace passes.
+
+`force-field-no-key.json` verifies that zero-key survivors remain physically blocked by red fields across a checkpoint. Key-only interaction, NPC routing and free study routes across 32 seeds / 128 floors are covered in `tests/force-fields.test.ts`.
+
+## NPC study loops
+
+`tests/npc-study-loop.test.ts` uses `TestRunner` synthetic game worlds with real generated practice questions and native pursuit/physics. The typed helper sets a remembered, partially worked solo task and an elapsed work stall, which the JSON entity schema does not represent. Cases assert actual zombie displacement followed by physical terminal work and academic progress, a nearly finished task completing on return, checkpoint continuation, inaccessible red fields, unseen-enemy invariance, planner cadence and fallback. An overwhelmed case explicitly expects death without a free solve. Ordinary retreat/return is also tested without activating desperation planning. All cases run in `npm test` without AI calls or saved learner data. Survival alone is not the success criterion.
+
+`npx tsx scripts/benchmark-study-loop.ts` measures just the bounded planner using static synthetic actor poses; this intentionally exercises repeated route decisions but excludes rendering and physics. Run `npx tsx scripts/benchmark-swarm.ts --dense` for a 600-zombie headless engine measurement. Timing is diagnostic, not a frame-rate assertion.
+
+`force-field-explore-alternate.json` reproduces the reported crowded locked-door stall with five zero-key NPCs, an exhausted red entrance and a visible green alternative. It failed before the fix (zero explorers reached the alternative) and verifies all five physically cross the green entrance, with a checkpoint during the run. `tests/force-fields.test.ts` additionally covers restored door pursuits, a quota closing during a cached approach, inaccessible terminal reservations and keyed endpoint interactions. Exploration must check personal field access; pathfinding must not turn an unusable field-center destination into a legacy door interaction. Crowd jitter does not reset the force-field exploration stall timer without actual progress toward the goal.
+
+`tests/browser/force-field-health.spec.ts` checks full, half, critical and broken visual states for both colors, then verifies the bar against health lost to actual zombie attacks. Access stays green/red; health uses fading fill, cumulative fracture marks, a proportional bar and a numeric label. Bars and labels for visible sources draw above fog, while hidden sources remain undisclosed.
+
+## Friendly traffic and terminal arrivals
+
+`crowded-study-arrival.json` uses the reported seed 78191111 with normal AI, all 19 NPCs and a checkpoint. Before the navigation change only 15 NPCs reached the rear study hall within ten seconds. The fixture requires all 19, with no deaths. `tests/npc-traffic.test.ts` additionally verifies each bot physically reaches its own solo terminal within fifteen seconds; before the fix only 16 did so. These worlds are freshly generated synthetic runs, not copied player saves.
+
+Friendly local steering forecasts closest approach over 0.65 seconds, tests at most 22 candidate velocities against eight nearby bodies, checks swept wall/force-field clearance, and prefers a consistent passing side and previous motion. Moving queues retain their lane and single-file conflicts retain physical backtracking to a passing bay. Existing danger steering still handles nearby zombies. Native contacts remain authoritative; there is no overlap exemption or teleport. Route following skips up to eight visible, ordinary path nodes to avoid a shared grid-centre bottleneck while retaining door/vault actions. Visible solo terminal reservations are excluded from new task selection rather than merely penalized.
+
+`stationary-traffic-island.json` verifies a moving bot goes around a group of stationary bodies within four seconds, with solid separation across a checkpoint. `tests/browser/npc-traffic.spec.ts` runs both fixtures in the browser Test Lab. `npx tsx scripts/benchmark-traffic.ts` measures 20 local steering decisions per static congested sample and writes `.artifacts/traffic-performance.json`; it excludes the rest of the engine, physics and rendering and is not an FPS guarantee.
+
+
+## Close-contact survivor traffic
+
+`contact-traffic-release.json` starts opposing NPCs at actual body contact and checks that both pass within three seconds, keep physical separation and continue across a checkpoint. It reproduced a velocity-planner deadlock: the initial gap was penalized for every candidate, including sideways and separating motion, making stopping the cheapest permanent choice. The planner now treats a separating/tangent contact as escapable, samples a bounded set of reverse directions and remembers its passing side for 0.8 seconds to reduce left/right reversals. Native collision, walls and personal force-field permissions still apply. This is local steering over at most eight nearby survivors, with no extra global route searches.
+
+`tests/npc-traffic.test.ts` also tests eight contact orientations in both controller orders, the reported 78191111 opening with all nineteen bots physically working, and three restored waiting bots replacing a solo destination another actor owns. Station waiting and collision stalls are separate failures; saved stale paths alone do not prove a bot is attempting movement. The browser traffic suite replays the crowd, stationary-cluster and touching-opponents cases.
+
+
+## Doorway flow
+
+`doorway-crowd-flow.json` uses the reported 3705527980 seed, normal game AI, the idle human at the normal spawn, continuous zombie spawning and a checkpoint. Before the doorway-flow change, only 7 of 19 NPCs entered the free hall by ten seconds; it asserts all 19 cross, survive the scenario and face actual swarm pressure. The older open-corridor motor cases alone did not cover this occupied arrival point.
+
+`src/door-traffic.ts` treats wide force-field openings as traversable areas: survivors choose nearby clear gaps, retain a short local preference, ease off behind bodies and use consistent sides for opposing flow. Sideways adjustments remain available while forward progress is blocked. Stable small personal offsets avoid identical tracks; world RNG is unchanged. Physical collision, permission checks and zombie damage remain authoritative, including a quota closing during approach. Narrow one-person passages keep the native yielding behavior. The approach is limited to five units around an actual routed doorway and clears after crossing; bots keep their individual destinations. An already-occupied spawn-hall arrival point no longer has to be touched before entering the hall. Actual crossings satisfy local doorway exploration goals, so bots do not turn back toward an occupied center point. Replacing a claimed terminal also clears stale waypoints immediately.
+
+`tests/npc-traffic.test.ts` covers the idle-player opening across eight seeds and actual terminal work. `tests/door-traffic.test.ts` drives both opposing streams through horizontal and vertical openings using real pathfinding/physics, checks body separation, and rejects a closed personal field without granting access or spending keys. Those motor tests isolate coordination and do not substitute for the normal-AI scenario. The browser traffic suite replays the same scenario and captures `.artifacts/doorway-flow.png`.

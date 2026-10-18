@@ -1,0 +1,3 @@
+# Preserve exact bytes of pinned upstream security policies.
+scripts/browser-runner/seccomp_profile.json
+scripts/browser-runner/seccomp-moby.json
