@@ -1,5 +1,8 @@
-import type { FacetProof, LearnerLedger } from "./learning-model";
-import { facetMappingShapeValid } from "./learning-model";
+import {
+  facetMappingShapeValid,
+  type FacetProof,
+  type LearnerLedger,
+} from "./learning-model";
 import type { Roadmap } from "./model";
 import { observationInvalidated } from "./observation-validity";
 import type {

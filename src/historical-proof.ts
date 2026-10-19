@@ -1,11 +1,11 @@
 import { historicalScope } from "./historical-scope";
 import { importedProofValid } from "./imported-proof";
-import type {
-  FacetProof,
-  HistoricalFacetMapping,
-  LearnerLedger,
+import {
+  facetMappingShapeValid,
+  type FacetProof,
+  type HistoricalFacetMapping,
+  type LearnerLedger,
 } from "./learning-model";
-import { facetMappingShapeValid } from "./learning-model";
 import type { Roadmap } from "./model";
 import { observationInvalidated } from "./observation-validity";
 
