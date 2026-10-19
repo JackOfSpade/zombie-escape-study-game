@@ -1,4 +1,5 @@
-import type { Encounter, Game, Problem } from "./model";
+import { scopeKey } from "./learning-model";
+import type { Contract, Encounter, Game, Problem } from "./model";
 
 /**
  * Knowledge probing for the private Terminal AI conversation.
@@ -176,13 +177,58 @@ export function probeFacets(
 /** The request-side probe contract sent with every terminal-dialogue turn. */
 export function probeContract(
   problem: Pick<Problem, "rubric" | "scopeDefinitions">,
+  /** The encounter's grown universe; declared sub-facets keep their stored ids. */
+  facets: ProbeFacet[] = probeFacets(problem),
 ) {
   return {
     stance: PROBE_STANCE,
-    facets: probeFacets(problem),
+    facets: structuredClone(facets),
     findingStatuses: ["demonstrated", "implied", "gap"],
     fluency: ["fluent", "partial", "guessing", "declared-gap"],
   };
+}
+/** The probe contract for the next turn at an encounter: its frozen and declared facets. */
+export const encounterProbeContract = (
+  e: Pick<Encounter, "probe">,
+  problem: Pick<Problem, "rubric" | "scopeDefinitions">,
+) =>
+  probeContract(
+    problem,
+    e.probe?.facets.length ? e.probe.facets : probeFacets(problem),
+  );
+
+/** Completion feedback is bounded by the completion verdict. */
+export const FEEDBACK_LIMIT = 8000;
+/**
+ * The feedback recorded on the submission when the key is conceded on a
+ * declared gap. It always fits the completion verdict's bound: the gap list
+ * shrinks first, then the tail of the tutor's reply. The reply itself is
+ * delivered whole as the tutor message; only this record is bounded.
+ */
+export function concessionFeedback(
+  gapDescriptions: string[],
+  text: string,
+  limit = FEEDBACK_LIMIT,
+) {
+  const head = (list: string) =>
+    `Key conceded on a declared knowledge gap (${list}). Recorded for later study; no mastery claimed.`;
+  const full = gapDescriptions.length
+    ? gapDescriptions.join("; ")
+    : "recorded earlier";
+  const room = limit - text.length - 2 - head("").length;
+  const list =
+    full.length <= room
+      ? full
+      : room >= 24
+        ? cutCodeUnits(full, room - 1).trimEnd() + "…"
+        : `${gapDescriptions.length || "earlier"} recorded`;
+  const out = `${head(list)}\n\n${text}`;
+  return out.length <= limit ? out : cutCodeUnits(out, limit - 1) + "…";
+}
+/** The first `length` UTF-16 code units, never ending on half of a surrogate pair. */
+function cutCodeUnits(value: string, length: number) {
+  const cut = value.slice(0, Math.max(0, length));
+  return /[\uD800-\uDBFF]$/.test(cut) ? cut.slice(0, -1) : cut;
 }
 
 const FINDING_STATUSES = new Set<string>(["demonstrated", "implied", "gap"]);
@@ -221,6 +267,14 @@ export function parseProbeReply(
   let outcome: ProbeOutcome = "continue";
   if (complete) outcome = answer.outcome === "gap" ? "gap" : "solved";
   const known = new Map(facets.map((f) => [f.id, f] as const));
+  // A model may repeat a declared part in its own spelling ("Generating
+  // Functions") after the game stored it normalised ("generating-functions").
+  const resolve = (value: unknown): string | undefined => {
+    if (typeof value !== "string") return undefined;
+    if (known.has(value)) return value;
+    const normal = facetId(value);
+    return normal && known.has(normal) ? normal : undefined;
+  };
   const depthOf = (id: string): number => {
     let depth = 0;
     for (
@@ -256,7 +310,7 @@ export function parseProbeReply(
           throw Error(
             "Invalid tutor knowledge report: each facet needs id and status demonstrated|implied|gap",
           );
-        let id = raw.id;
+        let id = resolve(raw.id) ?? raw.id;
         const finding: ProbeFinding = {
           id,
           status: raw.status as ProbeFindingStatus,
@@ -264,8 +318,7 @@ export function parseProbeReply(
         if (!known.has(id)) {
           // A facet the question never listed is accepted only as a declared
           // prerequisite part of a known facet, with its own description.
-          const parent =
-            typeof raw.partOf === "string" ? raw.partOf : undefined;
+          const parent = resolve(raw.partOf);
           const description = shortText(raw.description, 200);
           id = facetId(id) || (description ? facetId(description) : "");
           if (
@@ -288,13 +341,9 @@ export function parseProbeReply(
         }
         if (seen.has(id)) continue;
         seen.add(id);
-        if (
-          finding.status === "implied" &&
-          typeof raw.impliedBy === "string" &&
-          known.has(raw.impliedBy) &&
-          raw.impliedBy !== id
-        )
-          finding.impliedBy = raw.impliedBy;
+        const impliedBy = resolve(raw.impliedBy);
+        if (finding.status === "implied" && impliedBy && impliedBy !== id)
+          finding.impliedBy = impliedBy;
         const note = shortText(raw.note, 400);
         if (note) finding.note = note;
         findings.push(finding);
@@ -634,6 +683,8 @@ export interface ProbeRecords {
     partOf?: ProbeFacet;
     objectiveIds: string[];
     depth: number;
+    /** True only when this gap may become a facet of the contract's scopeDefinitions without rewriting a stable definition. */
+    reuseInScopeDefinitions: boolean;
   }[];
   closedGaps: {
     facetId: string;
@@ -645,13 +696,38 @@ export interface ProbeRecords {
   }[];
 }
 export const PROBE_RECORDS_NOTE =
-  "Terminal probe observations for this track, never curriculum mastery. When openGaps name facets inside the eligible scope, reuse their exact facet ids and descriptions in scopeDefinitions and make the facet they blocked the question's apex; do not spend the question on facets listed as established unless the scope requires them; a closedGap means the facet it blocked should be asked again, since known parts never imply it. The scheduler alone chooses the scope; copy the eligible contract exactly.";
-export function probeRecordsForTrack(g: Game, track: string): ProbeRecords {
+  "Terminal probe observations for this track, never curriculum mastery. Build the question around openGaps inside the eligible scope and make the facet they blocked the question's apex. Only an openGap with reuseInScopeDefinitions:true (recorded on exactly the scope being generated) may contribute its exact facet id and description to scopeDefinitions; for every other gap, copy existingScopeDefinitions for that scope exactly and use the gap only to shape the prompt and apex. Never rewrite an existing stable scope definition. Do not spend the question on facets listed as established unless the scope requires them; a closedGap means the facet it blocked should be asked again, since known parts never imply it. The scheduler alone chooses the scope; copy the eligible contract exactly.";
+export function probeRecordsForTrack(
+  g: Game,
+  track: string,
+  /** The contract being generated; without it no gap may seed a scope facet. */
+  contract?: Pick<Contract, "objectiveIds" | "depth">,
+): ProbeRecords {
   const onTrack = <T extends { track: string }>(rows: T[] | undefined) =>
     (rows ?? []).filter((r) => r.track === track);
   const parent = (r: { partOf?: ProbeFacet }) =>
     r.partOf ? { partOf: { ...r.partOf } } : {};
   const gaps = onTrack(g.study.knowledgeGaps);
+  // A gap may seed a scope facet only when it is one of a question's own
+  // facets (not a declared part) recorded on exactly the scope this contract
+  // registers, and that definition is unregistered or already holds the facet
+  // unchanged. Anything else would rewrite a stable definition.
+  const scopes = g.study.learner?.scopes ?? {};
+  const reusable = (r: KnowledgeGapRecord) =>
+    !!contract &&
+    !r.partOf &&
+    r.depth === contract.depth &&
+    r.objectiveIds.length > 0 &&
+    r.objectiveIds.every((id) => {
+      if (!contract.objectiveIds.includes(id)) return false;
+      const existing = scopes[scopeKey(id, contract.depth)];
+      return (
+        !existing ||
+        existing.facets.some(
+          (f) => f.id === r.facet.id && f.description === r.facet.description,
+        )
+      );
+    });
   return {
     note: PROBE_RECORDS_NOTE,
     established: onTrack(g.study.knowledgeEstablished)
@@ -675,6 +751,7 @@ export function probeRecordsForTrack(g: Game, track: string): ProbeRecords {
         ...parent(r),
         objectiveIds: [...r.objectiveIds],
         depth: r.depth,
+        reuseInScopeDefinitions: reusable(r),
       })),
     closedGaps: gaps
       .filter((r) => r.resolved)

@@ -5,7 +5,10 @@ import { checkBridge, ensureProblem } from "../src/ai";
 import { eligible, initialStudy } from "../src/curriculum";
 import { devProblem } from "../src/practice-problem";
 import {
+  concessionFeedback,
   encounterEstablished,
+  encounterProbeContract,
+  FEEDBACK_LIMIT,
   encounterGaps,
   knowledgeEstablishedContext,
   knowledgeGapContext,
@@ -1187,5 +1190,247 @@ test("development practice lists open gaps for the scheduled track in its prompt
   assert.equal(
     after.replace(/\n\nRecorded gaps to work on: Facet open-a\./, ""),
     before,
+  );
+});
+
+test("concession feedback always fits the completion bound, keeping the tutor's reply whole when it can", () => {
+  const short = concessionFeedback(["Enumerative combinatorics"], "Recorded.");
+  assert.equal(
+    short,
+    "Key conceded on a declared knowledge gap (Enumerative combinatorics). Recorded for later study; no mastery claimed.\n\nRecorded.",
+  );
+  assert.match(concessionFeedback([], "x"), /\(recorded earlier\)/);
+  // A reply that fits beside the note is kept whole.
+  const fits = "w".repeat(7_800);
+  assert.ok(concessionFeedback(["A gap"], fits).endsWith("\n\n" + fits));
+  // A reply near the transport bound keeps the note and loses only its tail.
+  const long = "y".repeat(7_990);
+  const kept = concessionFeedback(["A gap"], long);
+  assert.equal(kept.length, FEEDBACK_LIMIT);
+  assert.match(
+    kept,
+    /^Key conceded on a declared knowledge gap \(1 recorded\)\. Recorded for later study; no mastery claimed\.\n\ny+…$/,
+  );
+  // Many long gap descriptions shrink the list, never the reply.
+  const many = Array.from(
+    { length: 40 },
+    (_, i) => `Facet ${i} ${"d".repeat(400)}`,
+  );
+  const listed = concessionFeedback(many, "Short reply.");
+  assert.ok(listed.length <= FEEDBACK_LIMIT);
+  assert.ok(listed.endsWith("\n\nShort reply."));
+  assert.match(listed, /Facet 0 d+/);
+  assert.match(listed, /…\)\. Recorded for later study/);
+  // Neither the gap-list cut nor the reply cut may split a surrogate pair.
+  const lone =
+    /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
+  const listCut = concessionFeedback(["😀".repeat(300)], "t".repeat(7_700));
+  assert.match(
+    listCut,
+    /😀…\)\. Recorded/,
+    "the gap list is the part that shrank",
+  );
+  assert.doesNotMatch(listCut, lone);
+  const replyCut = concessionFeedback(["G"], "😀".repeat(4_100));
+  assert.match(replyCut, /…$/, "the reply is the part that shrank");
+  assert.doesNotMatch(replyCut, lone);
+  const astral = ["𝑥".repeat(100), "𝑦".repeat(100), "😀".repeat(100)];
+  for (let n = 7_600; n < 8_100; n++) {
+    for (const text of ["t".repeat(n), "😀".repeat(n >> 1)]) {
+      const out = concessionFeedback(astral, text);
+      assert.ok(out.length <= FEEDBACK_LIMIT, `length at ${n}`);
+      assert.doesNotMatch(out, lone, `lone surrogate at ${n}`);
+    }
+  }
+  for (const limit of [8000, 200, 120])
+    assert.ok(concessionFeedback(many, "z".repeat(150), limit).length <= limit);
+});
+
+test("a declared part is matched in the model's own spelling on later turns, for ids, impliedBy and partOf", () => {
+  const facets = [
+    { id: "partition-identities", description: "Integer partition identities" },
+    {
+      id: "generating-functions",
+      description: "Generating functions",
+      partOf: "partition-identities",
+    },
+  ];
+  const parsed = parseProbeReply(
+    {
+      text: "x",
+      complete: false,
+      knowledge: {
+        facets: [
+          { id: "Generating Functions", status: "demonstrated" },
+          {
+            id: "Partition Identities",
+            status: "implied",
+            impliedBy: "Generating Functions",
+          },
+          {
+            id: "Coefficient Extraction",
+            status: "gap",
+            partOf: "Generating Functions",
+            description: "Read a coefficient of a power series",
+          },
+          { id: "unrelated", status: "gap" },
+        ],
+      },
+    },
+    facets,
+  );
+  assert.deepEqual(parsed.findings, [
+    { id: "generating-functions", status: "demonstrated" },
+    {
+      id: "partition-identities",
+      status: "implied",
+      impliedBy: "generating-functions",
+    },
+    {
+      id: "coefficient-extraction",
+      status: "gap",
+      partOf: "generating-functions",
+      description: "Read a coefficient of a power series",
+    },
+  ]);
+});
+
+test("the next turn's probe contract carries declared parts with their stored ids", async () => {
+  const g = createPlayableGame(616, r);
+  const e = g.encounters[g.floors[0].stations[0].encounter];
+  await ensureProblem(g, e, r);
+  const own = probeFacets(e.problem!);
+  assert.deepEqual(encounterProbeContract(e, e.problem!).facets, own);
+  recordProbeTurn(
+    g,
+    e,
+    parseProbeReply(
+      {
+        text: "Two parts underlie it.",
+        complete: false,
+        knowledge: {
+          facets: [
+            {
+              id: "Generating Functions",
+              status: "gap",
+              partOf: own[0].id,
+              description: "Generating functions",
+            },
+          ],
+        },
+      },
+      own,
+    ),
+    {
+      requestId: "p1",
+      questionSequence: 1,
+      provider: "study-mode",
+      statement: "?",
+    },
+  );
+  const next = encounterProbeContract(e, e.problem!);
+  assert.deepEqual(next.facets.at(-1), {
+    id: "generating-functions",
+    description: "Generating functions",
+    partOf: own[0].id,
+  });
+  assert.equal(next.facets.length, own.length + 1);
+  // The contract is a copy: editing it cannot change the encounter's universe.
+  next.facets.pop();
+  assert.equal(e.probe!.facets.length, own.length + 1);
+});
+
+test("generator records only let a gap seed the generated contract's scope when no stable definition would be rewritten", () => {
+  const g = createPlayableGame(717, r, initialStudy(r, "live"));
+  const track = eligible(r, g.study).track;
+  const objective = r.tracks[track].objectives[0].id;
+  const other = r.tracks[track].objectives[1].id;
+  const gap = (
+    id: string,
+    objectiveId: string,
+    depth = 1,
+    partOf?: string,
+    description = `Facet ${id}`,
+  ) => ({
+    id: `gap-${id}-${objectiveId}-${depth}`,
+    encounter: "run/e",
+    runId: "run",
+    track,
+    objectiveIds: [objectiveId],
+    depth,
+    facet: { id, description },
+    ...(partOf
+      ? { partOf: { id: partOf, description: `Facet ${partOf}` } }
+      : {}),
+    statement: "no",
+    requestId: "q",
+    provider: "study-mode",
+    at: "2026-10-19T00:00:00.000Z",
+  });
+  const define = (objectiveId: string, depth: number, ids: string[]) => {
+    g.study.learner!.scopes[`${objectiveId}/D${depth}`] = {
+      id: `${objectiveId}/D${depth}`,
+      objectiveId,
+      depth,
+      sourceScope: "registered",
+      facets: ids.map((id) => ({ id, description: `Facet ${id}` })),
+    };
+  };
+  define(objective, 1, ["registered-facet"]);
+  define(objective, 2, ["d2-facet"]);
+  g.study.knowledgeGaps = [
+    gap("registered-facet", objective),
+    gap("renamed", objective, 1, undefined, "A different description"),
+    gap("not-in-registered", objective),
+    gap("declared-part", objective, 1, "registered-facet"),
+    gap("other-objective", other),
+    gap("registered-facet", objective, 2),
+  ];
+  const flags = (contract?: { objectiveIds: string[]; depth: number }) =>
+    probeRecordsForTrack(g, track, contract).openGaps.map(
+      (x) => `${x.facetId}@${x.depth}:${x.reuseInScopeDefinitions}`,
+    );
+  // Generating objective/D1: only the facet already in that definition, unchanged.
+  assert.deepEqual(flags({ objectiveIds: [objective], depth: 1 }), [
+    "registered-facet@1:true",
+    "renamed@1:false",
+    "not-in-registered@1:false",
+    "declared-part@1:false",
+    "other-objective@1:false",
+    "registered-facet@2:false",
+  ]);
+  // Generating objective/D2: a D1 gap never seeds the D2 definition, and the
+  // D2-recorded gap would rewrite D2, which lacks it.
+  assert.deepEqual(
+    flags({ objectiveIds: [objective], depth: 2 }).map((f) =>
+      f.endsWith(":true"),
+    ),
+    [false, false, false, false, false, false],
+  );
+  // An unregistered scope may take its own gaps, but never a declared part.
+  g.study.knowledgeGaps.push(
+    gap("fresh", other),
+    gap("fresh-part", other, 1, "fresh"),
+  );
+  assert.deepEqual(flags({ objectiveIds: [other], depth: 1 }).slice(-3), [
+    "registered-facet@2:false",
+    "fresh@1:true",
+    "fresh-part@1:false",
+  ]);
+  assert.ok(
+    flags({ objectiveIds: [other], depth: 1 }).includes(
+      "other-objective@1:true",
+    ),
+  );
+  // Without a contract nothing may seed a scope.
+  assert.ok(flags().every((f) => f.endsWith(":false")));
+  const records = probeRecordsForTrack(g, track);
+  assert.match(
+    records.note,
+    /Only an openGap with reuseInScopeDefinitions:true/,
+  );
+  assert.match(
+    records.note,
+    /Never rewrite an existing stable scope definition/,
   );
 });

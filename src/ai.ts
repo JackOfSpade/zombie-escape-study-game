@@ -5,7 +5,8 @@ import {
   knowledgeProbeContext,
   parseProbeReply,
   probeRecordsForTrack,
-  probeContract,
+  concessionFeedback,
+  encounterProbeContract,
   probeFacets,
   recordProbeTurn,
   TERMINAL_DIALOGUE_FORMAT,
@@ -279,14 +280,14 @@ async function ensureIndividualProblem(g: Game, e: Encounter, r: Roadmap) {
         encounterId: e.id,
         contract,
         generationPolicy:
-          "@study Diagnose before teaching. For D1, keep the learner workspace starter empty; put essential scenario or code-reading material in the prompt without supplying the key explanation, endpoint update, worked result or a leading solution hint. Do not interpret an objective's implementation verb as a D1 implementation requirement. Preserve legitimate prior context and assistance attribution without presenting supplied steps as fresh independent understanding. Use probeRecords: build the question around open gaps inside the eligible scope, reusing their exact facet ids and descriptions with the facet they blocked as the apex; do not spend the question on established facets unless the scope requires them; re-ask what a closed gap blocked.",
+          "@study Diagnose before teaching. For D1, keep the learner workspace starter empty; put essential scenario or code-reading material in the prompt without supplying the key explanation, endpoint update, worked result or a leading solution hint. Do not interpret an objective's implementation verb as a D1 implementation requirement. Preserve legitimate prior context and assistance attribution without presenting supplied steps as fresh independent understanding. Use probeRecords: build the question around open gaps inside the eligible scope with the facet they blocked as the apex; only a gap marked reuseInScopeDefinitions may add its exact facet id to scopeDefinitions, and existing stable scope definitions are copied exactly; do not spend the question on established facets unless the scope requires them; re-ask what a closed gap blocked.",
         runtimeSupport: {
           scripts: ["python", "typescript"],
           react:
             "Optional D2+ TypeScript runtime: {language:typescript,environment:react,steps:[{kind:click|fill|press|expect-text|expect-count,selector:CSS,...}]}. Single TSX module default-exporting App; only installed React imports, no network, workers or external packages. At most eight bounded interaction/check steps. Runtime errors/DOM checks/preview are observations, never automatic correctness or ENV credit; TSX transpilation is not static TypeScript type checking. Docker runtime must be installed locally.",
         },
         existingScopeDefinitions: g.study.learner?.scopes,
-        probeRecords: probeRecordsForTrack(g, contract.track),
+        probeRecords: probeRecordsForTrack(g, contract.track, contract),
         progressContext:
           adoptedSourceText(study.learner!)
             ?.split(`<!-- BEGIN ${contract.track}_PROGRESS -->`)[1]
@@ -805,12 +806,18 @@ export function retryTutorRequest(
           .join("\n\n");
         const feedback =
           probe?.outcome === "gap"
-            ? `Key conceded on a declared knowledge gap (${
-                gaps.length
-                  ? gaps.map((gap) => gap.facet.description).join("; ")
-                  : "recorded earlier"
-              }). Recorded for later study; no mastery claimed.\n\n${answer.text}`
+            ? concessionFeedback(
+                gaps.map((gap) => gap.facet.description),
+                answer.text,
+              )
             : answer.text;
+        // Validate before recording a pending submission, so a rejected
+        // verdict can never leave one behind to block later awards.
+        const verdict = completionVerdict({
+          complete: true,
+          feedback,
+          qualified: ["human"],
+        });
         const submission: Submission = {
           id: `dialogue-${job.id}`,
           revision: payload.draftRevision,
@@ -822,17 +829,7 @@ export function retryTutorRequest(
           dialogueRequestId: job.id,
         };
         e.submissions.push(submission);
-        applyCompletion(
-          g,
-          e,
-          r!,
-          submission,
-          completionVerdict({
-            complete: true,
-            feedback,
-            qualified: ["human"],
-          }),
-        );
+        applyCompletion(g, e, r!, submission, verdict);
       }
       job.state = "applied";
     } catch (error) {
@@ -1053,7 +1050,7 @@ export async function send(
               mode: "terminal-dialogue",
               responseFormat: TERMINAL_DIALOGUE_FORMAT,
               instruction: TERMINAL_DIALOGUE_INSTRUCTION,
-              probe: probeContract(problem),
+              probe: encounterProbeContract(e, problem),
             }
           : {}),
         problem,

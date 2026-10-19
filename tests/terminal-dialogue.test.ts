@@ -406,3 +406,83 @@ test("an apex gap descends through tutor-declared parts: the known part is estab
     );
     assert.match(calls[0].payload.instruction, /partOf/);
   }));
+
+test("a gap concession with a reply at the transport bound still grants the key and leaves no pending submission", async () =>
+  fixture(async (g, e, calls, reply) => {
+    const facets = probeFacets(e.problem);
+    const text = "Recorded as a gap. " + "x".repeat(7_900);
+    assert.ok(text.length <= 8000);
+    reply(async () =>
+      Response.json({
+        text,
+        complete: true,
+        outcome: "gap",
+        knowledge: {
+          facets: facets.map((f: any) => ({ id: f.id, status: "gap" })),
+        },
+      }),
+    );
+    await send(g, e, "tutor", "I do not know any of this", r);
+    assert.equal(e.tutorRequests[0].state, "applied", e.tutorRequests[0].error);
+    assert.equal(e.state, "consumed");
+    assert.equal(g.survivors[0].keys, 1);
+    assert.equal(e.submissions.length, 1);
+    assert.equal(e.submissions[0].status, "complete");
+    assert.ok(e.submissions.every((s: any) => s.status !== "pending"));
+    assert.ok(e.submissions[0].feedback.length <= 8000);
+    assert.match(
+      e.submissions[0].feedback,
+      /^Key conceded on a declared knowledge gap[^\n]*\n\nRecorded as a gap\. x+…$/,
+    );
+    // The tutor's full reply is still delivered as the message.
+    assert.equal(
+      e.tutor.filter((m: any) => m.kind === "tutor").at(-1).text,
+      text,
+    );
+    assert.equal(g.study.knowledgeGaps.length, facets.length);
+    // The next request at another terminal carries the declared ids back.
+    assert.deepEqual(calls[0].payload.probe.facets, facets);
+  }));
+
+test("a part declared on one turn is sent back with its stored id on the next turn", async () =>
+  fixture(async (g, e, calls, reply) => {
+    const apex = probeFacets(e.problem)[0];
+    reply(async () =>
+      Response.json({
+        text: "What does a generating function do?",
+        complete: false,
+        knowledge: {
+          facets: [
+            { id: apex.id, status: "gap" },
+            {
+              id: "Generating Functions",
+              status: "gap",
+              partOf: apex.id,
+              description: "Generating functions",
+            },
+          ],
+        },
+      }),
+    );
+    await send(g, e, "tutor", "I don't know the apex", r);
+    reply(async () =>
+      Response.json({
+        text: "Good: you know generating functions.",
+        complete: false,
+        knowledge: {
+          facets: [{ id: "Generating Functions", status: "demonstrated" }],
+        },
+      }),
+    );
+    await send(g, e, "tutor", "It encodes a sequence as coefficients", r);
+    assert.deepEqual(calls[1].payload.probe.facets.at(-1), {
+      id: "generating-functions",
+      description: "Generating functions",
+      partOf: apex.id,
+    });
+    assert.equal(probeState(e).facets.at(-1)!.status, "demonstrated");
+    assert.deepEqual(
+      g.study.knowledgeEstablished.map((k: any) => k.facet.id),
+      ["generating-functions"],
+    );
+  }));
