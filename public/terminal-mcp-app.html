@@ -232,8 +232,12 @@
             clearTimeout(poll);
             show(
               snapshot.solved
-                ? "Solved · one synthetic demo key. This does not affect your real game."
-                : "Connected to regular ChatGPT. Send starts a host conversation turn.",
+                ? snapshot.outcome === "gap"
+                  ? "Key conceded on a declared gap · one synthetic demo key. Recorded gaps: " +
+                    (snapshot.gaps || []).join(", ") +
+                    ". This does not affect your real game."
+                  : "Solved · one synthetic demo key. This does not affect your real game."
+                : "Connected to regular ChatGPT. Terminal AI assumes you know this; say so if you do not. Send starts a host conversation turn.",
             );
           }
         }
@@ -268,7 +272,9 @@
           if (turn?.status === "answered")
             show(
               turn.reply.complete
-                ? "Terminal AI marked this conversation complete. The game applies its once-only reward separately."
+                ? turn.reply.outcome === "gap"
+                  ? "Terminal AI conceded the key on a declared knowledge gap. The game records the gap and applies its once-only reward separately."
+                  : "Terminal AI marked this conversation complete. The game applies its once-only reward separately."
                 : "Reply delivered to the game. Waiting for your next terminal message.",
             );
         }

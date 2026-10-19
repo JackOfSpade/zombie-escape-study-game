@@ -44,12 +44,18 @@ test("real game client, relay and embedded terminal app: host turns replace the 
     }
     throw Error("The game's terminal turn never reached the embedded app");
   }
-  const reply = (turnId: string, text: string, complete: boolean) =>
+  const reply = (
+    turnId: string,
+    text: string,
+    complete: boolean,
+    extra: Record<string, unknown> = {},
+  ) =>
     call("reply_study_terminal_job", {
       relayId: relay.relayId,
       turnId,
       text,
       complete,
+      ...extra,
     });
   const flights: Promise<void>[] = [];
   try {
@@ -171,12 +177,42 @@ test("real game client, relay and embedded terminal app: host turns replace the 
     assert.equal(retry.requestId, two.requestId);
     assert.notEqual(retry.turnId, two.turnId);
     assert.equal(retry.messages.length, 3);
-    reply(retry.turnId, "Solved: the accumulated explanation covers it.", true);
+    const retryPacket = JSON.parse(
+      retry.prompt.split("\n").slice(2).join("\n"),
+    );
+    assert.match(retryPacket.probe.stance, /Assume the learner already has/);
+    const facetIds = retryPacket.probe.facets.map((f: { id: string }) => f.id);
+    assert.ok(facetIds.length >= 2);
+    const concession = {
+      outcome: "gap",
+      knowledge: {
+        facets: [
+          { id: facetIds[0], status: "demonstrated" },
+          { id: facetIds[1], status: "gap", note: "learner declared it" },
+        ],
+        signal: { fluency: "declared-gap" },
+      },
+    };
+    reply(
+      retry.turnId,
+      "Solved: the accumulated explanation covers it.",
+      true,
+      concession,
+    );
     await resumed;
     assert.equal(e.state, "consumed");
     assert.equal(g.survivors[0].keys, 1);
     assert.ok(g.survivors[0].access.includes(e.floor));
     assert.equal(e.submissions.length, 1);
+    assert.match(
+      e.submissions[0].feedback,
+      /Key conceded on a declared knowledge gap/,
+    );
+    assert.equal(g.study.knowledgeGaps?.length, 1);
+    assert.equal(g.study.knowledgeGaps![0].facet.id, facetIds[1]);
+    assert.match(g.study.knowledgeGaps![0].statement, /Synthetic explanation/);
+    assert.equal(e.probe!.turns.length, 2);
+    assert.equal(e.probe!.turns[1].signal?.fluency, "declared-gap");
     assert.match(e.submissions[0].content, /Synthetic prediction/);
     assert.match(e.submissions[0].content, /Synthetic explanation/);
     assert.doesNotMatch(e.submissions[0].content, /Which reading leaves/);
@@ -191,6 +227,7 @@ test("real game client, relay and embedded terminal app: host turns replace the 
         retry.turnId,
         "Solved: the accumulated explanation covers it.",
         true,
+        concession,
       ).answered,
       1,
     );

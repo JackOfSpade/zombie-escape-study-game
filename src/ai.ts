@@ -1,6 +1,15 @@
 import { devProblem } from "./practice-problem";
 import { roomEncounters, assignRoomProblem } from "./room-questions";
 import { completionVerdict } from "./completion-verdict";
+import {
+  knowledgeGapContext,
+  parseProbeReply,
+  probeContract,
+  probeFacets,
+  recordProbeTurn,
+  TERMINAL_DIALOGUE_FORMAT,
+  TERMINAL_DIALOGUE_INSTRUCTION,
+} from "./knowledge-probe";
 import { bridgeRequest as request, status } from "./bridge-client";
 export { checkBridge, status, type BridgeStatus } from "./bridge-client";
 import { browserSteps } from "../scripts/browser-runner/spec.mjs";
@@ -717,6 +726,14 @@ export function retryTutorRequest(
         throw Error("Invalid tutor reply");
       if (dialogue && answer.text.length > 8000)
         throw Error("Terminal reply exceeds 8000 characters");
+      const probe = dialogue
+        ? parseProbeReply(
+            answer as Record<string, unknown>,
+            Array.isArray(payload.probe?.facets)
+              ? payload.probe.facets
+              : probeFacets(payload.problem),
+          )
+        : undefined;
       checkSnapshot();
       if (dialogue && answer.complete === true && !r)
         throw Error(
@@ -743,6 +760,17 @@ export function retryTutorRequest(
       );
       delivered.requestId = job.id;
       job.responseMessageId = delivered.id;
+      const gaps = probe
+        ? recordProbeTurn(g, e, probe, {
+            requestId: job.id,
+            questionSequence: job.questionSequence,
+            provider: job.provider,
+            statement:
+              payload.messages
+                ?.filter((m: Message) => m.kind === "human")
+                .at(-1)?.text ?? "",
+          })
+        : [];
       if (dialogue && answer.complete === true && e.state !== "consumed") {
         const ev = event(
           g,
@@ -760,6 +788,14 @@ export function retryTutorRequest(
         ]
           .filter(Boolean)
           .join("\n\n");
+        const feedback =
+          probe?.outcome === "gap"
+            ? `Key conceded on a declared knowledge gap (${
+                gaps.length
+                  ? gaps.map((gap) => gap.facet.description).join("; ")
+                  : "recorded earlier"
+              }). Recorded for later study; no mastery claimed.\n\n${answer.text}`
+            : answer.text;
         const submission: Submission = {
           id: `dialogue-${job.id}`,
           revision: payload.draftRevision,
@@ -767,7 +803,7 @@ export function retryTutorRequest(
           content: captured,
           seq: ev.seq,
           status: "pending",
-          feedback: answer.text,
+          feedback,
           dialogueRequestId: job.id,
         };
         e.submissions.push(submission);
@@ -778,7 +814,7 @@ export function retryTutorRequest(
           submission,
           completionVerdict({
             complete: true,
-            feedback: answer.text,
+            feedback,
             qualified: ["human"],
           }),
         );
@@ -1000,9 +1036,9 @@ export async function send(
         ...(e.mode === "solo" && e.state !== "consumed"
           ? {
               mode: "terminal-dialogue",
-              responseFormat: { text: "string", complete: "boolean" },
-              instruction:
-                "@study: Continue this private puzzle conversation. Judge the learner's accumulated answers against every part of the question and rubric. Return {text,complete}. Ask a focused follow-up or bounded hint with complete:false while gaps remain. Set complete:true only when the learner has supplied a correct, sufficiently supported solution across their messages and saved work; acknowledge success in text. Your own explanations are assistance, not learner evidence. Do not demand a separate submission or repeat already demonstrated reasoning. Do not claim execution without matching receipts. Gameplay completion is separate from independent mastery.",
+              responseFormat: TERMINAL_DIALOGUE_FORMAT,
+              instruction: TERMINAL_DIALOGUE_INSTRUCTION,
+              probe: probeContract(problem),
             }
           : {}),
         problem,
@@ -1029,11 +1065,15 @@ export async function send(
         studyPrompt: "@study",
         prompt: `@study\n${text}`,
         curriculum: r.tracks[problem.contract.track].curriculum,
-        progressContext:
+        progressContext: [
           adoptedSourceText(g.study.learner)
             ?.split(`<!-- BEGIN ${problem.contract.track}_PROGRESS -->`)[1]
             ?.split(`<!-- END ${problem.contract.track}_PROGRESS -->`)[0] ??
-          r.tracks[problem.contract.track].progress,
+            r.tracks[problem.contract.track].progress,
+          knowledgeGapContext(g, problem.contract.track),
+        ]
+          .filter(Boolean)
+          .join("\n\n"),
       };
       (e.tutorRequests ??= []).push({
         id,

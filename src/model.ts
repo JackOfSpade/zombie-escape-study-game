@@ -81,6 +81,8 @@ export interface StudyState {
   environmentReviews?: import("./environment-review").EnvironmentReviewJob[];
   environmentObservations?: import("./environment-observations").EnvironmentObservation[];
   roadmapExport?: import("./roadmap-export").RoadmapExport;
+  /** Learner-declared gaps conceded at terminals; carried across runs, never mastery. */
+  knowledgeGaps?: import("./knowledge-probe").KnowledgeGapRecord[];
   profile?: "development" | "live";
   learner?: LearnerLedger;
   version: number;
@@ -398,6 +400,8 @@ export interface Encounter {
   /** One question per room; answers, ownership and rewards remain per station. */
   questionRoom?: string;
   tutorRequests?: TutorRequest[];
+  /** Terminal AI knowledge probe: facets, per-turn findings and answer signals. */
+  probe?: import("./knowledge-probe").KnowledgeProbe;
   groupRequests?: (Omit<TutorRequest, "responseMessageId" | "state"> & {
     state: "pending" | "interrupted" | "applied" | "superseded";
   })[];

@@ -41,16 +41,112 @@ function setup(options = {}) {
     state(app.call("open_study_terminal", {}, grant));
   const claim = (relayId, revision, grant = owner) =>
     state(app.call("claim_study_terminal_turn", { relayId, revision }, grant));
-  const reply = (relayId, turnId, text, complete, grant = owner) =>
+  const reply = (relayId, turnId, text, complete, grant = owner, extra = {}) =>
     state(
       app.call(
         "reply_study_terminal_job",
-        { relayId, turnId, text, complete },
+        { relayId, turnId, text, complete, ...extra },
         grant,
       ),
     );
   return { queue, app, open, claim, reply };
 }
+
+test("knowledge-probe reply fields are declared, validated, forwarded to the queue and part of the idempotency digest", () => {
+  const tool = terminalRelayTools().find(
+    (t) => t.name === "reply_study_terminal_job",
+  );
+  assert.deepEqual(tool.inputSchema.required, [
+    "relayId",
+    "turnId",
+    "text",
+    "complete",
+  ]);
+  assert.deepEqual(tool.inputSchema.properties.outcome.enum, ["solved", "gap"]);
+  assert.deepEqual(
+    tool.inputSchema.properties.knowledge.properties.facets.items.properties
+      .status.enum,
+    ["demonstrated", "implied", "gap"],
+  );
+  assert.match(tool.description, /assume the learner already knows/);
+  const { queue, open, claim, reply } = setup();
+  queue.enable(true);
+  const s = open();
+  const job = queue.enqueue(
+    "tutor",
+    dialoguePayload("synthetic-dialogue-probe", [human("I don't know", 1)], {
+      probe: {
+        stance: "Assume knowledge.",
+        facets: [
+          { id: "largest", description: "Largest total is 5" },
+          { id: "update", description: "Subtract outgoing, add incoming" },
+        ],
+      },
+    }),
+  );
+  const claimed = claim(s.relayId, s.revision);
+  const packet = JSON.parse(
+    claimed.turn.prompt.split("\n").slice(2).join("\n"),
+  );
+  assert.deepEqual(
+    packet.probe.facets.map((f) => f.id),
+    ["largest", "update"],
+  );
+  assert.match(claimed.turn.prompt, /outcome:gap/);
+  const turnId = claimed.turn.turnId;
+  for (const extra of [
+    { outcome: "partial" },
+    { knowledge: "none" },
+    { knowledge: { facets: [{ id: "largest" }] } },
+    { knowledge: { facets: [{ id: "largest", status: "known" }] } },
+    { knowledge: { signal: { fluency: "great" } } },
+  ])
+    assert.throws(
+      () => reply(s.relayId, turnId, "Recorded", true, owner, extra),
+      /outcome solved\|gap/,
+    );
+  const knowledge = {
+    facets: [
+      { id: "largest", status: "demonstrated" },
+      { id: "update", status: "gap", note: "learner declared it" },
+    ],
+    signal: { fluency: "declared-gap" },
+  };
+  const answered = reply(
+    s.relayId,
+    turnId,
+    "Recorded; key granted.",
+    true,
+    owner,
+    {
+      outcome: "gap",
+      knowledge,
+    },
+  );
+  assert.deepEqual(answered.turn.reply, {
+    text: "Recorded; key granted.",
+    complete: true,
+    outcome: "gap",
+    knowledge,
+  });
+  assert.deepEqual(queue.result(job.id, job.hash).answer, {
+    text: "Recorded; key granted.",
+    complete: true,
+    outcome: "gap",
+    knowledge,
+  });
+  assert.throws(
+    () => reply(s.relayId, turnId, "Recorded; key granted.", true),
+    /Conflicting/,
+  );
+  assert.equal(
+    reply(s.relayId, turnId, "Recorded; key granted.", true, owner, {
+      outcome: "gap",
+      knowledge,
+    }).answered,
+    1,
+  );
+});
 
 test("live relay tools are separate from the demo and legacy worker tools", () => {
   const tools = terminalRelayTools();

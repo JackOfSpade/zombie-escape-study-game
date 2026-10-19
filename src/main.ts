@@ -1,5 +1,6 @@
 import { relayListening, relayServes } from "./bridge-client";
 import { terminalChannel, submissionView } from "./terminal-view";
+import { encounterGaps, probeSummary } from "./knowledge-probe";
 import { FramePerformance } from "./frame-performance";
 import gameShell from "./game-shell.html?raw";
 import { escapeHtml as escape } from "./html";
@@ -435,7 +436,7 @@ function renderTerminal(force = false) {
     tab === "tutor" ? "Terminal AI" : "Group chat";
   $("#conversation-context").textContent =
     tab === "tutor"
-      ? "@study · Answer and reason here. The AI has your room question and study context, asks follow-ups, and awards access and a key when solved."
+      ? "@study · Answer and reason here. Terminal AI assumes you already know this and starts from the question that establishes the most at once; one good answer can settle several facets. If you do not know something, say so: the gap is recorded for later study and the key is still granted. Access and a key are awarded when it marks the conversation complete."
       : "Discuss with your group. They can read the current answer draft. Chatting does not submit it.";
   $("#answer-context").textContent =
     tab === "tutor"
@@ -444,11 +445,20 @@ function renderTerminal(force = false) {
   const dialogue = e.mode === "solo";
   $("#terminal").classList.toggle("dialogue-terminal", dialogue);
   $("#legacy-answer").hidden = dialogue;
-  $("#dialogue-status").hidden = !dialogue || e.state !== "consumed";
+  const probeLine = probeSummary(e);
+  const conceded = encounterGaps(game, e);
+  $("#dialogue-status").hidden =
+    !dialogue || (e.state !== "consumed" && !probeLine);
   $("#dialogue-status").textContent =
     e.state === "consumed"
-      ? "Solved · personal access and key awarded. You can keep discussing the question."
-      : "Work through the question with Terminal AI. Your answers stay in this conversation.";
+      ? `${
+          conceded.length
+            ? `Solved with a recorded gap · personal access and key awarded. Recorded for later study: ${conceded.map((r) => r.facet.description).join("; ")}.`
+            : "Solved · personal access and key awarded."
+        } You can keep discussing the question.${probeLine ? ` ${probeLine}.` : ""}`
+      : probeLine
+        ? `Knowledge probe · ${probeLine}. Say so if you do not know something; the gap is recorded and the key still granted.`
+        : "Work through the question with Terminal AI. Your answers stay in this conversation.";
   const composer = $<HTMLTextAreaElement>("#chat-input");
   if (force || document.activeElement !== composer)
     composer.value = e.chatDraft ?? "";
@@ -917,6 +927,19 @@ function readinessHtml(track: "PY" | "PE") {
     `${v.passed}/${v.total}`;
   return `<section data-readiness="${track}"><h3>${track} readiness</h3><p>Checkpoint targets ${summary(report.checkpoints)} · topic transfers ${summary(report.transfers)} · selected integrations ${summary(report.integrations)}.</p><p>Curriculum targets: ${report.curriculumTargetsMet ? "met" : "not yet met"}. Interview practice: ${report.interviewPracticeVerified ? "verified" : "not yet verified"}. Delayed retention: ${report.retention.verified}/${report.retention.tracked} tracked scopes verified.</p>${report.environment.total ? `<p>Observed environment skills ${summary(report.environment)}. ENV observations are separate and never block a tier gate.</p>` : ""}<details><summary>Transfer, integration and environment records</summary><p>These records preserve the roadmap's selected scope. Only validated independent human evidence can complete a transfer or integration. Development play, shared success and code execution alone add no credit.</p>${report.requirements.map((d) => `<p><strong>${escape(d.id)}</strong> · ${d.selected ? escape(d.status) : "not selected"}<br>${escape(d.remaining)}<br><small>${escape(d.sourceRefs)}</small></p>`).join("")}</details></section>`;
 }
+function knowledgeGapsHtml(g: Game) {
+  const gaps = g.study.knowledgeGaps ?? [];
+  return `<section data-knowledge-gaps><h3>Recorded knowledge gaps (${gaps.length})</h3><p>Facets you told Terminal AI you did not know. The key was still granted; these are study targets carried across runs, never failures or mastery. The next question on the same track sees them.</p>${
+    gaps
+      .slice()
+      .reverse()
+      .map(
+        (r) =>
+          `<p><strong>${escape(r.objectiveIds.join(", "))} · D${r.depth}</strong> · ${escape(r.facet.description)}<br><small>${escape(r.at.slice(0, 10))} · you said: ${escape(r.statement.slice(0, 200))}</small></p>`,
+      )
+      .join("") || "<p>None recorded.</p>"
+  }</section>`;
+}
 $("#curriculum-button").onclick = () => {
   openPanel("inspector", "#inspector-title");
   const c = eligibleForUI();
@@ -924,6 +947,10 @@ $("#curriculum-button").onclick = () => {
   $("#inspector-content").innerHTML =
     `<p>PY: Tier ${game.study.profile === "live" ? game.study.learner?.tracks.PY.tier : 1} / ${escape(game.study.phases.PY)}. PE: Tier ${game.study.profile === "live" ? game.study.learner?.tracks.PE.tier : 1} / ${escape(game.study.phases.PE)}. The next formal visit is ${c?.track ?? "waiting at a curriculum gate"}${c?.review ? " · oldest due review" : ""}. Floors and survival do not change academic depth.</p><p>${escape(status().detail)}</p><p>${game.study.profile === "live" ? "Game-recorded academic visits" : "Development practice visits"}: ${game.study.visits.length}. Source: ${roadmap.sourceHash}. Original evidence is retained in full; development play adds no passes.</p><button id="progress-export">Download updated merged roadmap</button><p id="progress-export-status" class="muted">Validated live study and reviewed practical evidence can update the roadmap. Downloading a save does not award learning credit.</p><button id="source-export" class="quiet">Download original merged roadmap</button><button id="evidence-export" class="quiet">Export game evidence for review</button><h3>Assessment queue</h3>${game.study.assessments.map((a) => `<p>${escape(a.id)} · ${escape(a.status)}<br>${escape(a.provenance)} ${a.status === "review-required" ? `<button data-assessment="${escape(a.id)}" class="quiet">Retry assessment</button>` : ""}</p>`).join("") || "<p>No assessments yet.</p>"}<details><summary>Authoritative saved scheduler</summary><pre>${escape(roadmap.sharedProgress)}</pre></details>`;
   $("#inspector-content").insertAdjacentHTML("beforeend", readiness);
+  $("#inspector-content").insertAdjacentHTML(
+    "beforeend",
+    knowledgeGapsHtml(game),
+  );
   renderEnvironmentObservations(
     $("#inspector-content"),
     game,

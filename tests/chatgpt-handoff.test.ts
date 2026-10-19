@@ -857,10 +857,33 @@ test("terminal dialogue handoff requires an explicit boolean completion decision
       }),
     /complete:boolean/,
   );
+  assert.match(job.instructions, /assume the learner already knows/i);
+  assert.match(job.instructions, /outcome\?:'solved'\|'gap'/);
+  assert.match(job.instructions, /impliedBy/);
+  for (const bad of [
+    { text: "x", complete: true, outcome: "partial" },
+    { text: "x", complete: true, knowledge: "none" },
+    { text: "x", complete: true, knowledge: { facets: "all" } },
+    { text: "x", complete: true, knowledge: { facets: [{ id: "a" }] } },
+    {
+      text: "x",
+      complete: true,
+      knowledge: { facets: [{ id: "a", status: "known" }] },
+    },
+    { text: "x", complete: true, knowledge: { signal: { fluency: "great" } } },
+  ])
+    assert.throws(
+      () => q.submit(worker, job.jobId, job.claim, bad),
+      /outcome must be|knowledge must be/,
+    );
   assert.equal(
     q.submit(worker, job.jobId, job.claim, {
       text: "Synthetic follow-up",
       complete: false,
+      knowledge: {
+        facets: [{ id: "a", status: "implied", impliedBy: "b" }],
+        signal: { fluency: "partial" },
+      },
     }).status,
     "accepted",
   );

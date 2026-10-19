@@ -124,3 +124,69 @@ test("demo data is OAuth-owner isolated and bounded; malformed input never mutat
     s,
   );
 });
+
+test("the demo carries the probe stance and records a conceded gap beside its single key", () => {
+  const app = createTerminalMcpApp();
+  let s = state(app.call("open_study_terminal_demo", {}, owner));
+  assert.deepEqual(
+    s.probe.facets.map((f) => f.id),
+    ["largest-total", "running-update", "invariant-boundary"],
+  );
+  assert.match(s.probe.stance, /Assume the learner already knows/);
+  const tool = terminalAppTools().find(
+    (t) => t.name === "reply_study_terminal_turn",
+  );
+  assert.deepEqual(tool.inputSchema.properties.outcome.enum, ["solved", "gap"]);
+  s = state(
+    app.call(
+      "stage_study_terminal_turn",
+      {
+        demoId: s.demoId,
+        revision: s.revision,
+        answer: "No idea about boundaries",
+      },
+      owner,
+    ),
+  );
+  assert.match(s.pending.prompt, /outcome:gap/);
+  assert.match(s.pending.prompt, /"probe"/);
+  assert.throws(
+    () =>
+      app.call(
+        "reply_study_terminal_turn",
+        {
+          demoId: s.demoId,
+          turnId: s.pending.turnId,
+          text: "x",
+          complete: true,
+          outcome: "partial",
+        },
+        owner,
+      ),
+    /outcome solved\|gap/,
+  );
+  s = state(
+    app.call(
+      "reply_study_terminal_turn",
+      {
+        demoId: s.demoId,
+        turnId: s.pending.turnId,
+        text: "Recorded the boundary gap; demo key granted.",
+        complete: true,
+        outcome: "gap",
+        knowledge: {
+          facets: [
+            { id: "invariant-boundary", status: "gap" },
+            { id: "not-a-facet", status: "gap" },
+          ],
+          signal: { fluency: "declared-gap" },
+        },
+      },
+      owner,
+    ),
+  );
+  assert.equal(s.keys, 1);
+  assert.equal(s.solved, true);
+  assert.equal(s.outcome, "gap");
+  assert.deepEqual(s.gaps, ["invariant-boundary"]);
+});
