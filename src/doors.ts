@@ -179,6 +179,7 @@ export function doorPushDirection(
     const n = distance(a, goal) || 1;
     return { x: (goal.x - a.x) / n, y: (goal.y - a.y) / n };
   }
+  return undefined;
 }
 
 export function doorHandle(o: Furniture): Point {

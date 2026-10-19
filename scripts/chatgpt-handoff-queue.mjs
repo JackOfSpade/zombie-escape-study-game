@@ -1,4 +1,4 @@
-import { createHash, randomUUID, timingSafeEqual } from "node:crypto";
+import { randomUUID, timingSafeEqual } from "node:crypto";
 import {
   readFileSync,
   writeFileSync,
@@ -7,6 +7,8 @@ import {
   lstatSync,
 } from "node:fs";
 import { dirname } from "node:path";
+import { validProbeKnowledge, validProbeOutcome } from "./lib/probe-reply.mjs";
+import { sha256 as hash } from "./lib/digest.mjs";
 
 export const HANDOFF_OPERATIONS = Object.freeze([
   "generate",
@@ -19,7 +21,6 @@ export const HANDOFF_OPERATIONS = Object.freeze([
   "materialize-work",
   "materialize-outcome",
 ]);
-const hash = (value) => createHash("sha256").update(value).digest("hex");
 const object = (value) =>
   value !== null && typeof value === "object" && !Array.isArray(value);
 // Only these public NPC jobs are covered by the separate unattended-work opt-in.
@@ -292,32 +293,9 @@ function validateAnswer(job, answer) {
       )
         fail("Terminal dialogue requires complete:boolean and text:string");
       if (job.payload.mode === "terminal-dialogue") {
-        if (
-          answer.outcome !== undefined &&
-          !["solved", "gap"].includes(answer.outcome)
-        )
+        if (!validProbeOutcome(answer))
           fail("Terminal dialogue outcome must be 'solved' or 'gap'");
-        if (
-          answer.knowledge !== undefined &&
-          (!object(answer.knowledge) ||
-            (answer.knowledge.facets !== undefined &&
-              (!Array.isArray(answer.knowledge.facets) ||
-                answer.knowledge.facets.length > 64 ||
-                answer.knowledge.facets.some(
-                  (f) =>
-                    !object(f) ||
-                    typeof f.id !== "string" ||
-                    !["demonstrated", "implied", "gap"].includes(f.status) ||
-                    (f.partOf !== undefined && typeof f.partOf !== "string") ||
-                    (f.description !== undefined &&
-                      typeof f.description !== "string"),
-                ))) ||
-            (answer.knowledge.signal !== undefined &&
-              (!object(answer.knowledge.signal) ||
-                !["fluent", "partial", "guessing", "declared-gap"].includes(
-                  answer.knowledge.signal.fluency,
-                ))))
-        )
+        if (!validProbeKnowledge(answer))
           fail(
             "Terminal dialogue knowledge must be {facets:[{id,status:demonstrated|implied|gap,impliedBy?,note?,partOf?,description?}],signal?:{fluency}}",
           );

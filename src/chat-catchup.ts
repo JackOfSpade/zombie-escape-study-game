@@ -3,7 +3,7 @@ import {
   validateGroupReply,
   type GroupSnapshot,
 } from "./group-grounding";
-import type { Encounter, Game, Message } from "./model";
+import type { Provider, Encounter, Game, Message } from "./model";
 import { npcProfile } from "./npc-cognition";
 import { sha256 } from "./digest";
 import { workspaceAt } from "./workspace-history";
@@ -11,7 +11,7 @@ import { workspaceAt } from "./workspace-history";
 export interface CatchupBatch {
   id: string;
   /** Missing only on legacy native batches. */
-  provider?: "study-mode" | "chatgpt-handoff";
+  provider?: Provider;
   from: number;
   to: number;
   sourceRevision: number;
@@ -34,7 +34,7 @@ export interface CatchupBatch {
   acceptedSubmission?: string;
 }
 export interface CatchupAdapter {
-  provider?: "study-mode" | "chatgpt-handoff";
+  provider?: Provider;
   request(payload: unknown): Promise<unknown>;
   append(
     author: string,
@@ -142,7 +142,7 @@ function restoredWorkspace(e: Encounter, job: CatchupBatch) {
 function startJob(
   g: Game,
   e: Encounter,
-  provider: "study-mode" | "chatgpt-handoff",
+  provider: Provider,
 ): CatchupBatch | undefined {
   const existing = e.catchups?.find(
     (job) => !terminal(job) && job.from === e.chatCursor,

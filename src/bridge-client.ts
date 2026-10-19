@@ -1,6 +1,7 @@
+import type { Provider } from "./model";
 /** Provider transport only; gameplay and learning remain in their owning modules. */
 export interface BridgeStatus {
-  mode: "development" | "study-mode" | "chatgpt-handoff";
+  mode: "development" | Provider;
   label: string;
   capabilities: string[];
   detail: string;

@@ -1,14 +1,9 @@
 // Prepared diagnostic only. Never start without the user's scoped approval.
-import { createHash, randomUUID } from "node:crypto";
-import {
-  readFileSync,
-  writeFileSync,
-  renameSync,
-  lstatSync,
-  existsSync,
-} from "node:fs";
+import { randomUUID } from "node:crypto";
+import { readFileSync, writeFileSync, existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-const hash = (value) => createHash("sha256").update(value).digest("hex");
+import { createDiagnosticState } from "./lib/diagnostic-state.mjs";
+import { sha256 as hash } from "./lib/digest.mjs";
 export const OPTIONAL_PLAN_HASH =
   "3de36a70b2554e14870d28ad2b995fea8ae9909059225e5f13cad3aae53add66";
 const names = [
@@ -398,11 +393,6 @@ export function createOptionalProbe({
   };
 }
 const root = fileURLToPath(new URL("../", import.meta.url));
-function ownerOnly(path) {
-  const s = lstatSync(path);
-  if (s.isSymbolicLink() || s.uid !== process.getuid?.() || s.mode & 0o077)
-    throw Error("Probe state must be owner-only and not a symlink");
-}
 export async function runProbeCLI({
   planName = "chatgpt-optional-capabilities-plan",
   privateName = "optional-smoke",
@@ -413,21 +403,16 @@ export async function runProbeCLI({
   const directory = root + ".local/chatgpt-handoff/",
     file = directory + privateName + ".json",
     reportFile = root + "docs/evidence/" + reportName + ".json";
+  const state = createDiagnosticState({
+    directory,
+    file,
+    label: "Probe state",
+  });
   const probe = createOptionalProbe({
     ...config,
     source: readFileSync(root + "docs/evidence/" + planName + ".json", "utf8"),
-    read() {
-      if (!existsSync(file)) return;
-      ownerOnly(directory);
-      ownerOnly(file);
-      return JSON.parse(readFileSync(file, "utf8"));
-    },
-    write(s) {
-      ownerOnly(directory);
-      const tmp = file + "." + randomUUID() + ".tmp";
-      writeFileSync(tmp, JSON.stringify(s), { flag: "wx", mode: 0o600 });
-      renameSync(tmp, file);
-    },
+    read: () => state.loadIfExists(),
+    write: (s) => state.save(s),
     reportExists: () => existsSync(reportFile),
     publish(report) {
       const content = JSON.stringify(report, null, 2) + "\n";

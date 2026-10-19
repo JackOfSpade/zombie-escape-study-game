@@ -1,5 +1,7 @@
 import type { LearnerLedger, ScopeDefinition } from "./learning-model";
 export type Track = "PY" | "PE";
+/** A connected AI provider; development practice has no provider. */
+export type Provider = "study-mode" | "chatgpt-handoff";
 export interface Objective {
   id: string;
   target: number;
@@ -365,7 +367,7 @@ export interface Message {
 export interface Submission {
   dialogueRequestId?: string;
   completionRequest?: {
-    provider: "study-mode" | "chatgpt-handoff";
+    provider: Provider;
     payloadJson: string;
   };
   id: string;
@@ -386,7 +388,7 @@ export interface Problem {
   prompt: string;
   rubric: string[];
   starter: string;
-  provenance: "development" | "study-mode" | "chatgpt-handoff";
+  provenance: "development" | Provider;
   validation?: { kind: "trace"; answer: number };
   contract: Contract;
   scopeDefinitions?: ScopeDefinition[];
@@ -394,7 +396,7 @@ export interface Problem {
 export interface TutorRequest {
   transportPhase?: import("./bridge-client").HandoffProgress;
   id: string;
-  provider: "study-mode" | "chatgpt-handoff";
+  provider: Provider;
   payloadJson: string;
   questionSequence: number;
   state: "pending" | "interrupted" | "applied" | "superseded";

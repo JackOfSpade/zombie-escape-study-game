@@ -1,5 +1,5 @@
 import { canReachStation, human } from "./engine";
-import { type Encounter, type Game, event } from "./model";
+import { type Provider, type Encounter, type Game, event } from "./model";
 import { humanUsingWorkspace, npcAtWorkstation } from "./npc-work-access";
 import { workspaceAt } from "./workspace-history";
 export interface WorkspacePatch {
@@ -9,7 +9,7 @@ export interface WorkspacePatch {
 }
 export interface WorkspaceProposal {
   /** Missing only on older native-authored candidates. */
-  provider?: "study-mode" | "chatgpt-handoff";
+  provider?: Provider;
   autonomous?: boolean;
   sourceProblem?: string;
   appliedAutomatically?: boolean;

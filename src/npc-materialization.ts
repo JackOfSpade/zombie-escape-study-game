@@ -4,7 +4,7 @@ import {
   validateGroupReply,
   type GroupSnapshot,
 } from "./group-grounding";
-import { event, type Encounter, type Game } from "./model";
+import { type Provider, event, type Encounter, type Game } from "./model";
 import {
   hasHumanStudyContext,
   npcProfile,
@@ -14,7 +14,7 @@ import { npcAtWorkstation } from "./npc-work-access";
 import { sha256 } from "./digest";
 import { proposalText } from "./workspace-proposals";
 export interface WorkPayload {
-  provider?: "study-mode" | "chatgpt-handoff";
+  provider?: Provider;
   background?: boolean;
   autonomyAllowed?: boolean;
   runId: string;
@@ -34,7 +34,7 @@ export interface WorkPayload {
   instruction: string;
 }
 export interface Materialization {
-  provider?: "study-mode" | "chatgpt-handoff";
+  provider?: Provider;
   autonomyAllowed?: boolean;
   id: string;
   workIds: string[];
@@ -78,7 +78,7 @@ export function materializeNpcWork(
   options: {
     background?: boolean;
     allowAutonomous?: boolean;
-    provider?: "study-mode" | "chatgpt-handoff";
+    provider?: Provider;
   } = {},
 ): Promise<void> | undefined {
   const provider = options.provider ?? "study-mode";

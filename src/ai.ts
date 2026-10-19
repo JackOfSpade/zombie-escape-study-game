@@ -40,6 +40,7 @@ import {
   registerScopes,
 } from "./learner";
 import {
+  type Provider,
   type Assessment,
   type Contract,
   type Encounter,
@@ -144,7 +145,7 @@ export function inspectCompletedNpcWork(
 }
 async function optionalProviderRequest(
   g: Game,
-  provider: "study-mode" | "chatgpt-handoff",
+  provider: Provider,
   operation: string,
   payload: unknown,
   capability = operation,
@@ -519,6 +520,7 @@ export function openChat(g: Game, e: Encounter) {
   e.chatOpen = true;
   if (live(g) && status().capabilities.includes("retrospective-group"))
     return nativeCatchup(g, e);
+  // Below: a local recorded-work summary; nothing asynchronous to await.
   e.catchupNotice = live(g)
     ? "Recorded work summary · this bridge does not support retrospective dialogue."
     : g.study.profile === "live"
@@ -562,6 +564,7 @@ export function openChat(g: Game, e: Encounter) {
   }
   e.chatCursor = cutoff;
   coverCatchupsWithRecordedLog(e);
+  return undefined;
 }
 function nativeCatchup(g: Game, e: Encounter) {
   const provider =
@@ -586,6 +589,7 @@ function nativeCatchup(g: Game, e: Encounter) {
 export function retryChatCatchup(g: Game, e: Encounter) {
   if (live(g) && status().capabilities.includes("retrospective-group"))
     return nativeCatchup(g, e);
+  // Below: a local recorded-work summary; nothing asynchronous to await.
   return Promise.resolve();
 }
 export function presentWorkLog(g: Game, e: Encounter) {
@@ -1152,7 +1156,7 @@ export async function send(
     };
     (e.groupRequests ??= []).push({
       id: requestId,
-      provider: groupProvider as "study-mode" | "chatgpt-handoff",
+      provider: groupProvider as Provider,
       payloadJson: JSON.stringify(payload),
       questionSequence: e.group.at(-1)!.seq,
       state: "pending",
@@ -1662,6 +1666,7 @@ export function autonomousNpcWork(
       return task;
     }
   }
+  return undefined;
 }
 
 export function reviewEnvironmentObservation(

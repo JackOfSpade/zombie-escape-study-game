@@ -2,11 +2,11 @@ import type { EnvironmentObservation } from "./environment-observations";
 import type { FinalRequirement } from "./final-requirements";
 import { importedEnvironmentStatus } from "./imported-proof";
 import type { LearnerLedger } from "./learning-model";
-import type { Artifact, Message, Roadmap } from "./model";
+import type { Provider, Artifact, Message, Roadmap } from "./model";
 export interface EnvironmentReviewPayload {
   requestId: string;
   /** Absent only on legacy native review packets. */
-  provider?: "study-mode" | "chatgpt-handoff";
+  provider?: Provider;
   sourceHash: string;
   definition: Pick<FinalRequirement, "id" | "scope" | "kind">;
   observation: EnvironmentObservation;
@@ -34,7 +34,7 @@ export interface EnvironmentJudgment {
 export interface EnvironmentEvidence {
   id: string;
   reviewedAt: string;
-  provenance: "study-mode" | "chatgpt-handoff";
+  provenance: Provider;
   reviewProfile: "live";
   payload: EnvironmentReviewPayload;
   judgment: EnvironmentJudgment;
@@ -48,6 +48,7 @@ export function environmentOutput(p: EnvironmentReviewPayload, kind: string) {
       ? JSON.stringify(p.observation.execution.receipt)
       : undefined;
   if (kind === "runner-code") return p.observation.execution?.code;
+  return undefined;
 }
 /** Structural evidence checks; semantic full-scope judgment belongs to the connected reviewer. */
 export function validateEnvironmentEvidence(

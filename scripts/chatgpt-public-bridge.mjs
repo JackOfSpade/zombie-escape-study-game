@@ -1,6 +1,6 @@
 import { preparePrivateSocket } from "./private-socket.mjs";
 import { createServer } from "node:http";
-import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
+import { randomBytes, timingSafeEqual } from "node:crypto";
 import { mkdirSync, lstatSync, unlinkSync, chmodSync } from "node:fs";
 import { join } from "node:path";
 import { createOAuthServer } from "./chatgpt-security/oauth.mjs";
@@ -16,13 +16,13 @@ import {
   terminalRelayTools,
 } from "./terminal-relay-app.mjs";
 import { handoffTools } from "./chatgpt-handoff-tools.mjs";
+import { sha256 as hash } from "./lib/digest.mjs";
 const protocols = new Set([
   "2025-11-25",
   "2025-06-18",
   "2025-03-26",
   "2024-11-05",
 ]);
-const hash = (value) => createHash("sha256").update(value).digest("hex");
 const same = (a, b) =>
   typeof a === "string" &&
   typeof b === "string" &&

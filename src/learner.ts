@@ -13,6 +13,7 @@ import {
 import { historicalScope } from "./historical-scope";
 import { importedProofValid } from "./imported-proof";
 import {
+  scopeFacetsValid,
   learningProgress,
   progressStatus,
   scopeKey,
@@ -25,6 +26,7 @@ import {
   type ReviewRecord,
 } from "./learning-model";
 import {
+  type Provider,
   type Assessment,
   type Contract,
   type Encounter,
@@ -194,16 +196,7 @@ export function registerScopes(r: Roadmap, l: LearnerLedger, e: Encounter) {
       d.depth > objective.target ||
       d.sourceScope !== objective.scope ||
       d.id !== scopeKey(d.objectiveId, d.depth) ||
-      !Array.isArray(d.facets) ||
-      !d.facets.length ||
-      d.facets.length > 40 ||
-      new Set(d.facets.map((f) => f.id)).size !== d.facets.length ||
-      d.facets.some(
-        (f) =>
-          !/^[-\w.]{1,100}$/.test(f.id) ||
-          typeof f.description !== "string" ||
-          !f.description.trim(),
-      )
+      !scopeFacetsValid(d.facets)
     )
       throw Error("Invalid curriculum facet definition");
     const existing = l.scopes[d.id];
@@ -853,7 +846,7 @@ export function applyLearningAssessment(
   e: Encounter,
   a: Assessment,
   at = new Date().toISOString(),
-  provider: "study-mode" | "chatgpt-handoff" | "test-fixture" = "study-mode",
+  provider: Provider | "test-fixture" = "study-mode",
 ) {
   checkSource(r, l);
   if (!["study-mode", "chatgpt-handoff"].includes(e.problem?.provenance ?? ""))

@@ -5,6 +5,7 @@ import type {
   HistoricalFacetMapping,
   LearnerLedger,
 } from "./learning-model";
+import { facetMappingShapeValid } from "./learning-model";
 import type { Roadmap } from "./model";
 import { observationInvalidated } from "./observation-validity";
 
@@ -52,16 +53,7 @@ export function validateHistoricalMapping(
     def.sourceScope !== objective.scope ||
     m.sourceHash !== r.sourceHash ||
     l.sourceHash !== r.sourceHash ||
-    !def.facets.some((f) => f.id === m.facet) ||
-    !["independent", "assisted", "unknown", "contradicted"].includes(
-      m.outcome,
-    ) ||
-    !m.rationale?.trim() ||
-    m.rationale.length > 1500 ||
-    !Array.isArray(m.evidenceIds) ||
-    !m.evidenceIds.length ||
-    m.evidenceIds.length > 20 ||
-    new Set(m.evidenceIds).size !== m.evidenceIds.length
+    !facetMappingShapeValid(def, m)
   )
     throw Error("Invalid historical facet mapping");
   if (

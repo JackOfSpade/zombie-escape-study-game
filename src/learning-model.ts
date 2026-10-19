@@ -1,4 +1,4 @@
-import type { Contract, Track } from "./model";
+import type { Provider, Contract, Track } from "./model";
 export type CellState = "U" | "G" | "P" | "R" | "—";
 export interface ScopeDefinition {
   id: string;
@@ -83,7 +83,7 @@ export interface RetentionEvent {
   after: ReviewRecord;
 }
 export interface LearningEvidence {
-  provider?: "study-mode" | "chatgpt-handoff" | "test-fixture";
+  provider?: Provider | "test-fixture";
   id: string;
   attemptId: string;
   encounter: string;
@@ -174,3 +174,63 @@ export const studyRatioPosition = (s: {
   cycle: number;
   cycleOffset?: number;
 }) => (s.cycle + (s.cycleOffset ?? 0)) % 3;
+
+export const FACET_OUTCOMES: readonly FacetProof["outcome"][] = [
+  "independent",
+  "assisted",
+  "unknown",
+  "contradicted",
+];
+/**
+ * Shape checks shared by every facet mapping (historical, imported): a known
+ * facet of the scope, a valid outcome, a bounded rationale and a bounded,
+ * duplicate-free evidence list. Source-specific evidence rules stay with the
+ * caller.
+ */
+export function facetMappingShapeValid(
+  definition: ScopeDefinition | undefined,
+  m: {
+    facet: string;
+    outcome: string;
+    rationale?: string;
+    evidenceIds: unknown;
+  },
+): boolean {
+  return (
+    !!definition &&
+    definition.facets.some((f) => f.id === m.facet) &&
+    (FACET_OUTCOMES as readonly string[]).includes(m.outcome) &&
+    !!m.rationale?.trim() &&
+    m.rationale.length <= 1500 &&
+    Array.isArray(m.evidenceIds) &&
+    m.evidenceIds.length > 0 &&
+    m.evidenceIds.length <= 20 &&
+    new Set(m.evidenceIds).size === m.evidenceIds.length
+  );
+}
+/**
+ * Facet list rules shared by generated and imported scope definitions: 1 to 40
+ * facets, unique stable ids, non-empty descriptions. `importedText` adds the
+ * bounds an uploaded file must respect (length, no line breaks or fences).
+ */
+export function scopeFacetsValid(
+  facets: unknown,
+  importedText = false,
+): facets is ScopeDefinition["facets"] {
+  return (
+    Array.isArray(facets) &&
+    facets.length > 0 &&
+    facets.length <= 40 &&
+    new Set(facets.map((f) => f?.id)).size === facets.length &&
+    facets.every(
+      (f) =>
+        !!f &&
+        typeof f.id === "string" &&
+        /^[-\w.]{1,100}$/.test(f.id) &&
+        typeof f.description === "string" &&
+        !!f.description.trim() &&
+        (!importedText ||
+          (f.description.length <= 500 && !/[\r\n]|```/.test(f.description))),
+    )
+  );
+}

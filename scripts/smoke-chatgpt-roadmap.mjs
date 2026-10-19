@@ -1,34 +1,14 @@
 // One fictional live-client probe. Preparation never releases a request or code.
-import { randomUUID, createHash } from "node:crypto";
-import {
-  readFileSync,
-  writeFileSync,
-  renameSync,
-  lstatSync,
-  existsSync,
-} from "node:fs";
+import { randomUUID } from "node:crypto";
+import { readFileSync, existsSync } from "node:fs";
+import { createDiagnosticState } from "./lib/diagnostic-state.mjs";
 import { fileURLToPath } from "node:url";
+import { sha256 as hash } from "./lib/digest.mjs";
 const root = fileURLToPath(new URL("../", import.meta.url)),
   directory = root + ".local/chatgpt-handoff/",
   file = directory + "roadmap-smoke.json",
   planFile = root + "docs/evidence/chatgpt-roadmap-probe-plan.json";
-const hash = (s) => createHash("sha256").update(s).digest("hex");
-function ownerOnly(path) {
-  const s = lstatSync(path);
-  if (s.isSymbolicLink() || s.uid !== process.getuid?.() || s.mode & 0o077)
-    throw Error("Diagnostic state must be owner-only and not a symlink");
-}
-function save(state) {
-  ownerOnly(directory);
-  const temporary = file + "." + randomUUID() + ".tmp";
-  writeFileSync(temporary, JSON.stringify(state), { flag: "wx", mode: 0o600 });
-  renameSync(temporary, file);
-}
-function load() {
-  ownerOnly(directory);
-  ownerOnly(file);
-  return JSON.parse(readFileSync(file, "utf8"));
-}
+const { ownerOnly, save, load } = createDiagnosticState({ directory, file });
 async function call(path, body) {
   const r = await fetch("http://127.0.0.1:4318" + path, {
     ...(body === undefined

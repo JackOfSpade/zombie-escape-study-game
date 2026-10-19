@@ -3,6 +3,7 @@ import type {
   LearnerLedger,
   ScopeDefinition,
 } from "./learning-model";
+import type { Provider } from "./model";
 export interface ActiveAttemptSnapshot {
   attemptId: string;
   encounter: string;
@@ -20,7 +21,7 @@ export interface ImportedFacetMapping {
 }
 export interface RoadmapReconciliationPayload {
   /** Captured transport identity; omitted only by legacy native reviews. */
-  provider?: "study-mode" | "chatgpt-handoff";
+  provider?: Provider;
   requestId: string;
   sourceHash: string;
   localHash: string;
@@ -93,7 +94,7 @@ export interface RoadmapAdoptionReceipt {
     string,
     LearnerLedger["sessions"][number]["status"]
   >;
-  provenance: "study-mode" | "chatgpt-handoff";
+  provenance: Provider;
   proposal: RoadmapReconciliation;
   proposalHash: string;
 }

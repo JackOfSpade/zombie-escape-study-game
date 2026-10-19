@@ -79,4 +79,5 @@ export function chooseFurnitureYield(g: Game, a: Actor): Point | undefined {
       .sort((b, c) => b.cost - c.cost);
     if (ranked.length) return ranked[0].p;
   }
+  return undefined;
 }

@@ -7,7 +7,7 @@ import {
 } from "./environment-status";
 import { finalRequirements } from "./final-requirements";
 import { encounterKey } from "./learner";
-import type { Game, Roadmap } from "./model";
+import type { Provider, Game, Roadmap } from "./model";
 export interface EnvironmentReviewJob {
   id: string;
   observationId: string;
@@ -42,7 +42,7 @@ const running = new WeakMap<
   object,
   {
     observationId: string;
-    provider: "study-mode" | "chatgpt-handoff";
+    provider: Provider;
     promise: Promise<void>;
   }
 >();
@@ -53,7 +53,7 @@ export function reviewEnvironment(
   observationId: string,
   request: (p: EnvironmentReviewPayload) => Promise<unknown>,
   retry = false,
-  provider: "study-mode" | "chatgpt-handoff" = "study-mode",
+  provider: Provider = "study-mode",
 ): Promise<void> | undefined {
   const study = g.study,
     l = study.learner;

@@ -1,11 +1,11 @@
 import { escapeHtml as escape } from "./html";
-import type { Game, Roadmap } from "./model";
+import type { Provider, Game, Roadmap } from "./model";
 import { download } from "./persistence";
 import { adoptReconciledRoadmap } from "./roadmap-adoption";
 import type { RoadmapReconciliation } from "./roadmap-adoption-types";
 import { presentRoadmapReview } from "./roadmap-exposure";
 interface Options {
-  provider?: "study-mode" | "chatgpt-handoff";
+  provider?: Provider;
   getGame: () => Game;
   r: Roadmap;
   persist: () => Promise<unknown>;

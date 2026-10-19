@@ -1250,6 +1250,7 @@ export async function prepareRoadmapExport(
           c[1] += "; INTERRUPTED_AT_LAST_SAVE; no invented closing time";
           return c;
         }
+        return undefined;
       });
       const sessions = l.sessions.filter((session) =>
         attempts.some((a) => a.session === session.id),
@@ -1457,6 +1458,7 @@ export async function prepareRoadmapExport(
         c[1] += "; INTERRUPTED_AT_LAST_SAVE; no invented closing time";
         return c;
       }
+      return undefined;
     });
     out = upsert(
       out,

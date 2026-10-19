@@ -17,8 +17,8 @@ import type {
   LearnerLedger,
   ScopeDefinition,
 } from "./learning-model";
-import { learningProgress, scopeKey } from "./learning-model";
-import type { Game, Roadmap, Track } from "./model";
+import { learningProgress, scopeFacetsValid, scopeKey } from "./learning-model";
+import type { Provider, Game, Roadmap, Track } from "./model";
 import {
   baselineCheckpointValid,
   observationInvalidated,
@@ -62,7 +62,7 @@ const running = new WeakMap<
   object,
   {
     candidate: string;
-    provider: "study-mode" | "chatgpt-handoff";
+    provider: Provider;
     promise: Promise<void>;
   }
 >();
@@ -97,18 +97,7 @@ function validDefinition(r: Roadmap, l: LearnerLedger, d: ScopeDefinition) {
     d.depth < 1 ||
     d.depth > o.target ||
     (o.kind !== "checkpoint" && d.depth !== 4) ||
-    !Array.isArray(d.facets) ||
-    !d.facets.length ||
-    d.facets.length > 40 ||
-    new Set(d.facets.map((f) => f.id)).size !== d.facets.length ||
-    d.facets.some(
-      (f) =>
-        !/^[-\w.]{1,100}$/.test(f.id) ||
-        typeof f.description !== "string" ||
-        !f.description.trim() ||
-        f.description.length > 500 ||
-        /[\r\n]|```/.test(f.description),
-    )
+    !scopeFacetsValid(d.facets, true)
   )
     throw Error("Invalid imported semantic scope");
   if (l.scopes[d.id] && JSON.stringify(l.scopes[d.id]) !== JSON.stringify(d))
@@ -938,7 +927,7 @@ export function reconcileRoadmap(
   candidate: string,
   request: (p: RoadmapReconciliationPayload) => Promise<unknown>,
   retryId?: string,
-  provider: "study-mode" | "chatgpt-handoff" = "study-mode",
+  provider: Provider = "study-mode",
 ): Promise<void> | undefined {
   const study = g.study,
     l = study.learner;

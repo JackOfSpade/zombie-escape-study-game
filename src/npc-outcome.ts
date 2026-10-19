@@ -1,5 +1,6 @@
 import { eligible } from "./curriculum";
 import {
+  type Provider,
   type Contract,
   type Encounter,
   type Game,
@@ -31,7 +32,7 @@ export interface OutcomeCandidate {
   execution: "not-run";
 }
 export interface OutcomePayload {
-  provider?: "study-mode" | "chatgpt-handoff";
+  provider?: Provider;
   requestId: string;
   runId: string;
   encounterId: string;
@@ -64,7 +65,7 @@ export interface OutcomeInspection {
   presented?: number;
 }
 interface Adapter {
-  provider?: "study-mode" | "chatgpt-handoff";
+  provider?: Provider;
   request(
     operation: "materialize-outcome" | "complete",
     payload: unknown,

@@ -1,7 +1,8 @@
 // Diagnostic orchestration only: answers must come from the real ChatGPT client.
 // Run start only after approval for these four packets and code transmission.
 import { randomUUID, createHash } from "node:crypto";
-import { readFileSync, writeFileSync, renameSync, lstatSync } from "node:fs";
+import { readFileSync } from "node:fs";
+import { createDiagnosticState } from "./lib/diagnostic-state.mjs";
 import { fileURLToPath } from "node:url";
 import { validateGroupReply } from "../src/group-grounding.ts";
 const root = fileURLToPath(new URL("../", import.meta.url));
@@ -12,26 +13,7 @@ const headers = {
   Origin: "http://127.0.0.1:5173",
   "Content-Type": "application/json",
 };
-function ownerOnly(path) {
-  const entry = lstatSync(path);
-  if (
-    entry.isSymbolicLink() ||
-    entry.uid !== process.getuid?.() ||
-    entry.mode & 0o077
-  )
-    throw Error("Diagnostic state must be owner-only and not a symlink");
-}
-function save(state) {
-  ownerOnly(directory);
-  const temporary = file + "." + randomUUID() + ".tmp";
-  writeFileSync(temporary, JSON.stringify(state), { flag: "wx", mode: 0o600 });
-  renameSync(temporary, file);
-}
-function load() {
-  ownerOnly(directory);
-  ownerOnly(file);
-  return JSON.parse(readFileSync(file, "utf8"));
-}
+const { save, load } = createDiagnosticState({ directory, file });
 async function call(path, body) {
   const reply = await fetch("http://127.0.0.1:4318" + path, {
     ...(body === undefined

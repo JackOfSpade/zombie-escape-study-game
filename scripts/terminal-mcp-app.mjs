@@ -1,23 +1,24 @@
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import {
+  boundedText,
+  checkToolArguments,
+  grantOwner,
+  idSchema as id,
+  MCP_APP_MIME,
+  schema,
+  uiResource,
+  withHandoffAuth,
+} from "./lib/mcp-app.mjs";
+import {
+  PROBE_REPLY_ERROR,
   probeReplyFields,
   probeReplyProperties,
   validProbeReply,
-} from "./terminal-relay-app.mjs";
-
+} from "./lib/probe-reply.mjs";
 export const TERMINAL_APP_URI = "ui://zombie-study/terminal-demo-v1.html";
-const mimeType = "text/html;profile=mcp-app";
-const oauth = [{ type: "oauth2", scopes: ["handoff"] }];
-const schema = (properties, required = Object.keys(properties)) => ({
-  type: "object",
-  properties,
-  required,
-  additionalProperties: false,
-});
-const id = { type: "string", minLength: 1, maxLength: 100 };
 export const terminalAppTools = () =>
-  [
+  withHandoffAuth([
     {
       name: "open_study_terminal_demo",
       title: "Open the study terminal demo",
@@ -82,11 +83,7 @@ export const terminalAppTools = () =>
         openWorldHint: false,
       },
     },
-  ].map((tool) => ({
-    ...tool,
-    securitySchemes: oauth,
-    _meta: { ...tool._meta, securitySchemes: oauth },
-  }));
+  ]);
 
 export function createTerminalMcpApp({
   now = Date.now,
@@ -112,14 +109,9 @@ export function createTerminalMcpApp({
       { id: "invariant-boundary", description: question.rubric[2] },
     ],
   };
-  const owner = (grant) => {
-    if (typeof grant?.linkId !== "string" || !grant.linkId)
-      throw Error("Authenticated game connection required");
-    return grant.linkId;
-  };
   const get = (grant, demoId) => {
     const session = sessions.get(demoId);
-    if (!session || session.owner !== owner(grant))
+    if (!session || session.owner !== grantOwner(grant))
       throw Error("Demo session unavailable; reopen the terminal demo");
     session.updated = now();
     return session;
@@ -143,51 +135,31 @@ export function createTerminalMcpApp({
     content: [{ type: "text", text: JSON.stringify(snapshot(s)) }],
     structuredContent: snapshot(s),
   });
-  const text = (value) =>
-    typeof value === "string" &&
-    value.trim().length > 0 &&
-    value.length <= 8000;
   return {
     owns: (name) => terminalAppTools().some((t) => t.name === name),
     resources: () => ({
       resources: [
-        { uri: TERMINAL_APP_URI, name: "Study terminal demo", mimeType },
+        {
+          uri: TERMINAL_APP_URI,
+          name: "Study terminal demo",
+          mimeType: MCP_APP_MIME,
+        },
       ],
     }),
     resource(uri) {
       if (uri !== TERMINAL_APP_URI) throw Error("Unknown UI resource");
-      return {
-        contents: [
-          {
-            uri,
-            mimeType,
-            text: readFileSync(
-              new URL("../public/terminal-mcp-app.html", import.meta.url),
-              "utf8",
-            ),
-            _meta: {
-              ui: {
-                prefersBorder: true,
-                csp: { connectDomains: [], resourceDomains: [] },
-              },
-              "openai/widgetDescription":
-                "Synthetic study terminal: Send requests a new turn in the current regular ChatGPT conversation. No separate AI API or polling worker.",
-              "openai/ui": { availableDisplayModes: ["inline", "fullscreen"] },
-            },
-          },
-        ],
-      };
+      return uiResource(
+        uri,
+        readFileSync(
+          new URL("../public/terminal-mcp-app.html", import.meta.url),
+          "utf8",
+        ),
+        "Synthetic study terminal: Send requests a new turn in the current regular ChatGPT conversation. No separate AI API or polling worker.",
+      );
     },
     call(name, args, grant) {
-      const account = owner(grant);
-      if (!args || typeof args !== "object" || Array.isArray(args))
-        throw Error("Expected tool arguments");
-      const descriptor = terminalAppTools().find((t) => t.name === name);
-      if (
-        !descriptor ||
-        Object.keys(args).some((k) => !(k in descriptor.inputSchema.properties))
-      )
-        throw Error("Unknown terminal tool or argument");
+      const account = grantOwner(grant);
+      checkToolArguments(terminalAppTools(), name, args);
       if (name === "open_study_terminal_demo") {
         let s = [...sessions.values()].find((s) => s.owner === account);
         if (!s) {
@@ -216,7 +188,7 @@ export function createTerminalMcpApp({
       if (name === "read_study_terminal_demo") return result(s);
       if (name === "stage_study_terminal_turn") {
         if (
-          !text(args.answer) ||
+          !boundedText(args.answer) ||
           !Number.isSafeInteger(args.revision) ||
           args.revision !== s.revision
         )
@@ -239,14 +211,12 @@ export function createTerminalMcpApp({
       }
       if (name === "reply_study_terminal_turn") {
         if (
-          !text(args.text) ||
+          !boundedText(args.text) ||
           typeof args.complete !== "boolean" ||
           typeof args.turnId !== "string" ||
           !validProbeReply(args)
         )
-          throw Error(
-            "Expected bounded text, complete:boolean and, optionally, outcome solved|gap and knowledge {facets:[{id,status}],signal?} for this turn",
-          );
+          throw Error(PROBE_REPLY_ERROR);
         const reply = probeReplyFields(args);
         const digest = JSON.stringify(reply);
         const previous = s.receipts.get(args.turnId);

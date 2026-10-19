@@ -1,9 +1,9 @@
 import { parseRoadmapDocument } from "../src/roadmap-document.ts";
 import { readFileSync, writeFileSync } from "node:fs";
-import { createHash } from "node:crypto";
+
+import { sha256 as hash } from "./lib/digest.mjs";
 const raw = readFileSync("interview_prep_roadmap.md", "utf8"),
   identity = JSON.parse(readFileSync("SOURCE_INTEGRITY.json", "utf8"));
-const hash = (s) => createHash("sha256").update(s).digest("hex");
 if (hash(raw) !== identity.whole_file_sha256)
   throw Error("Source changed: explicit import migration required.");
 for (const [block, key] of [

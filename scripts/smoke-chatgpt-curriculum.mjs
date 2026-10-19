@@ -1,18 +1,13 @@
 // Isolated real-scope quality spot check. Explicit approval is required before start.
-import { createHash, randomUUID } from "node:crypto";
-import {
-  existsSync,
-  lstatSync,
-  readFileSync,
-  writeFileSync,
-  renameSync,
-} from "node:fs";
+import { randomUUID } from "node:crypto";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { createDiagnosticState } from "./lib/diagnostic-state.mjs";
+import { sha256 as hash } from "./lib/digest.mjs";
 const root = fileURLToPath(new URL("../", import.meta.url)),
   directory = root + ".local/chatgpt-handoff/",
   stateFile = directory + "curriculum-quality-smoke.json",
   planFile = root + "docs/evidence/chatgpt-curriculum-quality-plan.json";
-const hash = (s) => createHash("sha256").update(s).digest("hex");
 const equal = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 export function evaluateCurriculumProbe(task, answer) {
   try {
@@ -117,23 +112,10 @@ export function handoffReceipt(value) {
     throw Error("Missing exact handoff receipt in queue response");
   return receipt;
 }
-function ownerOnly(path) {
-  const s = lstatSync(path.replace(/\/+$/, ""));
-  if (s.isSymbolicLink() || s.uid !== process.getuid?.() || s.mode & 0o077)
-    throw Error("Diagnostic state must be owner-only and not a symlink");
-}
-function load() {
-  ownerOnly(directory);
-  ownerOnly(stateFile);
-  return JSON.parse(readFileSync(stateFile, "utf8"));
-}
-function save(state) {
-  ownerOnly(directory);
-  if (existsSync(stateFile)) ownerOnly(stateFile);
-  const temporary = stateFile + "." + randomUUID() + ".tmp";
-  writeFileSync(temporary, JSON.stringify(state), { mode: 0o600, flag: "wx" });
-  renameSync(temporary, stateFile);
-}
+const { ownerOnly, load, save } = createDiagnosticState({
+  directory,
+  file: stateFile,
+});
 async function call(path, body) {
   const response = await fetch("http://127.0.0.1:4318" + path, {
     ...(body === undefined

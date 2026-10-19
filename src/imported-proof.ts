@@ -1,4 +1,5 @@
 import type { FacetProof, LearnerLedger } from "./learning-model";
+import { facetMappingShapeValid } from "./learning-model";
 import type { Roadmap } from "./model";
 import { observationInvalidated } from "./observation-validity";
 import type {
@@ -67,16 +68,7 @@ export function importedMappingValid(
     !["study-mode", "chatgpt-handoff"].includes(v.provenance) ||
     v.id !== v.proposal.requestId ||
     !d ||
-    !d.facets.some((f) => f.id === m.facet) ||
-    !["independent", "assisted", "unknown", "contradicted"].includes(
-      m.outcome,
-    ) ||
-    !m.rationale?.trim() ||
-    m.rationale.length > 1500 ||
-    !Array.isArray(m.evidenceIds) ||
-    !m.evidenceIds.length ||
-    m.evidenceIds.length > 20 ||
-    new Set(m.evidenceIds).size !== m.evidenceIds.length
+    !facetMappingShapeValid(d, m)
   )
     throw Error("Invalid imported facet mapping");
   const track = d.objectiveId.split(":")[0],

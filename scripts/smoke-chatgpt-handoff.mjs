@@ -1,15 +1,9 @@
 // Local orchestration only. ChatGPT must claim/answer the synthetic request
 // through the actual OAuth connector; this script never supplies its answer.
 import { randomUUID } from "node:crypto";
-import {
-  mkdirSync,
-  lstatSync,
-  readFileSync,
-  writeFileSync,
-  renameSync,
-  existsSync,
-} from "node:fs";
+import { mkdirSync, writeFileSync, existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
+import { createDiagnosticState } from "./lib/diagnostic-state.mjs";
 const base = "http://127.0.0.1:4318";
 const directory = fileURLToPath(
   new URL("../.local/chatgpt-handoff/", import.meta.url),
@@ -33,25 +27,15 @@ async function call(path, body) {
 }
 const control = async (body) =>
   (await call("/api/handoff/control", body)).value;
-function privatePath(path) {
-  const entry = lstatSync(path);
-  if (
-    entry.isSymbolicLink() ||
-    entry.uid !== process.getuid?.() ||
-    entry.mode & 0o077
-  )
-    throw Error("Smoke state must be owner-only and not a symlink");
-}
-function save(state) {
-  const temporary = file + "." + randomUUID() + ".tmp";
-  writeFileSync(temporary, JSON.stringify(state), { mode: 0o600, flag: "wx" });
-  renameSync(temporary, file);
-}
-function load() {
-  privatePath(directory);
-  privatePath(file);
-  return JSON.parse(readFileSync(file, "utf8"));
-}
+const {
+  ownerOnly: privatePath,
+  save,
+  load,
+} = createDiagnosticState({
+  directory,
+  file,
+  label: "Smoke state",
+});
 async function main() {
   const action = process.argv[2] ?? "status";
   if (action === "status") {

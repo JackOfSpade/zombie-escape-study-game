@@ -10,111 +10,33 @@ import { readFileSync } from "node:fs";
  * /api/bridge/result polling, so retry, correction and audit paths are unchanged.
  */
 export const TERMINAL_RELAY_URI = "ui://zombie-study/terminal-relay-v1.html";
-const mimeType = "text/html;profile=mcp-app";
-const oauth = [{ type: "oauth2", scopes: ["handoff"] }];
-const schema = (properties, required = Object.keys(properties)) => ({
-  type: "object",
-  properties,
-  required,
-  additionalProperties: false,
-});
-const id = { type: "string", minLength: 1, maxLength: 100 };
-const hash = (value) => createHash("sha256").update(value).digest("hex");
-const object = (value) =>
-  value !== null && typeof value === "object" && !Array.isArray(value);
+import {
+  boundedText,
+  checkToolArguments,
+  MCP_APP_MIME,
+  grantOwner,
+  idSchema as id,
+  isObject as object,
+  schema,
+  sha256 as hash,
+  uiResource,
+  withHandoffAuth,
+} from "./lib/mcp-app.mjs";
+import {
+  PROBE_REPLY_ERROR,
+  probeReplyFields,
+  probeReplyProperties,
+  validProbeReply,
+} from "./lib/probe-reply.mjs";
+export {
+  probeReplyFields,
+  probeReplyProperties,
+  validProbeReply,
+} from "./lib/probe-reply.mjs";
 export const PROMPT_LIMIT = 40_000;
-const FINDING_STATUSES = ["demonstrated", "implied", "gap"];
-const FLUENCY = ["fluent", "partial", "guessing", "declared-gap"];
-/** Optional knowledge-probe reply fields shared by the live relay and the demo. */
-export const probeReplyProperties = () => ({
-  outcome: {
-    type: "string",
-    enum: ["solved", "gap"],
-    description:
-      "Only with complete:true. solved: the learner's own answers solve it. gap: the learner declared they do not know what remains and no lower-level facet is left to probe; the game records the gap and still grants its once-only key.",
-  },
-  knowledge: {
-    type: "object",
-    description:
-      "Facet-level judgment. Use ids from the turn's probe.facets, or declare a prerequisite part the question did not list with partOf and description. A demonstrated facet whose correct answer necessarily needed other facets marks those implied with impliedBy. signal says how the latest answer was given.",
-    properties: {
-      facets: {
-        type: "array",
-        maxItems: 64,
-        items: {
-          type: "object",
-          properties: {
-            id: { type: "string", minLength: 1, maxLength: 200 },
-            status: { type: "string", enum: FINDING_STATUSES },
-            impliedBy: { type: "string", minLength: 1, maxLength: 200 },
-            note: { type: "string", maxLength: 400 },
-            partOf: {
-              type: "string",
-              minLength: 1,
-              maxLength: 200,
-              description:
-                "Declares a prerequisite part the question did not list: the known facet id it is part of. Requires description.",
-            },
-            description: { type: "string", minLength: 1, maxLength: 200 },
-          },
-          required: ["id", "status"],
-          additionalProperties: false,
-        },
-      },
-      signal: {
-        type: "object",
-        properties: {
-          fluency: { type: "string", enum: FLUENCY },
-          note: { type: "string", maxLength: 400 },
-        },
-        required: ["fluency"],
-        additionalProperties: false,
-      },
-    },
-    additionalProperties: false,
-  },
-});
-/** Shape check matching the queue's terminal-dialogue validation. */
-export function validProbeReply(args) {
-  if (args.outcome !== undefined && !["solved", "gap"].includes(args.outcome))
-    return false;
-  if (args.knowledge === undefined) return true;
-  const k = args.knowledge;
-  if (!object(k)) return false;
-  if (
-    k.facets !== undefined &&
-    (!Array.isArray(k.facets) ||
-      k.facets.length > 64 ||
-      k.facets.some(
-        (f) =>
-          !object(f) ||
-          typeof f.id !== "string" ||
-          !FINDING_STATUSES.includes(f.status) ||
-          (f.impliedBy !== undefined && typeof f.impliedBy !== "string") ||
-          (f.note !== undefined && typeof f.note !== "string") ||
-          (f.partOf !== undefined && typeof f.partOf !== "string") ||
-          (f.description !== undefined && typeof f.description !== "string"),
-      ))
-  )
-    return false;
-  if (
-    k.signal !== undefined &&
-    (!object(k.signal) ||
-      !FLUENCY.includes(k.signal.fluency) ||
-      (k.signal.note !== undefined && typeof k.signal.note !== "string"))
-  )
-    return false;
-  return true;
-}
-export const probeReplyFields = (args) => ({
-  text: args.text,
-  complete: args.complete,
-  ...(args.outcome !== undefined ? { outcome: args.outcome } : {}),
-  ...(args.knowledge !== undefined ? { knowledge: args.knowledge } : {}),
-});
 const MESSAGE_LIMIT = 80;
 export const terminalRelayTools = () =>
-  [
+  withHandoffAuth([
     {
       name: "open_study_terminal",
       title: "Open the player's live study terminal",
@@ -190,11 +112,7 @@ export const terminalRelayTools = () =>
         openWorldHint: false,
       },
     },
-  ].map((tool) => ({
-    ...tool,
-    securitySchemes: oauth,
-    _meta: { ...tool._meta, securitySchemes: oauth },
-  }));
+  ]);
 
 const isTerminalDialogue = (job) =>
   job.operation === "tutor" && job.payload?.mode === "terminal-dialogue";
@@ -210,22 +128,13 @@ export function createTerminalRelayApp({
 } = {}) {
   if (!queue) throw Error("The terminal relay requires the handoff queue");
   const sessions = new Map();
-  const owner = (grant) => {
-    if (typeof grant?.linkId !== "string" || !grant.linkId)
-      throw Error("Authenticated game connection required");
-    return grant.linkId;
-  };
   const get = (grant, relayId) => {
     const session = sessions.get(relayId);
-    if (!session || session.owner !== owner(grant))
+    if (!session || session.owner !== grantOwner(grant))
       throw Error("Terminal relay unavailable; reopen the study terminal");
     session.updated = now();
     return session;
   };
-  const text = (value) =>
-    typeof value === "string" &&
-    value.trim().length > 0 &&
-    value.length <= 8000;
   const publicTurn = (turn) =>
     turn
       ? {
@@ -392,32 +301,23 @@ export function createTerminalRelayApp({
     owns: (name) => terminalRelayTools().some((t) => t.name === name),
     resources: () => ({
       resources: [
-        { uri: TERMINAL_RELAY_URI, name: "Live study terminal", mimeType },
+        {
+          uri: TERMINAL_RELAY_URI,
+          name: "Live study terminal",
+          mimeType: MCP_APP_MIME,
+        },
       ],
     }),
     resource(uri) {
       if (uri !== TERMINAL_RELAY_URI) throw Error("Unknown UI resource");
-      return {
-        contents: [
-          {
-            uri,
-            mimeType,
-            text: readFileSync(
-              new URL("../public/terminal-mcp-app.html", import.meta.url),
-              "utf8",
-            ),
-            _meta: {
-              ui: {
-                prefersBorder: true,
-                csp: { connectDomains: [], resourceDomains: [] },
-              },
-              "openai/widgetDescription":
-                "Live study terminal relay: waits for turns typed in the player's game terminal and starts a conversation turn for each. No separate AI API or polling worker.",
-              "openai/ui": { availableDisplayModes: ["inline", "fullscreen"] },
-            },
-          },
-        ],
-      };
+      return uiResource(
+        uri,
+        readFileSync(
+          new URL("../public/terminal-mcp-app.html", import.meta.url),
+          "utf8",
+        ),
+        "Live study terminal relay: waits for turns typed in the player's game terminal and starts a conversation turn for each. No separate AI API or polling worker.",
+      );
     },
     status: () => ({
       sessions: sessions.size,
@@ -440,14 +340,8 @@ export function createTerminalRelayApp({
       }
     },
     call(name, args, grant) {
-      const account = owner(grant);
-      if (!object(args)) throw Error("Expected tool arguments");
-      const descriptor = terminalRelayTools().find((t) => t.name === name);
-      if (
-        !descriptor ||
-        Object.keys(args).some((k) => !(k in descriptor.inputSchema.properties))
-      )
-        throw Error("Unknown terminal tool or argument");
+      const account = grantOwner(grant);
+      checkToolArguments(terminalRelayTools(), name, args);
       if (name === "open_study_terminal") {
         let s = [...sessions.values()].find((s) => s.owner === account);
         if (!s) {
@@ -502,14 +396,12 @@ export function createTerminalRelayApp({
       }
       if (name === "reply_study_terminal_job") {
         if (
-          !text(args.text) ||
+          !boundedText(args.text) ||
           typeof args.complete !== "boolean" ||
           typeof args.turnId !== "string" ||
           !validProbeReply(args)
         )
-          throw Error(
-            "Expected bounded text, complete:boolean and, optionally, outcome solved|gap and knowledge {facets:[{id,status}],signal?} for this turn",
-          );
+          throw Error(PROBE_REPLY_ERROR);
         const reply = probeReplyFields(args);
         const digest = JSON.stringify(reply);
         const previous = s.receipts.get(args.turnId);
