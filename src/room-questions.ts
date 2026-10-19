@@ -1,5 +1,6 @@
 import type { Encounter, Game, Problem, Roadmap } from "./model";
 import { devProblem } from "./practice-problem";
+import { recordSpawn, spawnContract } from "./topic-spawn";
 
 export function roomEncounters(g: Game, e: Encounter) {
   return e.questionRoom
@@ -36,7 +37,11 @@ export function preparePracticeRooms(g: Game, roadmap: Roadmap) {
           (hash, char) => Math.imul(hash ^ char.charCodeAt(0), 16777619),
           g.seed,
         ) >>> 0;
-      assignRoomProblem(g, e, devProblem({ ...g, rng }, roadmap));
+      // Rooms rotate topics: the formal visit stays reachable while other
+      // rooms practise cooled topics, gaps first, for variety and recall.
+      const contract = spawnContract(roadmap, g.study);
+      assignRoomProblem(g, e, devProblem({ ...g, rng }, roadmap, contract));
+      recordSpawn(g.study, contract, e.questionRoom, g.time);
     } catch {
       // A curriculum gate can have no eligible next task. Do not invent one.
       return;

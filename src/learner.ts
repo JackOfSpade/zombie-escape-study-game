@@ -442,6 +442,58 @@ export function eligibleLearning(
     "Both tracks are at unresolved gates; do not generate filler or harder work.",
   );
 }
+/**
+ * A practice contract for a variety terminal on `topic` at the track's current
+ * tier. It mirrors the formal contract's facet bookkeeping but is marked
+ * practice: no attempt, visit or ledger evidence is ever created for it.
+ */
+export function practiceContract(
+  r: Roadmap,
+  l: LearnerLedger,
+  track: Track,
+  topicId: string,
+): Contract | undefined {
+  const s = l.tracks[track];
+  if (s.tier === 4) return undefined;
+  const o = r.tracks[track].objectives.find(
+    (o) =>
+      topic(o.id) === topicId &&
+      o.target >= s.tier &&
+      l.cells[o.id]?.states[s.tier - 1] !== "P",
+  );
+  if (!o) return undefined;
+  const depth = s.tier,
+    definition = l.scopes[scopeKey(o.id, depth)],
+    progress = l.cells[o.id];
+  const preservedFacets =
+    definition?.facets
+      .filter(
+        (f) => progress?.facets[`D${depth}:${f.id}`]?.outcome === "independent",
+      )
+      .map((f) => f.id) ?? [];
+  return {
+    kind: "checkpoint",
+    id: `practice-live-${l.version}-${scopeKey(o.id, depth)}`,
+    track,
+    objectiveIds: [o.id],
+    scopes: [o.scope],
+    depth,
+    phase: s.phase,
+    review: false,
+    ledgerVersion: l.version,
+    priorEvidence: [
+      o.refs,
+      ...Object.values(progress?.facets ?? {}).flatMap((p) => p.evidenceIds),
+    ],
+    preservedFacets,
+    missingFacets: definition?.facets
+      .filter((f) => !preservedFacets.includes(f.id))
+      .map((f) => f.id),
+    historicalScope: historicalScope(r, track, o.id, depth),
+    practice: true,
+    scheduleNote: `Variety practice on ${topicId}; not the scheduled visit and never ledger evidence.`,
+  };
+}
 function attemptRoot(l: LearnerLedger, a: LearningAttempt) {
   let current = a;
   const seen = new Set<string>();

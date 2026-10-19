@@ -56,6 +56,8 @@ export interface Contract {
   ledgerVersion: number;
   priorEvidence: string[];
   scheduleNote?: string;
+  /** A variety terminal: probes and records knowledge, never the formal visit. */
+  practice?: boolean;
   missingFacets?: string[];
   preservedFacets?: string[];
   historicalScope?: {
@@ -85,6 +87,8 @@ export interface StudyState {
   knowledgeGaps?: import("./knowledge-probe").KnowledgeGapRecord[];
   /** Facets established at terminals (answered or implied); carried across runs, never mastery. */
   knowledgeEstablished?: import("./knowledge-probe").KnowledgeEstablishedRecord[];
+  /** Topic spawn variety: disabled topics and recent spawns; carried across runs. */
+  topicSpawn?: import("./topic-spawn").TopicSpawn;
   profile?: "development" | "live";
   learner?: LearnerLedger;
   version: number;

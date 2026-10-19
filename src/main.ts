@@ -1,6 +1,14 @@
 import { relayListening, relayServes } from "./bridge-client";
 import { terminalChannel, submissionView } from "./terminal-view";
 import { encounterGaps, probeSummary } from "./knowledge-probe";
+import {
+  setTopicEnabled,
+  SPAWN_COOLDOWN,
+  spawnCandidates,
+  spawnState,
+  topicEnabled,
+  topicOf,
+} from "./topic-spawn";
 import { FramePerformance } from "./frame-performance";
 import gameShell from "./game-shell.html?raw";
 import { escapeHtml as escape } from "./html";
@@ -498,6 +506,9 @@ function renderTerminal(force = false) {
         : !e.problem && game.study.profile === "live"
           ? "Live study request · Awaiting a validated problem"
           : "Development practice · AI acceptance required · No academic credit";
+  if (e.problem?.contract.practice)
+    $("#terminal-provenance").textContent +=
+      " · Variety practice on another topic of this tier: knowledge is probed and recorded, but this is not the scheduled visit";
   if (
     game.study.learner?.attempts.some(
       (a) =>
@@ -927,6 +938,28 @@ function readinessHtml(track: "PY" | "PE") {
     `${v.passed}/${v.total}`;
   return `<section data-readiness="${track}"><h3>${track} readiness</h3><p>Checkpoint targets ${summary(report.checkpoints)} · topic transfers ${summary(report.transfers)} · selected integrations ${summary(report.integrations)}.</p><p>Curriculum targets: ${report.curriculumTargetsMet ? "met" : "not yet met"}. Interview practice: ${report.interviewPracticeVerified ? "verified" : "not yet verified"}. Delayed retention: ${report.retention.verified}/${report.retention.tracked} tracked scopes verified.</p>${report.environment.total ? `<p>Observed environment skills ${summary(report.environment)}. ENV observations are separate and never block a tier gate.</p>` : ""}<details><summary>Transfer, integration and environment records</summary><p>These records preserve the roadmap's selected scope. Only validated independent human evidence can complete a transfer or integration. Development play, shared success and code execution alone add no credit.</p>${report.requirements.map((d) => `<p><strong>${escape(d.id)}</strong> · ${d.selected ? escape(d.status) : "not selected"}<br>${escape(d.remaining)}<br><small>${escape(d.sourceRefs)}</small></p>`).join("")}</details></section>`;
 }
+function topicSpawnHtml(g: Game) {
+  const state = spawnState(g.study);
+  const sections = (["PY", "PE"] as const).map((track) => {
+    const candidates = spawnCandidates(roadmap, g.study, track);
+    const formal = (() => {
+      try {
+        const c = eligible(roadmap, g.study);
+        return c.track === track ? topicOf(c.objectiveIds[0]) : undefined;
+      } catch {
+        return undefined;
+      }
+    })();
+    return `<p><strong>${track}</strong>${candidates
+      .map(
+        (topic) =>
+          `<label class="topic-toggle"><input type="checkbox" data-topic-track="${track}" data-topic="${escape(topic)}" ${topicEnabled(g.study, track, topic) ? "checked" : ""} ${topic === formal ? "disabled" : ""}> ${escape(topic)} · ${escape(roadmap.tracks[track].topics[topic] ?? "")}${topic === formal ? " (scheduled visit, always spawns)" : ""}</label>`,
+      )
+      .join("")}</p>`;
+  });
+  const recent = state.recent.slice(-8).reverse();
+  return `<section data-topic-spawn><h3>Topic variety</h3><p>Terminals follow the curriculum but rotate across this tier's topics: a topic is not spawned again while it is among the last ${SPAWN_COOLDOWN} spawns on its track, topics with open gaps come back first once cooled, and the scheduled visit always stays reachable. Untick a topic to stop it spawning as practice.</p>${sections.join("")}<p class="muted">Recent spawns: ${recent.length ? recent.map((r) => escape(`${r.track}:${r.topic}`)).join(", ") : "none yet"}.</p></section>`;
+}
 function knowledgeGapsHtml(g: Game) {
   const gaps = g.study.knowledgeGaps ?? [];
   const known = g.study.knowledgeEstablished ?? [];
@@ -960,8 +993,20 @@ $("#curriculum-button").onclick = () => {
   $("#inspector-content").insertAdjacentHTML("beforeend", readiness);
   $("#inspector-content").insertAdjacentHTML(
     "beforeend",
-    knowledgeGapsHtml(game),
+    knowledgeGapsHtml(game) + topicSpawnHtml(game),
   );
+  for (const box of $("#inspector-content").querySelectorAll<HTMLInputElement>(
+    "[data-topic]",
+  ))
+    box.onchange = () => {
+      setTopicEnabled(
+        game.study,
+        box.dataset.topicTrack as "PY" | "PE",
+        box.dataset.topic!,
+        box.checked,
+      );
+      persist();
+    };
   renderEnvironmentObservations(
     $("#inspector-content"),
     game,

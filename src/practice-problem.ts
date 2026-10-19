@@ -1,6 +1,12 @@
 import { eligible } from "./curriculum";
 import { openGaps } from "./knowledge-probe";
-import { type Game, type Roadmap, type Problem, rand } from "./model";
+import {
+  type Contract,
+  type Game,
+  type Roadmap,
+  type Problem,
+  rand,
+} from "./model";
 /** Local practice also targets gaps the learner declared on this track. */
 function gapLine(g: Game, track: string) {
   const gaps = openGaps(g)
@@ -9,9 +15,12 @@ function gapLine(g: Game, track: string) {
     .map((r) => r.facet.description);
   return gaps.length ? `\n\nRecorded gaps to work on: ${gaps.join("; ")}.` : "";
 }
-export function devProblem(g: Game, r: Roadmap): Problem {
-  const contract = eligible(r, g.study),
-    n = 3 + Math.floor(rand(g) * 6),
+export function devProblem(
+  g: Game,
+  r: Roadmap,
+  contract: Contract = eligible(r, g.study),
+): Problem {
+  const n = 3 + Math.floor(rand(g) * 6),
     values = Array.from({ length: n }, () => Math.floor(rand(g) * 8)),
     threshold = 2 + Math.floor(rand(g) * 4);
   if (contract.track === "PY" && contract.objectiveIds[0] === "PY:T05.2") {

@@ -98,6 +98,8 @@ export function eligible(
   };
 }
 export function beginVisit(r: Roadmap, s: StudyState, e: Encounter) {
+  // A variety practice terminal is never the scheduled visit.
+  if (e.problem?.contract.practice) return;
   if (s.profile === "live") {
     s.learner ??= initialLearner(r);
     beginLearningAttempt(r, s.learner, e);

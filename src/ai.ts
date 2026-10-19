@@ -28,6 +28,7 @@ import {
   syncLearningView,
 } from "./curriculum";
 import { complete } from "./engine";
+import { recordSpawn, spawnContract } from "./topic-spawn";
 import { reviewEnvironment } from "./environment-review";
 import { executionEvidence, runWorkspace } from "./execution";
 import { groupSnapshot, validateGroupReply } from "./group-grounding";
@@ -40,6 +41,7 @@ import {
 } from "./learner";
 import {
   type Assessment,
+  type Contract,
   type Encounter,
   type Game,
   type Message,
@@ -265,8 +267,12 @@ async function ensureIndividualProblem(g: Game, e: Encounter, r: Roadmap) {
   e.generation = generation;
   try {
     let p: Problem;
+    // The spawn policy keeps the formal visit reachable and rotates other
+    // terminals across cooled topics; a saved generation keeps its contract.
+    const contract =
+      (e.pendingGeneration?.payload?.contract as Contract | undefined) ??
+      spawnContract(r, study);
     if (native) {
-      const contract = eligible(r, study);
       const payload = e.pendingGeneration?.payload ?? {
         requestId: generation,
         encounterId: e.id,
@@ -296,14 +302,14 @@ async function ensureIndividualProblem(g: Game, e: Encounter, r: Roadmap) {
       p = await request("generate", payload);
       p.provenance =
         provider === "chatgpt-handoff" ? "chatgpt-handoff" : "study-mode";
-    } else p = devProblem(g, r);
+    } else p = devProblem(g, r, contract);
     if (
       g.study !== study ||
       study.profile !== profile ||
       !generationCurrent(g, e, generation)
     )
       return;
-    validateProblem(p, e, r, g);
+    validateProblem(p, e, r, g, contract);
     if (native) {
       g.study.learner ??= initialLearner(r);
       registerScopes(r, g.study.learner, { ...e, problem: p });
@@ -313,6 +319,7 @@ async function ensureIndividualProblem(g: Game, e: Encounter, r: Roadmap) {
     delete e.pendingGeneration;
     if (e.revision === 0 && !e.workspace) e.workspace = p.starter;
     e.state = "in-progress";
+    recordSpawn(g.study, p.contract, e.questionRoom ?? e.id, g.time);
   } catch (err) {
     if (
       g.study === study &&
@@ -1437,13 +1444,15 @@ function applyCompletion(
     e.revision = s.revision;
     finishVisit(r, g.study, e);
     if (
-      author === "human" ||
-      e.history.some(
-        (h) =>
-          h.author === "human" &&
-          ["edit", "reasoning", "test", "defense"].includes(h.kind) &&
-          h.seq <= s.seq,
-      )
+      // Variety practice records probe knowledge but is never assessed as a visit.
+      !e.problem?.contract.practice &&
+      (author === "human" ||
+        e.history.some(
+          (h) =>
+            h.author === "human" &&
+            ["edit", "reasoning", "test", "defense"].includes(h.kind) &&
+            h.seq <= s.seq,
+        ))
     )
       void assess(g, e, r, s.seq);
   } else {
@@ -1493,6 +1502,7 @@ export async function assess(
     0,
     ...e.history.filter((h) => h.seq <= cutoff).map((h) => h.seq),
   );
+  if (e.problem?.contract.practice) return;
   const id = `assessment-${encounterKey(e)}-${cutoff}`;
   const prior = g.study.assessments.find((a) => a.id === id);
   if (

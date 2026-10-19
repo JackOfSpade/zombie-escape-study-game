@@ -114,8 +114,9 @@ export function canRunWorkspace(g: Game, e: Encounter, r: Roadmap) {
     g.study.profile !== "live"
   )
     return false;
-  const c = eligible(r, g.study),
-    issued = e.problem.contract;
+  const issued = e.problem.contract;
+  if (issued.practice) return issued.depth >= 2;
+  const c = eligible(r, g.study);
   return (
     issued.depth >= 2 &&
     issued.depth === c.depth &&
