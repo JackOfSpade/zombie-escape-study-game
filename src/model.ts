@@ -272,7 +272,17 @@ export type FurnitureKind =
   | "plant"
   | "printer"
   | "whiteboard"
-  | "partition";
+  | "partition"
+  | "coffeeMaker"
+  | "microwave"
+  | "vending"
+  | "cafeTable"
+  | "coffeeTable"
+  | "reception"
+  | "screen"
+  | "box"
+  | "drawers"
+  | "armchair";
 export interface Furniture extends Point {
   field?: {
     publicEntry?: boolean;
@@ -312,7 +322,12 @@ export interface Station extends Point {
   id: string;
   encounter: string;
 }
+/** Office function of a furnished room; it decides which objects it may hold. */
+export type OfficeRoomType =
+  "break" | "cubicles" | "meeting" | "storage" | "reception" | "manager";
 export interface Floor {
+  /** Room functions chosen when the floor was furnished (generation only). */
+  office?: { zone: string; type: OfficeRoomType }[];
   blood?: (string | undefined)[];
   layout?: "gallery" | "archive" | "switchback" | "pursuit";
   rooms?: {
@@ -585,6 +600,19 @@ export const FURNITURE: Record<
   printer: { w: 1.1, h: 0.8, hp: 450, speed: 0.75, resist: 120 },
   whiteboard: { w: 2, h: 0.35, hp: 220, speed: 1.1, resist: 45 },
   partition: { w: 2, h: 0.25, hp: 420, speed: 0.7, resist: 110 },
+  // Break room counter units, vending machine and cafe furniture.
+  coffeeMaker: { w: 0.9, h: 0.65, hp: 500, speed: 0.7, resist: 140 },
+  microwave: { w: 0.9, h: 0.65, hp: 500, speed: 0.7, resist: 140 },
+  vending: { w: 1, h: 0.85, hp: 2400, speed: 0.3, resist: 420 },
+  cafeTable: { w: 0.9, h: 0.9, hp: 200, speed: 1.2, resist: 35 },
+  // Reception and lounge seating.
+  coffeeTable: { w: 1.2, h: 0.6, hp: 220, speed: 1.1, resist: 35 },
+  reception: { w: 2.4, h: 0.9, hp: 1500, speed: 0.4, resist: 300 },
+  armchair: { w: 0.9, h: 0.85, hp: 300, speed: 0.9, resist: 70 },
+  // Meeting wall screen on a stand, archive boxes and desk pedestals.
+  screen: { w: 1.6, h: 0.3, hp: 120, speed: 1, resist: 40 },
+  box: { w: 0.55, h: 0.45, hp: 40, speed: 1.6, resist: 10 },
+  drawers: { w: 0.45, h: 0.55, hp: 300, speed: 1, resist: 60 },
 };
 export function rand(g: { rng: number }) {
   let t = (g.rng += 0x6d2b79f5);

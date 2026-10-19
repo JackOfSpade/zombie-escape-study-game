@@ -83,37 +83,43 @@ test("office art: every furniture kind, textured floors and bounded render cost"
   expect(result.median).toBeLessThan(12);
 });
 
-test("office art: a generated floor is furnished as an office", async ({
+test("office art: a fresh floor is furnished as an office with typed rooms", async ({
   page,
 }) => {
   await page.goto("/lab.html");
   const result = await page.evaluate(async () => {
     const { render } = await import("/src/render.ts" as string),
-      { createGame } = await import("/src/world.ts" as string);
+      { createPlayableGame } = await import("/src/world.ts" as string);
     const roadmap = await (await fetch("/curriculum.json")).json();
-    const g = createGame(7, roadmap);
+    const g = createPlayableGame(42, roadmap);
     g.status = "playing";
     const f = g.floors[1];
     f.dark = 0;
-    Object.assign(g.survivors[0], { floor: 1, x: 33.5, y: 9.5 });
+    // The break room on this seed and floor sits between y 11 and 14.
+    Object.assign(g.survivors[0], { floor: 1, x: 21, y: 12.5 });
     const c = document.createElement("canvas");
     c.id = "art";
-    c.style.width = "1100px";
-    c.style.height = "850px";
+    c.style.width = "1300px";
+    c.style.height = "560px";
     document.body.replaceChildren(c);
     // Widen sight for the screenshot only; gameplay sight is unchanged.
     const { VISION } = await import("/src/visibility.ts" as string);
     const lit = VISION.lit;
-    VISION.lit = 30;
+    VISION.lit = 40;
     render(c, g);
     VISION.lit = lit;
-    return f.furniture
-      .filter((o: { id: string }) => o.id.includes("-office"))
-      .map((o: { kind: string }) => o.kind);
+    return {
+      types: f.office.map((z: { type: string }) => z.type),
+      kinds: f.furniture
+        .filter((o: { field?: unknown }) => !o.field)
+        .map((o: { kind: string }) => o.kind),
+    };
   });
   await page
     .locator("#art")
     .screenshot({ path: "test-results/office-floor.png" });
-  for (const kind of ["whiteboard", "cabinet", "printer", "cooler", "plant"])
-    expect(result).toContain(kind);
+  expect(result.types).toContain("cubicles");
+  expect(result.kinds.length).toBeGreaterThan(30);
+  for (const kind of ["partition", "coffeeMaker", "cafeTable", "chair"])
+    expect(result.kinds).toContain(kind);
 });

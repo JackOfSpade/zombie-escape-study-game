@@ -136,6 +136,8 @@ export function redesign(g: Game, roadmap?: Roadmap) {
         pursuitOfficeZones(floor),
         fieldClearance(floor),
         floor.entry,
+        g.seed,
+        floor.furniture.filter((o) => /-room\d-door$/.test(o.id)),
       );
     }
   const used = new Set(
@@ -328,20 +330,26 @@ export function survivorFloor(f: Floor, p: Point): Floor {
   )
     return f;
   const a = p as Actor;
-  const signature = JSON.stringify(
-    f.furniture.map((o) => [
-      o.id,
-      o.destroyed,
-      o.x,
-      o.y,
-      o.w,
-      o.h,
-      o.angle,
-      o.open,
-      o.field && fieldAllows(o, a),
-      (a.keys ?? 0) > 0,
-    ]),
-  );
+  // The view shares every non-field object by reference, so only fields and
+  // the set of objects decide whether it must be rebuilt.
+  const signature = JSON.stringify([
+    (a.keys ?? 0) > 0,
+    f.furniture.map((o) =>
+      o.field
+        ? [
+            o.id,
+            o.destroyed,
+            o.x,
+            o.y,
+            o.w,
+            o.h,
+            o.angle,
+            o.open,
+            fieldAllows(o, a),
+          ]
+        : o.id,
+    ),
+  ]);
   let map = views.get(f);
   if (!map) views.set(f, (map = new Map()));
   const old = map.get(a.id);

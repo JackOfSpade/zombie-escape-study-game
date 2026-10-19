@@ -533,6 +533,112 @@ const PAINTERS: Record<FurnitureKind, Painter> = {
     rect(c, -w / 2, -h / 2, 0.08, h, m.metal);
     rect(c, w / 2 - 0.08, -h / 2, 0.08, h, m.metal);
   },
+  coffeeMaker(c, m, w, h) {
+    // Counter cabinet with an espresso machine, cups and a sugar tray.
+    rect(c, -w / 2, -h / 2, w, h, m.laminate, m.outline);
+    round(c, -w / 2 + 0.08, -h / 2 + 0.06, w * 0.48, h * 0.5, 0.05, m.outline);
+    rect(c, -w / 2 + 0.14, -h / 2 + 0.12, w * 0.36, h * 0.22, m.metal);
+    disc(c, -w / 2 + 0.3, -h / 2 + 0.45, 0.06, m.woodDark);
+    for (const [x, y] of [
+      [0.12, -0.05],
+      [0.28, -0.05],
+      [0.2, 0.15],
+    ]) {
+      disc(c, x, y, 0.07, m.white);
+      disc(c, x, y, 0.045, m.woodDark);
+    }
+  },
+  microwave(c, m, w, h) {
+    // Counter cabinet with a microwave: door window and keypad.
+    rect(c, -w / 2, -h / 2, w, h, m.laminate, m.outline);
+    round(
+      c,
+      -w / 2 + 0.06,
+      -h / 2 + 0.06,
+      w - 0.12,
+      h * 0.62,
+      0.04,
+      m.metalDark,
+    );
+    rect(c, -w / 2 + 0.12, -h / 2 + 0.11, w * 0.55, h * 0.45, m.screen);
+    for (let i = 0; i < 3; i++)
+      rect(c, w / 2 - 0.22, -h / 2 + 0.12 + i * 0.09, 0.1, 0.05, m.white);
+    disc(c, -0.1, h / 2 - 0.12, 0.06, m.white);
+  },
+  vending(c, m, w, h) {
+    // Snack machine: glass front with coloured product rows and coin panel.
+    round(c, -w / 2, -h / 2, w, h, 0.05, "#7b2f36", m.outline);
+    rect(
+      c,
+      -w / 2 + 0.07,
+      -h / 2 + 0.07,
+      w * 0.68,
+      h - 0.24,
+      "rgba(170,210,230,0.5)",
+    );
+    for (let row = 0; row < 3; row++)
+      for (let col = 0; col < 4; col++)
+        rect(
+          c,
+          -w / 2 + 0.11 + col * 0.15,
+          -h / 2 + 0.11 + row * 0.17,
+          0.1,
+          0.11,
+          BOOKS[(row * 4 + col) % BOOKS.length],
+        );
+    rect(c, w / 2 - 0.2, -h / 2 + 0.12, 0.12, 0.3, m.metal);
+    rect(c, -w / 2 + 0.07, h / 2 - 0.15, w * 0.68, 0.08, m.outline);
+  },
+  cafeTable(c, m, w, h) {
+    // Round cafe table with a centre post and a cup.
+    const r = Math.min(w, h) / 2;
+    disc(c, 0, 0, r, m.outline);
+    disc(c, 0, 0, r - 0.03, m.laminate);
+    disc(c, 0, 0, r * 0.18, m.metal);
+    disc(c, r * 0.4, -r * 0.3, 0.07, m.white);
+  },
+  coffeeTable(c, m, w, h) {
+    // Low lounge table with magazines.
+    round(c, -w / 2, -h / 2, w, h, 0.08, m.wood, m.outline);
+    c.save();
+    c.rotate(0.15);
+    rect(c, -0.35, -0.12, 0.3, 0.22, "#3c6e9e", m.outline, 0.01);
+    c.restore();
+    rect(c, 0.08, -0.1, 0.28, 0.2, m.white, m.metal, 0.01);
+  },
+  reception(c, m, w, h) {
+    // Front desk: raised transaction ledge at the front, work surface behind.
+    round(c, -w / 2, -h / 2, w, h, 0.08, m.woodDark, m.outline);
+    rect(c, -w / 2 + 0.08, -h / 2 + 0.08, w - 0.16, h * 0.5, m.laminate);
+    rect(c, -0.4, -h / 2 + 0.12, 0.8, 0.1, m.outline);
+    rect(c, -0.37, -h / 2 + 0.135, 0.74, 0.07, m.screen);
+    rect(c, w / 2 - 0.5, -h / 2 + 0.14, 0.3, 0.22, m.white, m.metal, 0.01);
+    rect(c, -w / 2, h / 2 - 0.16, w, 0.16, m.wood);
+  },
+  armchair(c, m, w, h) {
+    // Upholstered armchair: back along north edge, arms and seat cushion.
+    round(c, -w / 2, -h / 2, w, h, 0.14, m.fabricDark, m.outline);
+    round(c, -w / 2 + 0.16, -h / 2 + 0.22, w - 0.32, h - 0.3, 0.1, m.fabric);
+  },
+  screen(c, m, w, h) {
+    // Wall display on a stand: dark panel with a lit slide.
+    rect(c, -w / 2, -h / 2, w, h, m.outline);
+    rect(c, -w / 2 + 0.05, -h / 2 + 0.05, w - 0.1, h - 0.12, "#2f6fd0");
+    rect(c, -w / 2 + 0.15, -h / 2 + 0.08, w * 0.35, 0.05, m.white);
+    rect(c, -0.15, h / 2 - 0.06, 0.3, 0.06, m.metalDark);
+  },
+  box(c, m, w, h) {
+    // Archive box: cardboard with a lid seam and label.
+    rect(c, -w / 2, -h / 2, w, h, "#b48a5a", m.outline, 0.02);
+    rect(c, -w / 2, -0.02, w, 0.04, "#8e6a42");
+    rect(c, -0.1, -h / 2 + 0.06, 0.2, 0.1, m.white);
+  },
+  drawers(c, m, w, h) {
+    // Mobile desk pedestal: steel body with a pen tray on top.
+    rect(c, -w / 2, -h / 2, w, h, m.metal, m.outline);
+    rect(c, -w / 2 + 0.05, -h / 2 + 0.05, w - 0.1, 0.12, m.metalDark);
+    rect(c, -0.08, h / 2 - 0.08, 0.16, 0.04, m.white);
+  },
   door(c, m, w, h) {
     // Solid-core office door leaf with a lever handle.
     rect(c, -w / 2, -h / 2, w, h, m.wood, m.outline);
@@ -609,6 +715,12 @@ export function drawDebris(
       officeChair: m.fabric,
       table: m.wood,
       shelf: m.woodDark,
+      vending: "#7b2f36",
+      reception: m.woodDark,
+      armchair: m.fabric,
+      box: "#b48a5a",
+      drawers: m.metal,
+      screen: m.outline,
     };
   ctx.fillStyle = colors[o.kind] ?? m.laminate;
   const n = 6 + Math.round(o.w * o.h * 2);

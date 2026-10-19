@@ -6,13 +6,28 @@ export const VISION = { lit: 11, dim: 8, dark: 5.4, max: 11 };
 export function sightRadius(f: Floor) {
   return f.dark > 0.8 ? VISION.dark : f.dark > 0.3 ? VISION.dim : VISION.lit;
 }
+const OPAQUE = new Set<Furniture["kind"]>(["gate", "door", "fridge", "shelf"]);
+/** Objects of an opaque kind on a floor; kinds never change, so the list stays
+ * valid until the furniture array is replaced or resized. */
+const opaqueCache = new WeakMap<
+  Floor,
+  { source: Furniture[]; length: number; list: Furniture[] }
+>();
+function opaqueFurniture(f: Floor) {
+  const hit = opaqueCache.get(f);
+  if (hit?.source === f.furniture && hit.length === f.furniture.length)
+    return hit.list;
+  const list = f.furniture.filter((o) => OPAQUE.has(o.kind));
+  opaqueCache.set(f, { source: f.furniture, length: f.furniture.length, list });
+  return list;
+}
 export function blocksSight(o: Furniture) {
   return (
+    OPAQUE.has(o.kind) &&
     !o.destroyed &&
     !o.field &&
     (!o.open || !!o.door) &&
-    !(o.kind === "gate" && o.turning < 0) &&
-    ["gate", "door", "fridge", "shelf"].includes(o.kind)
+    !(o.kind === "gate" && o.turning < 0)
   );
 }
 // Slab intersection against an opaque object's real footprint. All distances
@@ -125,9 +140,10 @@ export function rayDistance(
   const dx = Math.cos(angle),
     dy = Math.sin(angle);
   let hit = wallRayDistance(f, origin, angle, range);
-  for (const o of f.furniture) {
-    if (o.id === ignore || !blocksSight(o) || inFurniture(origin, o)) continue;
+  for (const o of opaqueFurniture(f)) {
+    if (!blocksSight(o) || o.id === ignore) continue;
     if (distance(origin, o) > range + Math.hypot(o.w, o.h) / 2) continue;
+    if (inFurniture(origin, o)) continue;
     hit = Math.min(hit, rayBoxDistance(origin, dx, dy, o));
   }
   return hit;
@@ -143,11 +159,12 @@ export function canSee(
   if (d > range + 1e-7) return false;
   if (d < 1e-7) return true;
   return (
+    // Only blockers nearer than the target matter, so the ray stops there.
     rayDistance(
       f,
       origin,
       Math.atan2(target.y - origin.y, target.x - origin.x),
-      range,
+      d,
       ignore,
     ) >=
     d - 1e-6

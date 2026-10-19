@@ -48,6 +48,9 @@ export function solid(
         return true;
   return f.furniture.some(
     (o) =>
+      // Cheap distance rejection before permission checks.
+      Math.abs(p.x - o.x) <= (o.w + o.h) / 2 + pad &&
+      Math.abs(p.y - o.y) <= (o.w + o.h) / 2 + pad &&
       o.id !== ignore &&
       !(
         pushDoors &&
@@ -84,41 +87,90 @@ export function line(
 ) {
   const d = Math.hypot(a.x - b.x, a.y - b.y),
     n = Math.ceil(d * 5);
+  // Only objects whose reach overlaps the segment's box can block it.
+  const near = withFurniture
+    ? f.furniture.filter((o) => {
+        const r = (o.w + o.h) / 2;
+        return (
+          o.id !== ignore &&
+          o.x + r >= Math.min(a.x, b.x) &&
+          o.x - r <= Math.max(a.x, b.x) &&
+          o.y + r >= Math.min(a.y, b.y) &&
+          o.y - r <= Math.max(a.y, b.y)
+        );
+      })
+    : [];
   for (let i = 1; i < n; i++) {
     const p = {
       x: a.x + ((b.x - a.x) * i) / n,
       y: a.y + ((b.y - a.y) * i) / n,
     };
-    if (
-      wall(f, p.x, p.y) ||
-      (withFurniture &&
-        f.furniture.some((o) => o.id !== ignore && inFurniture(p, o)))
-    )
-      return false;
+    if (wall(f, p.x, p.y) || near.some((o) => inFurniture(p, o))) return false;
   }
   return true;
 }
 interface PathCache {
-  signature: string;
+  tiles: Uint8Array;
+  ids: string[];
+  poses: Float64Array;
   routes: Map<string, Point[]>;
   /** Cells whose centre lies within a body radius of intact furniture. */
   furniture?: Uint8Array;
 }
 const routeCache = new WeakMap<Floor, PathCache>();
+const POSE = 6;
+/** Geometry snapshot compared without building strings on every query. */
+function snapshot(f: Floor) {
+  const tiles = new Uint8Array(W * H);
+  for (let y = 0; y < H; y++)
+    for (let x = 0; x < W; x++) tiles[y * W + x] = f.tiles[y]?.[x] ?? 1;
+  const poses = new Float64Array(f.furniture.length * POSE);
+  f.furniture.forEach((o, i) => {
+    poses.set(
+      [
+        o.x,
+        o.y,
+        o.w,
+        o.h,
+        o.angle ?? 0,
+        (o.destroyed ? 1 : 0) | (o.open ? 2 : 0) | (o.turning < 0 ? 4 : 0),
+      ],
+      i * POSE,
+    );
+  });
+  return { tiles, poses, ids: f.furniture.map((o) => `${o.id}/${o.kind}`) };
+}
+function unchanged(cache: PathCache, f: Floor) {
+  if (cache.ids.length !== f.furniture.length) return false;
+  for (let y = 0; y < H; y++)
+    for (let x = 0; x < W; x++)
+      if (cache.tiles[y * W + x] !== (f.tiles[y]?.[x] ?? 1)) return false;
+  for (let i = 0; i < f.furniture.length; i++) {
+    const o = f.furniture[i],
+      p = cache.poses,
+      j = i * POSE;
+    if (
+      cache.ids[i] !== `${o.id}/${o.kind}` ||
+      // Routes are grid-level guidance and collisions stay exact, so a
+      // shoved chair moving a few centimetres keeps the cached routes.
+      Math.abs(p[j] - o.x) > 0.08 ||
+      Math.abs(p[j + 1] - o.y) > 0.08 ||
+      p[j + 2] !== o.w ||
+      p[j + 3] !== o.h ||
+      Math.abs(p[j + 4] - (o.angle ?? 0)) > 0.04 ||
+      p[j + 5] !==
+        ((o.destroyed ? 1 : 0) | (o.open ? 2 : 0) | (o.turning < 0 ? 4 : 0))
+    )
+      return false;
+  }
+  return true;
+}
 export function path(f: Floor, a: Point, b: Point, breakable = false): Point[] {
   // Exact grid queries recur while a crowd waits at a barricade. Geometry is
   // authoritative, including externally loaded/edited floors; HP is not a cost.
-  const signature =
-    f.tiles.map((r) => r.join("")).join("") +
-    f.furniture
-      .map(
-        (o) =>
-          `${o.id}/${o.kind}/${o.x}/${o.y}/${o.w}/${o.h}/${o.angle ?? 0}/${o.destroyed}/${o.open}/${o.turning < 0}`,
-      )
-      .join(";");
   let cache = routeCache.get(f);
-  if (cache?.signature !== signature) {
-    cache = { signature, routes: new Map() };
+  if (!cache || !unchanged(cache, f)) {
+    cache = { ...snapshot(f), routes: new Map() };
     routeCache.set(f, cache);
   }
   const key = `${Math.floor(a.x)},${Math.floor(a.y)}/${Math.floor(b.x)},${Math.floor(b.y)}/${breakable}`;

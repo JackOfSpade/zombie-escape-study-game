@@ -48,9 +48,46 @@ Historical escape fixtures assumed a human could move through a dense live horde
 
 ## Office building art and furniture weight — 2026-10-19
 
-The building now reads as an office. Study rooms are carpeted, corridors and lobbies have vinyl tile, walls have lit caps, and every furniture kind has a recognisable top-down sprite. All of it is procedural; sources and techniques are in [OFFICE_ART.md](OFFICE_ART.md). New kinds are office chair, meeting table, filing cabinet, water cooler, plant, printer, mobile whiteboard and cubicle partition (`FURNITURE` in `src/model.ts`). Each is an ordinary physical object with its own footprint, handling speed, health and floor friction (`resist`). Generated floors place them back-to-wall per room: a meeting room with a whiteboard, open-plan partitions with a printer, a break area with a water cooler, and storage cabinets. Placement never cuts off a terminal or a reachable cell (`src/office-layout.ts`). Saved floors are never re-furnished on load.
+The building now reads as an office. Study rooms are carpeted, corridors and lobbies have vinyl tile, walls have lit caps, and every furniture kind has a recognisable top-down sprite. All of it is procedural; sources and techniques are in [OFFICE_ART.md](OFFICE_ART.md). New kinds are office chair, meeting table, filing cabinet, water cooler, plant, printer, mobile whiteboard and cubicle partition (`FURNITURE` in `src/model.ts`). Each is an ordinary physical object with its own footprint, handling speed, health and floor friction (`resist`). Saved floors are never re-furnished on load.
 
-Fresh force-field runs are furnished too, at the user's request: "i want the environments to look like a real office building with real objects (cubicles, water tanks, tables, chairs, whiteboards, etc.) with physics". This supersedes the earlier rule that fresh runs contain no movable furniture. `redesign()` still strips the generated legacy furniture, then `furnishOffice` places 17–20 movable pieces per floor (64 seeds measured) using `pursuitOfficeZones`. Every cell of every field opening, the stairs and the entry are kept clear (`fieldClearance`), so a piece cannot seal a force-field entrance. `pursuitLayoutErrors` passes on all 64 seeds × 4 floors. The crowded rear free hall often receives none. Route search now caches a per-floor furniture cell grid instead of scanning every object per expanded cell. That keeps the 600-zombie benchmark at parity: dense mean 10.6 ms (10.8 before), p95 13.4 ms (12.4); normal mean 7.1 ms (6.8). Render cost on a furnished fresh floor with 300 zombies is a median of 0.8–0.9 ms against 1.9 ms for the previous per-tile renderer, with p95 about 2.4 ms for both.
+Fresh force-field runs are furnished too, at the user's request: "i want the environments to look like a real office building with real objects (cubicles, water tanks, tables, chairs, whiteboards, etc.) with physics". This supersedes the earlier rule that fresh runs contain no movable furniture. Legacy layouts (old saves, lab fixtures) are not re-furnished; they keep their historical staged barricade furniture.
+
+### Room types — 2026-10-19
+
+The user asked for random generation with category-consistent rooms: "coffee maker should be in the lunch room, not cubicle". `src/office-layout.ts` gives each zone a function from its own seeded stream (run seed and floor index, the same idea as `room-questions.ts`), so world RNG, spawning and NPC decisions are unchanged. The rear hall, which holds most terminals, is always open-plan cubicles. The other three rooms take distinct functions from break room, meeting room, storage, manager's office and cubicles. The entry hall is a reception and the stair lobby is a break room or reception. `ROOM_CATALOG` lists the kinds each function may contain; a piece is only ever placed from its room's catalog. The new kinds are coffee maker and microwave counters, vending machine, cafe table, coffee table, reception desk, armchair, wall screen, archive box and desk pedestal, each with its own size, health, handling speed and floor friction.
+
+Rooms are furnished with functional groups, not single pieces:
+- counter runs along a wall;
+- cafe and conference tables with chairs facing them;
+- cubicle pods (desk, chair, panels, pedestal), and partition bays between wall-row terminals;
+- sofa groups, desk-and-guest-chair sets, and shelving runs.
+
+Each group lists smaller fallback variants for shallow rooms. A group is placed atomically and only if:
+- it stays 0.8 from every terminal and 1.6 (bays 2.5) from every field cell, the stairs and the entry lane;
+- it keeps a 0.6 walking gap to other groups;
+- it removes no reachable cell (flood fill with body clearance);
+- every terminal still reaches the stairs with all entrance fields sealed.
+
+No bays stand on the wall a room is entered through, where an arriving crowd fans out.
+
+Measured on 64 seeds × 4 floors: 40–76 pieces per floor (mean 57), `pursuitLayoutErrors` clean, every typed room furnished. Generation takes about 52 ms per new run, against about 23 ms before.
+
+Cost: furniture is real physics and real obstacles. Optimisations recovered part of the cost:
+- route and graph caches compare geometry without building strings;
+- shoved light pieces keep route caches within 8 cm;
+- sight rays stop at the target and test only opaque kinds;
+- the physics step builds its holder set once per frame;
+- the zombie obstacle probe no longer allocates.
+
+Remaining numbers, from one paired run on the same machine, with the same code and furniture switched off as the baseline:
+
+| Measurement | Without furniture | With furniture |
+| --- | --- | --- |
+| Normal swarm benchmark, mean | 7.3–7.7 ms | 9.8–10.0 ms |
+| Dense 600-zombie benchmark, mean | 10.6–11.1 ms | 13.3–14.4 ms |
+| Normal 30 s opening (`lag-seed-opening`) | 1.3 ms/tick | 2.2 ms/tick |
+
+Run-to-run noise is about ±1 ms. The benchmarks are therefore not at parity: the extra time is solver contacts between packed zombies and the extra bodies, plus NPC navigation around them. Rendering is unchanged at a median of 1.8 ms on a furnished floor with 300 zombies, because sprites are cached. Fewer pieces per room is the lever if the engine budget matters more than density.
 
 Zombies pushed furniture far too easily. Measurements identified three causes:
 

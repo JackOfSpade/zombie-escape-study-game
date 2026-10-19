@@ -141,8 +141,9 @@ test("completed zero-key solvers can reach stairs from every room with all entra
           path.length,
           `seed ${seed} floor ${f.index} room ${stage.room}`,
         );
+        // Vaulting office furniture is free; only a field interaction costs a key.
         assert.ok(
-          path.every((p) => !p.action),
+          path.every((p) => p.action !== "door"),
           "Credentialed exits must not cost another key",
         );
       }

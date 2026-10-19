@@ -2140,9 +2140,8 @@ function zombie(
     const d = distance(z, p) || 1,
       dx = (p.x - z.x) / d,
       dy = (p.y - z.y) / d;
-    const ob = f.furniture.find((o) =>
-      inFurniture({ x: z.x + dx * 0.55, y: z.y + dy * 0.55 }, o, 0.23),
-    );
+    const probe = { x: z.x + dx * 0.55, y: z.y + dy * 0.55 },
+      ob = f.furniture.find((o) => inFurniture(probe, o, 0.23));
     if (ob?.door && !ob.door.latched) {
       moveZombie(
         g,

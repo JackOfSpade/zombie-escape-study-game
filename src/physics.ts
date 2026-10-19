@@ -134,6 +134,8 @@ class PhysicsLayer {
     { object: Furniture; joint: Joint; state: NonNullable<Actor["grip"]> }
   >();
   private movedBy = new Map<Furniture, Set<string>>();
+  /** Furniture ids held by a living survivor (grip or handling), per frame. */
+  private held = new Set<string>();
   constructor(private g: Game) {}
   private floor(index: number, refresh = false) {
     const f = this.g.floors[index];
@@ -614,12 +616,7 @@ class PhysicsLayer {
     for (const r of this.records.values()) {
       const o = r.entity;
       if (!furniture(o) || o.door || o.speed <= 0) continue;
-      const held = this.g.survivors.some(
-          (a) =>
-            a.alive &&
-            !a.escaped &&
-            (a.grip?.object === o.id || a.handling === o.id),
-        ),
+      const held = this.held.has(o.id),
         pushed = (r.push ?? 0) / h > floorResist(o);
       if (r.body.isStatic()) {
         if (held || pushed) this.slide(r, o);
@@ -676,7 +673,19 @@ class PhysicsLayer {
       ...this.g.survivors,
       ...this.g.zombies,
     ];
-    const pressing = this.pressing();
+    const pressing = this.pressing(),
+      braces = new Set<string>(),
+      carriers = new Map<string, number>();
+    this.held.clear();
+    for (const a of this.g.survivors)
+      for (const id of new Set([a.grip?.object, a.handling])) {
+        if (!id) continue;
+        // Any holder lifts the carry speed limit; only the living hold it.
+        carriers.set(id, Math.max(carriers.get(id) ?? 3, a.speed * 2.5));
+        if (!a.alive || a.escaped) continue;
+        this.held.add(id);
+        if (id === a.handling && !a.grip) braces.add(id);
+      }
     for (const e of entities) {
       const old = this.records.get(e);
       if (!active(e)) {
@@ -723,19 +732,12 @@ class PhysicsLayer {
         r.body.setAwake(true);
       }
       if (furniture(e)) {
-        const held = this.g.survivors.some(
-          (a) =>
-            a.alive &&
-            !a.escaped &&
-            (a.grip?.object === e.id || a.handling === e.id),
-        );
+        const held = this.held.has(e.id);
         if (held && !e.door) this.slide(r, e);
         r.friction?.setMaxForce(held ? 0 : floorResist(e));
         r.body.setLinearDamping(held && !e.door ? 0 : 4);
         r.body.setAngularDamping(held && !e.door ? 0 : 5);
-        const braced = this.g.survivors.some(
-          (a) => a.alive && !a.escaped && a.handling === e.id && !a.grip,
-        );
+        const braced = braces.has(e.id);
         // A deliberate balanced carry resists torque; an end grip stays free to pivot.
         r.friction?.setMaxTorque(
           braced ? r.body.getMass() * 100 : held ? 0 : floorTorque(e),
@@ -808,23 +810,11 @@ class PhysicsLayer {
           r.body.applyLinearImpulse(Vec2(jx, jy), r.body.getPosition(), true);
         }
       for (const r of this.records.values())
-        if (furniture(r.entity)) {
+        if (furniture(r.entity) && !r.body.isStatic()) {
           const o = r.entity,
             v = r.body.getLinearVelocity(),
             speed = v.length(),
-            held = this.g.survivors.some(
-              (a) => a.grip?.object === o.id || a.handling === o.id,
-            ),
-            limit = held
-              ? Math.max(
-                  3,
-                  ...this.g.survivors
-                    .filter(
-                      (a) => a.grip?.object === o.id || a.handling === o.id,
-                    )
-                    .map((a) => a.speed * 2.5),
-                )
-              : 3;
+            limit = carriers.get(o.id) ?? 3;
           if (o.speed > 0 && speed > limit)
             r.body.setLinearVelocity(
               Vec2((v.x * limit) / speed, (v.y * limit) / speed),

@@ -26,7 +26,7 @@ test("fresh worlds have fields, movable office furniture clear of every opening,
       const fields = f.furniture.filter((o) => o.field);
       assert.ok(fields.every((o) => !o.door));
       for (const o of f.furniture.filter((o) => !o.field)) {
-        assert.match(o.id, /-office\d+-/);
+        assert.match(o.id, /^f\d-(room\d|entry|lobby)-[a-z]+\d+-/);
         assert.ok(o.speed > 0 && o.hp === o.maxHp, o.id);
         // No piece can seal or crowd a field opening.
         for (const field of fields)

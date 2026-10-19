@@ -24,7 +24,9 @@ test("fresh run uses force fields, personal keys and a solo study workspace", as
       // Fields have no door leaves; everything else is movable office furniture.
       fields: g.floors.every((f: any) =>
         f.furniture.every((o: any) =>
-          o.field ? !o.door : /-office\d+-/.test(o.id) && o.speed > 0,
+          o.field
+            ? !o.door
+            : /^f\d-(room\d|entry|lobby)-[a-z]+\d+-/.test(o.id) && o.speed > 0,
         ),
       ),
       inventory: g.survivors[0].inventory.length,
