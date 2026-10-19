@@ -69,6 +69,10 @@ test("knowledge-probe reply fields are declared, validated, forwarded to the que
     ["demonstrated", "implied", "gap"],
   );
   assert.match(tool.description, /assume the learner already knows/);
+  const facetProps =
+    tool.inputSchema.properties.knowledge.properties.facets.items.properties;
+  assert.equal(facetProps.partOf.type, "string");
+  assert.equal(facetProps.description.maxLength, 200);
   const { queue, open, claim, reply } = setup();
   queue.enable(true);
   const s = open();
@@ -100,6 +104,12 @@ test("knowledge-probe reply fields are declared, validated, forwarded to the que
     { knowledge: { facets: [{ id: "largest" }] } },
     { knowledge: { facets: [{ id: "largest", status: "known" }] } },
     { knowledge: { signal: { fluency: "great" } } },
+    { knowledge: { facets: [{ id: "largest", status: "gap", partOf: 1 }] } },
+    {
+      knowledge: {
+        facets: [{ id: "x", status: "gap", partOf: "largest", description: 1 }],
+      },
+    },
   ])
     assert.throws(
       () => reply(s.relayId, turnId, "Recorded", true, owner, extra),
@@ -109,6 +119,12 @@ test("knowledge-probe reply fields are declared, validated, forwarded to the que
     facets: [
       { id: "largest", status: "demonstrated" },
       { id: "update", status: "gap", note: "learner declared it" },
+      {
+        id: "prefix-sums",
+        status: "gap",
+        partOf: "update",
+        description: "Prefix sums",
+      },
     ],
     signal: { fluency: "declared-gap" },
   };

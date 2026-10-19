@@ -14,6 +14,8 @@ import type { Encounter, Game, Problem } from "./model";
 export interface ProbeFacet {
   id: string;
   description: string;
+  /** For a sub-facet the tutor declared: the facet it is a prerequisite part of. */
+  partOf?: string;
 }
 export type ProbeFindingStatus = "demonstrated" | "implied" | "gap";
 export interface ProbeFinding {
@@ -22,7 +24,14 @@ export interface ProbeFinding {
   /** For implied facets: the demonstrated facet whose answer entails this one. */
   impliedBy?: string;
   note?: string;
+  /** Declares a new sub-facet: the known facet it is part of, with its description. */
+  partOf?: string;
+  description?: string;
 }
+/** How many prerequisite levels a tutor may declare below a question's own facets. */
+export const SUB_FACET_DEPTH = 2;
+/** How many sub-facets one reply may declare. */
+export const SUB_FACETS_PER_REPLY = 16;
 export type AnswerFluency = "fluent" | "partial" | "guessing" | "declared-gap";
 export interface AnswerSignal {
   fluency: AnswerFluency;
@@ -56,9 +65,18 @@ export interface KnowledgeGapRecord {
   facet: ProbeFacet;
   /** The learner's own words from the turn that declared the gap. */
   statement: string;
+  /** For a declared sub-facet: the facet it is a prerequisite part of. */
+  partOf?: ProbeFacet;
   requestId: string;
   provider: string;
   at: string;
+  /** Set when the same facet was later demonstrated or implied at a terminal. */
+  resolved?: {
+    at: string;
+    encounter: string;
+    requestId: string;
+    status: "demonstrated" | "implied";
+  };
 }
 /** A facet established at a terminal (answered, or implied by an answer); carried across runs, never mastery. */
 export interface KnowledgeEstablishedRecord {
@@ -72,6 +90,8 @@ export interface KnowledgeEstablishedRecord {
   status: "demonstrated" | "implied";
   /** For implied facets: the facet whose correct answer entailed this one. */
   impliedBy?: string;
+  /** For a declared sub-facet: the facet it is a prerequisite part of. */
+  partOf?: ProbeFacet;
   requestId: string;
   provider: string;
   at: string;
@@ -87,7 +107,7 @@ export interface ProbeState {
 }
 
 export const PROBE_STANCE =
-  'Assume the learner already has this knowledge; they will tell you when they do not. Do not walk the rubric item by item. Open with the single highest-leverage question: the one whose correct answer necessarily depends on the other facets, so one good answer establishes several at once. When an answer demonstrates facet X and X cannot be answered correctly without Y and Z, mark Y and Z implied by X instead of asking about them. Read how the answer is given, not only whether it is right: precise vocabulary, correct ordering of steps, unprompted boundaries and confident specifics are evidence of knowledge; vague restatement, hedging, guessed numbers or asking what the question means are signals to probe one level down rather than to assume a gap. Ask about a facet only when nothing so far establishes it. When the learner states they do not know a facet, or asks for the answer, do not lecture and do not withhold the reward. If that facet encompasses other facets (it is the apex question X whose answer depends on Y and Z), the gap is not yet fleshed out: probe Y and Z next, one level down, so the recorded gap is only the parts actually missing; mark the parts they can answer demonstrated and only the parts they cannot as gaps. Once a facet has no parts left to descend to, report it as a gap with their own words and stop probing it. Return complete:true with outcome:"gap" once every remaining facet is either established or declared a gap at its lowest level. A declared gap is recorded for later study; it is not a failure and never a reason to keep the learner at the terminal.';
+  'Assume the learner already has this knowledge; they will tell you when they do not. Do not walk the rubric item by item. Open with the single highest-leverage question: the one whose correct answer necessarily depends on the other facets, so one good answer establishes several at once. When an answer demonstrates facet X and X cannot be answered correctly without Y and Z, mark Y and Z implied by X instead of asking about them. Read how the answer is given, not only whether it is right: precise vocabulary, correct ordering of steps, unprompted boundaries and confident specifics are evidence of knowledge; vague restatement, hedging, guessed numbers or asking what the question means are signals to probe one level down rather than to assume a gap. Ask about a facet only when nothing so far establishes it. When the learner states they do not know a facet, or asks for the answer, do not lecture and do not withhold the reward. If that facet encompasses other facets (it is the apex question X whose answer depends on Y and Z), the gap is not yet fleshed out: probe Y and Z next, one level down, so the recorded gap is only the parts actually missing. When the question never listed Y or Z, declare each as a new facet with partOf naming X and a short description, then probe them; that is how a gap is recorded at the part level (at most two levels below the question\'s own facets); mark the parts they can answer demonstrated and only the parts they cannot as gaps. If every part turns out to be established, return to the apex and ask it again: known parts never imply the apex, because the apex is also combining them, so the apex is established only when it is answered. The same holds across terminals: a facet recorded as a gap earlier and since established clears the way to re-ask the facet it blocked, so ask that apex again rather than its parts. Once a facet has no parts left to descend to, report it as a gap with their own words and stop probing it. Return complete:true with outcome:"gap" once every remaining facet is either established or declared a gap at its lowest level. A declared gap is recorded for later study; it is not a failure and never a reason to keep the learner at the terminal.';
 
 export const TERMINAL_DIALOGUE_FORMAT = {
   text: "string",
@@ -100,6 +120,9 @@ export const TERMINAL_DIALOGUE_FORMAT = {
         status: "demonstrated|implied|gap",
         impliedBy: "the demonstrated facet id, for implied only",
         note: "short evidence excerpt or reason",
+        partOf:
+          "to declare a prerequisite the question did not list: the known facet id it is part of (new id + description required; at most 2 levels deep)",
+        description: "the new sub-facet's description, for declared parts only",
       },
     ],
     signal: {
@@ -112,7 +135,7 @@ export const TERMINAL_DIALOGUE_FORMAT = {
 export const TERMINAL_DIALOGUE_INSTRUCTION =
   "@study: Continue this private puzzle conversation. Judge the learner's accumulated answers against every part of the question and rubric. Return {text,complete,outcome?,knowledge?}. " +
   PROBE_STANCE +
-  ' Ask a focused follow-up with complete:false while a facet is still open. Set complete:true with outcome:"solved" when the learner\'s messages and saved work supply a correct, sufficiently supported solution; set complete:true with outcome:"gap" when the learner has declared they do not know what remains and no lower-level facet is left to probe, and name those facets as gaps in knowledge.facets. In knowledge.facets use only ids from probe.facets, with status demonstrated, implied (with impliedBy) or gap; add knowledge.signal describing how the latest answer was given. Your own explanations are assistance, not learner evidence. Do not demand a separate submission or repeat already demonstrated reasoning. Do not claim execution without matching receipts. Gameplay completion is separate from independent mastery.';
+  ' Ask a focused follow-up with complete:false while a facet is still open. Set complete:true with outcome:"solved" when the learner\'s messages and saved work supply a correct, sufficiently supported solution; set complete:true with outcome:"gap" when the learner has declared they do not know what remains and no lower-level facet is left to probe, and name those facets as gaps in knowledge.facets. In knowledge.facets use ids from probe.facets, or declare a prerequisite part the question did not list as a new id with partOf (a known facet id) and description, with status demonstrated, implied (with impliedBy) or gap; add knowledge.signal describing how the latest answer was given. Your own explanations are assistance, not learner evidence. Do not demand a separate submission or repeat already demonstrated reasoning. Do not claim execution without matching receipts. Gameplay completion is separate from independent mastery.';
 
 const facetId = (value: string) =>
   value
@@ -197,8 +220,19 @@ export function parseProbeReply(
     );
   let outcome: ProbeOutcome = "continue";
   if (complete) outcome = answer.outcome === "gap" ? "gap" : "solved";
-  const known = new Set(facets.map((f) => f.id));
+  const known = new Map(facets.map((f) => [f.id, f] as const));
+  const depthOf = (id: string): number => {
+    let depth = 0;
+    for (
+      let f = known.get(id);
+      f?.partOf !== undefined && depth <= SUB_FACET_DEPTH;
+      f = known.get(f.partOf)
+    )
+      depth++;
+    return depth;
+  };
   const findings: ProbeFinding[] = [];
+  let declared = 0;
   let signal: AnswerSignal | undefined;
   if (answer.knowledge !== undefined) {
     if (!object(answer.knowledge))
@@ -222,17 +256,43 @@ export function parseProbeReply(
           throw Error(
             "Invalid tutor knowledge report: each facet needs id and status demonstrated|implied|gap",
           );
-        if (!known.has(raw.id) || seen.has(raw.id)) continue;
-        seen.add(raw.id);
+        let id = raw.id;
         const finding: ProbeFinding = {
-          id: raw.id,
+          id,
           status: raw.status as ProbeFindingStatus,
         };
+        if (!known.has(id)) {
+          // A facet the question never listed is accepted only as a declared
+          // prerequisite part of a known facet, with its own description.
+          const parent =
+            typeof raw.partOf === "string" ? raw.partOf : undefined;
+          const description = shortText(raw.description, 200);
+          id = facetId(id) || (description ? facetId(description) : "");
+          if (
+            !parent ||
+            !known.has(parent) ||
+            !description ||
+            !id ||
+            parent === id ||
+            depthOf(parent) >= SUB_FACET_DEPTH ||
+            declared >= SUB_FACETS_PER_REPLY
+          )
+            continue;
+          if (!known.has(id)) {
+            declared++;
+            known.set(id, { id, description, partOf: parent });
+            finding.partOf = parent;
+            finding.description = description;
+          }
+          finding.id = id;
+        }
+        if (seen.has(id)) continue;
+        seen.add(id);
         if (
           finding.status === "implied" &&
           typeof raw.impliedBy === "string" &&
           known.has(raw.impliedBy) &&
-          raw.impliedBy !== raw.id
+          raw.impliedBy !== id
         )
           finding.impliedBy = raw.impliedBy;
         const note = shortText(raw.note, 400);
@@ -303,6 +363,16 @@ export function probeSummary(e: Pick<Encounter, "probe">): string {
 }
 
 const gapKey = (encounter: string, facet: string) => `${encounter}#${facet}`;
+/** The declared parent of a sub-facet, for carried records. */
+function parentOf(e: Pick<Encounter, "probe">, facet: ProbeFacet) {
+  if (!facet.partOf) return {};
+  const parent = e.probe?.facets.find((x) => x.id === facet.partOf);
+  return parent
+    ? { partOf: { id: parent.id, description: parent.description } }
+    : {};
+}
+const chain = (r: { partOf?: ProbeFacet }) =>
+  r.partOf ? ` (part of ${r.partOf.description})` : "";
 
 /**
  * Record one validated terminal reply. When the terminal concedes the key on
@@ -326,6 +396,20 @@ export function recordProbeTurn(
   const at = context.at ?? new Date().toISOString();
   e.probe ??= { facets: probeFacets(problem), turns: [] };
   if (e.probe.turns.some((t) => t.requestId === context.requestId)) return [];
+  // Declared sub-facets join the encounter's universe so later turns, the
+  // HUD and the carried records treat them like the question's own facets.
+  for (const f of reply.findings)
+    if (
+      f.partOf !== undefined &&
+      f.description !== undefined &&
+      !e.probe.facets.some((x) => x.id === f.id) &&
+      e.probe.facets.some((x) => x.id === f.partOf)
+    )
+      e.probe.facets.push({
+        id: f.id,
+        description: f.description,
+        partOf: f.partOf,
+      });
   e.probe.turns.push({
     ...reply,
     requestId: context.requestId,
@@ -361,6 +445,7 @@ export function recordProbeTurn(
       objectiveIds: [...problem.contract.objectiveIds],
       depth: problem.contract.depth,
       facet: { id: facet.id, description: facet.description },
+      ...parentOf(e, facet),
       statement: context.statement.slice(0, 1000),
       requestId: context.requestId,
       provider: context.provider,
@@ -425,13 +510,34 @@ function syncEstablished(
       facet: { id: f.id, description: f.description },
       status: f.status as "demonstrated" | "implied",
       ...(f.impliedBy ? { impliedBy: f.impliedBy } : {}),
+      ...parentOf(e, f),
       requestId: context.requestId,
       provider: context.provider,
       at,
     });
   }
   if (!records.length) delete g.study.knowledgeEstablished;
+  // A facet recorded as a gap earlier, now established at this terminal (same
+  // stable id, or the same facet text under a question with its own ids), is
+  // closed: the next question is told the blocked apex can be asked again.
+  for (const gap of g.study.knowledgeGaps ?? []) {
+    if (gap.resolved || gap.track !== problem.contract.track) continue;
+    const match = established.find(
+      (f) =>
+        f.id === gap.facet.id ||
+        sameFacetText(f.description, gap.facet.description),
+    );
+    if (match)
+      gap.resolved = {
+        at,
+        encounter: encounterRef,
+        requestId: context.requestId,
+        status: match.status as "demonstrated" | "implied",
+      };
+  }
 }
+const sameFacetText = (a: string, b: string) =>
+  facetId(a) !== "" && facetId(a) === facetId(b);
 
 /** Established records for an encounter. */
 export function encounterEstablished(
@@ -454,17 +560,35 @@ export function encounterGaps(g: Game, e: Encounter): KnowledgeGapRecord[] {
 export function knowledgeGapContext(g: Game, track: string): string {
   const gaps = (g.study.knowledgeGaps ?? []).filter((r) => r.track === track);
   if (!gaps.length) return "";
-  return (
-    "Learner-declared knowledge gaps recorded at earlier terminals (study targets, not failures):\n" +
-    gaps
-      .slice(-20)
-      .map(
-        (r) =>
-          `- ${r.objectiveIds.join(", ")} D${r.depth} · ${r.facet.description} · learner said: ${JSON.stringify(r.statement.slice(0, 200))}`,
-      )
-      .join("\n")
-  );
+  const open = gaps.filter((r) => !r.resolved).slice(-20);
+  const closed = gaps.filter((r) => r.resolved).slice(-10);
+  const lines = [];
+  if (open.length)
+    lines.push(
+      "Learner-declared knowledge gaps recorded at earlier terminals (study targets, not failures). Ask about these directly, then re-ask whatever facet they blocked:\n" +
+        open
+          .map(
+            (r) =>
+              `- ${r.objectiveIds.join(", ")} D${r.depth} · ${r.facet.description}${chain(r)} · learner said: ${JSON.stringify(r.statement.slice(0, 200))}`,
+          )
+          .join("\n"),
+    );
+  if (closed.length)
+    lines.push(
+      "Gaps since closed: the learner later established these facets, so the facet each one blocked can be asked again (known parts do not imply it):\n" +
+        closed
+          .map(
+            (r) =>
+              `- ${r.objectiveIds.join(", ")} D${r.depth} · ${r.facet.description}${chain(r)} · ${r.resolved!.status} on ${r.resolved!.at.slice(0, 10)}`,
+          )
+          .join("\n"),
+    );
+  return lines.join("\n\n");
 }
+
+/** Gap records still open, for views that target study. */
+export const openGaps = (g: Game) =>
+  (g.study.knowledgeGaps ?? []).filter((r) => !r.resolved);
 
 /** Progress-context note listing facets already established, so they are not probed again. */
 export function knowledgeEstablishedContext(g: Game, track: string): string {
@@ -478,7 +602,7 @@ export function knowledgeEstablishedContext(g: Game, track: string): string {
       .slice(-40)
       .map(
         (r) =>
-          `- ${r.objectiveIds.join(", ")} D${r.depth} · ${r.facet.description} · ${r.status}${r.impliedBy ? ` (implied by ${r.impliedBy})` : ""}`,
+          `- ${r.objectiveIds.join(", ")} D${r.depth} · ${r.facet.description}${chain(r)} · ${r.status}${r.impliedBy ? ` (implied by ${r.impliedBy})` : ""}`,
       )
       .join("\n")
   );

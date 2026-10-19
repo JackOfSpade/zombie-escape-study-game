@@ -729,9 +729,11 @@ export function retryTutorRequest(
       const probe = dialogue
         ? parseProbeReply(
             answer as Record<string, unknown>,
-            Array.isArray(payload.probe?.facets)
-              ? payload.probe.facets
-              : probeFacets(payload.problem),
+            // Sub-facets declared on earlier turns belong to the universe too.
+            e.probe?.facets ??
+              (Array.isArray(payload.probe?.facets)
+                ? payload.probe.facets
+                : probeFacets(payload.problem)),
           )
         : undefined;
       checkSnapshot();

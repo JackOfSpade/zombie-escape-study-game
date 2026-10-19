@@ -871,17 +871,36 @@ test("terminal dialogue handoff requires an explicit boolean completion decision
       knowledge: { facets: [{ id: "a", status: "known" }] },
     },
     { text: "x", complete: true, knowledge: { signal: { fluency: "great" } } },
+    {
+      text: "x",
+      complete: true,
+      knowledge: { facets: [{ id: "a", status: "gap", partOf: 7 }] },
+    },
+    {
+      text: "x",
+      complete: true,
+      knowledge: {
+        facets: [{ id: "a", status: "gap", partOf: "b", description: [] }],
+      },
+    },
   ])
     assert.throws(
       () => q.submit(worker, job.jobId, job.claim, bad),
       /outcome must be|knowledge must be/,
     );
+  assert.match(
+    job.instructions,
+    /partOf \(a known facet id\) and a short description/,
+  );
   assert.equal(
     q.submit(worker, job.jobId, job.claim, {
       text: "Synthetic follow-up",
       complete: false,
       knowledge: {
-        facets: [{ id: "a", status: "implied", impliedBy: "b" }],
+        facets: [
+          { id: "a", status: "implied", impliedBy: "b" },
+          { id: "c", status: "gap", partOf: "a", description: "Part C" },
+        ],
         signal: { fluency: "partial" },
       },
     }).status,

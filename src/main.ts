@@ -937,16 +937,16 @@ function knowledgeGapsHtml(g: Game) {
       .slice(0, 40)
       .map(
         (r) =>
-          `<p><strong>${escape(r.objectiveIds.join(", "))} · D${r.depth}</strong> · ${escape(r.facet.description)}<br><small>${escape(r.at.slice(0, 10))} · ${escape(r.status)}${r.impliedBy ? ` · implied by ${escape(r.impliedBy)}` : ""}</small></p>`,
+          `<p><strong>${escape(r.objectiveIds.join(", "))} · D${r.depth}</strong> · ${escape(r.facet.description)}${r.partOf ? ` · part of ${escape(r.partOf.description)}` : ""}<br><small>${escape(r.at.slice(0, 10))} · ${escape(r.status)}${r.impliedBy ? ` · implied by ${escape(r.impliedBy)}` : ""}</small></p>`,
       )
       .join("") || "<p>None recorded.</p>"
-  }</section><section data-knowledge-gaps><h3>Recorded knowledge gaps (${gaps.length})</h3><p>Facets you told Terminal AI you did not know. The key was still granted; these are study targets carried across runs, never failures or mastery. The next question on the same track sees them.</p>${
+  }</section><section data-knowledge-gaps><h3>Recorded knowledge gaps (${gaps.filter((r) => !r.resolved).length} open · ${gaps.filter((r) => r.resolved).length} closed)</h3><p>Facets you told Terminal AI you did not know. The key was still granted; these are study targets carried across runs, never failures or mastery. The next question on the same track sees them, and a gap closes once you establish that facet at a later terminal.</p>${
     gaps
       .slice()
       .reverse()
       .map(
         (r) =>
-          `<p><strong>${escape(r.objectiveIds.join(", "))} · D${r.depth}</strong> · ${escape(r.facet.description)}<br><small>${escape(r.at.slice(0, 10))} · you said: ${escape(r.statement.slice(0, 200))}</small></p>`,
+          `<p><strong>${escape(r.objectiveIds.join(", "))} · D${r.depth}</strong> · ${escape(r.facet.description)}${r.partOf ? ` · part of ${escape(r.partOf.description)}` : ""}<br><small>${escape(r.at.slice(0, 10))} · you said: ${escape(r.statement.slice(0, 200))}${r.resolved ? ` · closed ${escape(r.resolved.at.slice(0, 10))} (${escape(r.resolved.status)})` : " · open"}</small></p>`,
       )
       .join("") || "<p>None recorded.</p>"
   }</section>`;

@@ -8,6 +8,7 @@ import {
   knowledgeEstablishedContext,
   knowledgeGapContext,
   knowledgeProbeContext,
+  openGaps,
   parseProbeReply,
   probeContract,
   probeFacets,
@@ -15,6 +16,8 @@ import {
   probeSummary,
   recordProbeTurn,
   PROBE_STANCE,
+  SUB_FACET_DEPTH,
+  SUB_FACETS_PER_REPLY,
   TERMINAL_DIALOGUE_INSTRUCTION,
 } from "../src/knowledge-probe";
 import type { Roadmap } from "../src/model";
@@ -58,6 +61,9 @@ test("the probe contract assumes knowledge, asks the apex question first, and co
     assert.match(text, /do not lecture and do not withhold the reward/);
     assert.match(text, /probe Y and Z next, one level down/);
     assert.match(text, /only the parts actually missing/);
+    assert.match(text, /return to the apex and ask it again/);
+    assert.match(text, /known parts never imply the apex/);
+    assert.match(text, /since established clears the way to re-ask/);
   }
   assert.match(
     TERMINAL_DIALOGUE_INSTRUCTION,
@@ -496,4 +502,485 @@ test("conceding without naming facets records every facet not yet established", 
   );
   assert.equal(g2.study.knowledgeGaps, undefined);
   assert.equal(probeState(e2).outcome, "solved");
+});
+
+test("a recorded gap closes when the facet is later established at another terminal, by stable id or identical facet text, and the context says the blocked apex can be re-asked", async () => {
+  const g = createPlayableGame(2024, r);
+  const solo = Object.values(g.encounters).filter((x) => x.mode === "solo");
+  const [e1, e2, e3] = solo;
+  const facets = (ids: [string, string][]) => [
+    {
+      id: "scope",
+      objectiveId: "PY:T05.2",
+      depth: 1,
+      sourceScope: "synthetic",
+      facets: ids.map(([id, description]) => ({ id, description })),
+    },
+  ];
+  await ensureProblem(g, e1, r);
+  e1.problem!.scopeDefinitions = facets([
+    ["partition-identities", "Integer partition identities"],
+    ["enumerative-combinatorics", "Enumerative combinatorics"],
+    ["generating-functions", "Generating functions"],
+  ]) as never;
+  const track = e1.problem!.contract.track;
+  const universe = probeFacets(e1.problem!);
+  recordProbeTurn(
+    g,
+    e1,
+    parseProbeReply(
+      {
+        text: "You know generating functions; the other two are recorded as gaps.",
+        complete: true,
+        outcome: "gap",
+        knowledge: {
+          facets: [
+            { id: "generating-functions", status: "demonstrated" },
+            { id: "enumerative-combinatorics", status: "gap" },
+            { id: "partition-identities", status: "gap" },
+          ],
+        },
+      },
+      universe,
+    ),
+    {
+      requestId: "e1-concede",
+      questionSequence: 1,
+      provider: "chatgpt-handoff",
+      statement: "I know GF but not EC",
+      at: "2026-10-18T10:00:00.000Z",
+    },
+  );
+  assert.deepEqual(
+    openGaps(g).map((x) => x.facet.id),
+    ["partition-identities", "enumerative-combinatorics"],
+  );
+  assert.match(knowledgeGapContext(g, track), /Ask about these directly/);
+  assert.doesNotMatch(knowledgeGapContext(g, track), /since closed/);
+  // Same stable facet id at a later terminal on the track closes the gap.
+  await ensureProblem(g, e2, r);
+  e2.problem!.scopeDefinitions = facets([
+    ["enumerative-combinatorics", "Enumerative combinatorics"],
+  ]) as never;
+  e2.problem!.contract.track = track;
+  recordProbeTurn(
+    g,
+    e2,
+    parseProbeReply(
+      {
+        text: "That is enumerative combinatorics, done.",
+        complete: false,
+        knowledge: {
+          facets: [{ id: "enumerative-combinatorics", status: "demonstrated" }],
+        },
+      },
+      probeFacets(e2.problem!),
+    ),
+    {
+      requestId: "e2-turn",
+      questionSequence: 1,
+      provider: "chatgpt-handoff",
+      statement: "count by cases then sum",
+      at: "2026-10-19T10:00:00.000Z",
+    },
+  );
+  const ec = g.study.knowledgeGaps!.find(
+    (x) => x.facet.id === "enumerative-combinatorics",
+  )!;
+  assert.deepEqual(ec.resolved, {
+    at: "2026-10-19T10:00:00.000Z",
+    encounter: `${e2.runId}/${e2.id}`,
+    requestId: "e2-turn",
+    status: "demonstrated",
+  });
+  assert.equal(ec.statement, "I know GF but not EC", "the original words stay");
+  assert.deepEqual(
+    openGaps(g).map((x) => x.facet.id),
+    ["partition-identities"],
+  );
+  let context = knowledgeGapContext(g, track);
+  assert.match(context, /Gaps since closed/);
+  assert.match(context, /can be asked again \(known parts do not imply it\)/);
+  assert.match(
+    context,
+    /Enumerative combinatorics · demonstrated on 2026-10-19/,
+  );
+  assert.match(context, /Integer partition identities · learner said/);
+  assert.ok(
+    context.indexOf("Ask about these directly") <
+      context.indexOf("Gaps since closed"),
+  );
+  // A question with its own rubric ids closes a gap by identical facet text.
+  await ensureProblem(g, e3, r);
+  e3.problem!.scopeDefinitions = facets([
+    ["pi-apex", "Integer Partition Identities"],
+  ]) as never;
+  e3.problem!.contract.track = track;
+  recordProbeTurn(
+    g,
+    e3,
+    parseProbeReply(
+      {
+        text: "Now the identities follow; solved.",
+        complete: true,
+        outcome: "solved",
+        knowledge: { facets: [{ id: "pi-apex", status: "demonstrated" }] },
+      },
+      probeFacets(e3.problem!),
+    ),
+    {
+      requestId: "e3-turn",
+      questionSequence: 1,
+      provider: "chatgpt-handoff",
+      statement: "pair each partition with its conjugate",
+      at: "2026-10-20T10:00:00.000Z",
+    },
+  );
+  assert.deepEqual(openGaps(g), []);
+  assert.equal(
+    g.study.knowledgeGaps!.find((x) => x.facet.id === "partition-identities")!
+      .resolved!.encounter,
+    `${e3.runId}/${e3.id}`,
+  );
+  context = knowledgeGapContext(g, track);
+  assert.doesNotMatch(context, /Ask about these directly/);
+  assert.match(context, /Gaps since closed/);
+  // A different track never closes it; resolution survives save/reload.
+  const other = createPlayableGame(3, r);
+  const oe = Object.values(other.encounters).find((x) => x.mode === "solo")!;
+  await ensureProblem(other, oe, r);
+  oe.problem!.scopeDefinitions = facets([["x", "Some facet"]]) as never;
+  recordProbeTurn(
+    other,
+    oe,
+    parseProbeReply(
+      {
+        text: "ok",
+        complete: true,
+        outcome: "gap",
+        knowledge: { facets: [{ id: "x", status: "gap" }] },
+      },
+      probeFacets(oe.problem!),
+    ),
+    {
+      requestId: "o1",
+      questionSequence: 1,
+      provider: "study-mode",
+      statement: "no",
+    },
+  );
+  other.study.knowledgeGaps![0].track = "ZZ";
+  const oe2 = Object.values(other.encounters).filter(
+    (x) => x.mode === "solo",
+  )[1];
+  await ensureProblem(other, oe2, r);
+  oe2.problem!.scopeDefinitions = facets([["x", "Some facet"]]) as never;
+  recordProbeTurn(
+    other,
+    oe2,
+    parseProbeReply(
+      {
+        text: "ok",
+        complete: false,
+        knowledge: { facets: [{ id: "x", status: "demonstrated" }] },
+      },
+      probeFacets(oe2.problem!),
+    ),
+    {
+      requestId: "o2",
+      questionSequence: 1,
+      provider: "study-mode",
+      statement: "yes",
+    },
+  );
+  assert.equal(other.study.knowledgeGaps![0].resolved, undefined);
+  const reloaded = recover(decode(encode(g)));
+  assert.equal(
+    reloaded.study.knowledgeGaps!.filter((x) => x.resolved).length,
+    2,
+  );
+});
+
+test("the tutor can declare prerequisite parts the question never listed, bounded by parent, description, depth and count", () => {
+  const facets = probeFacets(scopedProblem);
+  const parsed = parseProbeReply(
+    {
+      text: "Partition identities rest on two parts; let us look at each.",
+      complete: false,
+      knowledge: {
+        facets: [
+          { id: "window-total", status: "gap" },
+          {
+            id: "Enumerative Combinatorics!",
+            status: "gap",
+            partOf: "window-total",
+            description: "Count partitions by cases",
+          },
+          {
+            id: "generating-functions",
+            status: "demonstrated",
+            partOf: "window-total",
+            description: "Encode a sequence as a power series",
+          },
+          // Depth: a part of a declared part is allowed (level 2) …
+          {
+            id: "series-expansion",
+            status: "gap",
+            partOf: "generating-functions",
+            description: "Expand a rational function as a series",
+          },
+          // … but a level below that is not.
+          {
+            id: "too-deep",
+            status: "gap",
+            partOf: "series-expansion",
+            description: "Dropped",
+          },
+          // Missing description, unknown parent, self-parent or no parent: dropped.
+          { id: "no-description", status: "gap", partOf: "window-total" },
+          {
+            id: "orphan",
+            status: "gap",
+            partOf: "nowhere",
+            description: "Dropped",
+          },
+          { id: "stray", status: "gap" },
+          // A declared id that normalises to a known facet is that facet.
+          {
+            id: "Running Update",
+            status: "implied",
+            impliedBy: "generating-functions",
+            partOf: "window-total",
+            description: "Ignored",
+          },
+          // Re-declaring an already declared part is just a finding on it.
+          {
+            id: "generating-functions",
+            status: "gap",
+            partOf: "window-total",
+            description: "Ignored",
+          },
+        ],
+      },
+    },
+    facets,
+  );
+  assert.equal(SUB_FACET_DEPTH, 2);
+  assert.deepEqual(parsed.findings, [
+    { id: "window-total", status: "gap" },
+    {
+      id: "enumerative-combinatorics",
+      status: "gap",
+      partOf: "window-total",
+      description: "Count partitions by cases",
+    },
+    {
+      id: "generating-functions",
+      status: "demonstrated",
+      partOf: "window-total",
+      description: "Encode a sequence as a power series",
+    },
+    {
+      id: "series-expansion",
+      status: "gap",
+      partOf: "generating-functions",
+      description: "Expand a rational function as a series",
+    },
+    {
+      id: "running-update",
+      status: "implied",
+      impliedBy: "generating-functions",
+    },
+  ]);
+  // Count cap: the seventeenth declared part is dropped.
+  const many = parseProbeReply(
+    {
+      text: "x",
+      complete: false,
+      knowledge: {
+        facets: Array.from({ length: SUB_FACETS_PER_REPLY + 1 }, (_, i) => ({
+          id: `part-${i}`,
+          status: "gap",
+          partOf: "window-total",
+          description: `Part ${i}`,
+        })),
+      },
+    },
+    facets,
+  );
+  assert.equal(many.findings.length, SUB_FACETS_PER_REPLY);
+  // Known sub-facets from earlier turns count toward depth too.
+  const grown = [
+    ...facets,
+    { id: "a", description: "A", partOf: "window-total" },
+    { id: "b", description: "B", partOf: "a" },
+  ];
+  assert.deepEqual(
+    parseProbeReply(
+      {
+        text: "x",
+        complete: false,
+        knowledge: {
+          facets: [
+            { id: "b", status: "demonstrated" },
+            { id: "c", status: "gap", partOf: "b", description: "Too deep" },
+          ],
+        },
+      },
+      grown,
+    ).findings,
+    [{ id: "b", status: "demonstrated" }],
+  );
+  // Type errors on the new fields still interrupt the reply.
+  for (const bad of [
+    { id: "p", status: "gap", partOf: 3, description: "x" },
+    { id: "p", status: "gap", partOf: "window-total", description: 3 },
+  ])
+    assert.doesNotThrow(() =>
+      parseProbeReply(
+        { text: "x", complete: false, knowledge: { facets: [bad] } },
+        facets,
+      ),
+    );
+});
+
+test("declared parts join the encounter's universe and are carried in records and context with their parent", async () => {
+  const g = createPlayableGame(515, r);
+  const e = g.encounters[g.floors[0].stations[0].encounter];
+  await ensureProblem(g, e, r);
+  e.problem!.scopeDefinitions = [
+    {
+      id: "scope",
+      objectiveId: "PY:T05.2",
+      depth: 1,
+      sourceScope: "synthetic",
+      facets: [
+        {
+          id: "partition-identities",
+          description: "Integer partition identities",
+        },
+      ],
+    },
+  ] as never;
+  const track = e.problem!.contract.track;
+  let facets = probeFacets(e.problem!);
+  assert.equal(facets.length, 1);
+  recordProbeTurn(
+    g,
+    e,
+    parseProbeReply(
+      {
+        text: "No problem. Two parts underlie it: how do you count partitions, and what does a generating function do?",
+        complete: false,
+        knowledge: {
+          facets: [
+            {
+              id: "partition-identities",
+              status: "gap",
+              note: "declared unknown",
+            },
+            {
+              id: "enumerative-combinatorics",
+              status: "gap",
+              partOf: "partition-identities",
+              description: "Enumerative combinatorics",
+            },
+            {
+              id: "generating-functions",
+              status: "gap",
+              partOf: "partition-identities",
+              description: "Generating functions",
+            },
+          ],
+          signal: { fluency: "declared-gap" },
+        },
+      },
+      facets,
+    ),
+    {
+      requestId: "t1",
+      questionSequence: 1,
+      provider: "chatgpt-handoff",
+      statement: "I don't know partition identities",
+      at: "2026-10-18T09:00:00.000Z",
+    },
+  );
+  assert.deepEqual(
+    e.probe!.facets.map((f) => [f.id, f.partOf]),
+    [
+      ["partition-identities", undefined],
+      ["enumerative-combinatorics", "partition-identities"],
+      ["generating-functions", "partition-identities"],
+    ],
+  );
+  assert.equal(probeState(e).total, 3);
+  assert.equal(
+    probeSummary(e),
+    "0 of 3 facets established · 3 recorded gaps · last answer declared a gap",
+  );
+  assert.equal(g.study.knowledgeGaps, undefined, "nothing conceded yet");
+  // The next turn judges the declared parts by id, against the grown universe.
+  facets = e.probe!.facets;
+  const created = recordProbeTurn(
+    g,
+    e,
+    parseProbeReply(
+      {
+        text: "Generating functions you clearly know. Counting by cases is recorded as the gap; here is your key.",
+        complete: true,
+        outcome: "gap",
+        knowledge: {
+          facets: [
+            { id: "generating-functions", status: "demonstrated" },
+            { id: "enumerative-combinatorics", status: "gap" },
+            { id: "partition-identities", status: "gap" },
+          ],
+        },
+      },
+      facets,
+    ),
+    {
+      requestId: "t2",
+      questionSequence: 2,
+      provider: "chatgpt-handoff",
+      statement:
+        "GF encode a sequence as coefficients; counting by cases I never learned",
+      at: "2026-10-18T09:05:00.000Z",
+    },
+  );
+  assert.deepEqual(
+    created.map((c) => [c.facet.id, c.partOf?.id]),
+    [
+      ["partition-identities", undefined],
+      ["enumerative-combinatorics", "partition-identities"],
+    ],
+  );
+  assert.deepEqual(created[1].partOf, {
+    id: "partition-identities",
+    description: "Integer partition identities",
+  });
+  assert.deepEqual(
+    encounterEstablished(g, e).map((k) => [k.facet.id, k.status, k.partOf?.id]),
+    [["generating-functions", "demonstrated", "partition-identities"]],
+  );
+  const gaps = knowledgeGapContext(g, track);
+  assert.match(
+    gaps,
+    /Enumerative combinatorics \(part of Integer partition identities\) · learner said/,
+  );
+  assert.match(gaps, /Integer partition identities · learner said/);
+  const known = knowledgeEstablishedContext(g, track);
+  assert.match(
+    known,
+    /Generating functions \(part of Integer partition identities\) · demonstrated/,
+  );
+  // Records and the grown universe survive save/reload.
+  const reloaded = recover(decode(encode(g)));
+  assert.equal(reloaded.encounters[e.id].probe!.facets.length, 3);
+  assert.equal(
+    reloaded.study.knowledgeGaps!.find(
+      (x) => x.facet.id === "enumerative-combinatorics",
+    )!.partOf!.description,
+    "Integer partition identities",
+  );
 });

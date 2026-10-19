@@ -336,3 +336,73 @@ test("a reply with a malformed knowledge report is interrupted and awards nothin
     );
     assert.doesNotMatch(e.submissions[0].feedback, /conceded/);
   }));
+
+test("an apex gap descends through tutor-declared parts: the known part is established, the missing part is the recorded gap, and the key is granted", async () =>
+  fixture(async (g, e, calls, reply) => {
+    const apex = probeFacets(e.problem)[0];
+    reply(async () =>
+      Response.json({
+        text: "Two parts underlie that. First: what does a generating function do?",
+        complete: false,
+        knowledge: {
+          facets: [
+            { id: apex.id, status: "gap" },
+            {
+              id: "generating-functions",
+              status: "gap",
+              partOf: apex.id,
+              description: "Generating functions",
+            },
+            {
+              id: "enumerative-combinatorics",
+              status: "gap",
+              partOf: apex.id,
+              description: "Enumerative combinatorics",
+            },
+          ],
+          signal: { fluency: "declared-gap" },
+        },
+      }),
+    );
+    await send(g, e, "tutor", "I don't know that one", r);
+    assert.equal(e.probe.facets.length, probeFacets(e.problem).length + 2);
+    assert.equal(e.state !== "consumed", true);
+    assert.equal(g.study.knowledgeGaps, undefined);
+    reply(async () =>
+      Response.json({
+        text: "Generating functions: known. Counting by cases is the gap; recorded, and here is your key.",
+        complete: true,
+        outcome: "gap",
+        knowledge: {
+          facets: [
+            { id: "generating-functions", status: "demonstrated" },
+            { id: "enumerative-combinatorics", status: "gap" },
+          ],
+          signal: { fluency: "declared-gap" },
+        },
+      }),
+    );
+    await send(
+      g,
+      e,
+      "tutor",
+      "A generating function encodes a sequence as power-series coefficients; counting by cases I never learned",
+      r,
+    );
+    assert.equal(e.state, "consumed");
+    assert.equal(g.survivors[0].keys, 1);
+    assert.deepEqual(
+      g.study.knowledgeGaps.map((x: any) => [x.facet.id, x.partOf?.id]),
+      [["enumerative-combinatorics", apex.id]],
+    );
+    assert.match(e.submissions[0].feedback, /Enumerative combinatorics/);
+    assert.deepEqual(
+      g.study.knowledgeEstablished.map((x: any) => [x.facet.id, x.partOf?.id]),
+      [["generating-functions", apex.id]],
+    );
+    assert.match(
+      calls[0].payload.responseFormat.knowledge.facets[0].partOf,
+      /prerequisite the question did not list/,
+    );
+    assert.match(calls[0].payload.instruction, /partOf/);
+  }));
