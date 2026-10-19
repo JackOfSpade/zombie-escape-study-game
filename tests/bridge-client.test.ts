@@ -1,6 +1,11 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { bridgeRequest, checkBridge, status } from "../src/bridge-client";
+import {
+  BRIDGE_OUTAGE_GRACE_MS,
+  bridgeRequest,
+  checkBridge,
+  status,
+} from "../src/bridge-client";
 const reply = (mode = "study-mode") =>
   Response.json({
     mode,
@@ -120,4 +125,61 @@ test("queued tutor progress distinguishes an unclaimed request from worker picku
   );
   assert.deepEqual(progress, ["queued", "working"]);
   assert.equal(health, 1);
+});
+
+test("a queued request keeps waiting through a relay restart and only gives up after the grace period", async (t) => {
+  const original = globalThis.fetch,
+    originalNow = Date.now;
+  t.after(() => {
+    globalThis.fetch = original;
+    Date.now = originalNow;
+  });
+  // Restart: a dropped connection, a proxy 502 and unparseable output, then the answer.
+  const outage: (() => Promise<Response>)[] = [
+    async () => Response.json({ status: "pending" }, { status: 202 }),
+    async () => {
+      throw TypeError("fetch failed");
+    },
+    async () => new Response("Bad gateway", { status: 502 }),
+    async () => new Response("<html>", { status: 200 }),
+    async () => Response.json({ text: "Back", complete: false }),
+  ];
+  let polls = 0;
+  globalThis.fetch = async (url) => {
+    if (url === "/api/status") return reply("chatgpt-handoff");
+    if (url === "/api/bridge")
+      return Response.json(
+        { handoff: { id: "j", hash: "h" } },
+        { status: 202 },
+      );
+    if (String(url).startsWith("/api/handoff/status"))
+      return Response.json({
+        public: { terminalRelay: { activeSessions: 1 } },
+      });
+    return outage[polls++]();
+  };
+  await checkBridge();
+  assert.deepEqual(await bridgeRequest("tutor", { question: "q" }), {
+    text: "Back",
+    complete: false,
+  });
+  assert.equal(polls, outage.length);
+
+  // A relay that never comes back fails once the grace period has passed.
+  let now = 1_000_000;
+  Date.now = () => now;
+  globalThis.fetch = async (url) => {
+    if (url === "/api/status") return reply("chatgpt-handoff");
+    if (url === "/api/bridge")
+      return Response.json(
+        { handoff: { id: "j", hash: "h" } },
+        { status: 202 },
+      );
+    now += BRIDGE_OUTAGE_GRACE_MS / 2 + 1;
+    throw TypeError("fetch failed");
+  };
+  await assert.rejects(
+    bridgeRequest("tutor", { question: "q" }),
+    /stopped answering; your exact request is saved/,
+  );
 });

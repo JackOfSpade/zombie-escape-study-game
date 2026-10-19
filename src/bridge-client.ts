@@ -43,6 +43,8 @@ export async function checkBridge() {
   return bridgeStatus;
 }
 export type HandoffProgress = "queued" | "working" | "unknown";
+/** How long a queued request keeps waiting through a relay restart or proxy drop. */
+export const BRIDGE_OUTAGE_GRACE_MS = 60_000;
 /** Whether a study terminal app or worker chat is currently serving the relay,
  * from the last metadata poll. null until a poll has answered. */
 let listening: boolean | null = null;
@@ -76,7 +78,8 @@ export async function bridgeRequest(
       throw Error("Invalid queued bridge receipt");
     const receipt = data.handoff;
     onProgress?.("queued");
-    let nextProgressCheck = 0;
+    let nextProgressCheck = 0,
+      unreachableSince = 0;
     while (r.status === 202) {
       await new Promise<void>((resolve, reject) => {
         const timer = setTimeout(done, 500);
@@ -93,11 +96,31 @@ export async function bridgeRequest(
         if (signal.aborted) abort();
         else signal.addEventListener("abort", abort, { once: true });
       });
-      r = await fetch(
-        `/api/bridge/result?id=${encodeURIComponent(receipt.id)}&hash=${encodeURIComponent(receipt.hash)}`,
-        { signal },
-      );
-      data = await r.json();
+      try {
+        const next = await fetch(
+          `/api/bridge/result?id=${encodeURIComponent(receipt.id)}&hash=${encodeURIComponent(receipt.hash)}`,
+          { signal },
+        );
+        // A restarting relay or a dropped dev-server proxy answers 502-504.
+        if (next.status >= 502 && next.status <= 504)
+          throw Error("unavailable");
+        const nextData = await next.json();
+        r = next;
+        data = nextData;
+        unreachableSince = 0;
+      } catch (error) {
+        if (signal.aborted) throw error;
+        // The relay keeps queued jobs on disk across restarts, so a short
+        // outage must not interrupt the turn: keep waiting on the same job.
+        unreachableSince ||= Date.now();
+        if (Date.now() - unreachableSince > BRIDGE_OUTAGE_GRACE_MS)
+          throw Error(
+            "The study bridge stopped answering; your exact request is saved. Retry it when the bridge is back.",
+          );
+        listening = null;
+        onProgress?.("unknown");
+        continue;
+      }
       if (r.status === 202 && onProgress && Date.now() >= nextProgressCheck) {
         nextProgressCheck = Date.now() + 2000;
         try {
