@@ -30,7 +30,8 @@ export function devProblem(
         .map((_, i) => values.slice(i, i + size).reduce((a, b) => a + b, 0));
     return {
       title: "Signal window / prediction",
-      prompt: `Development exercise · ${contract.review ? "scheduled review" : "D1"}\n\nAn intake monitor reads ${JSON.stringify(values)}. A window of ${size} consecutive readings moves one position at a time. Predict the largest window total. Explain what changes and what stays true when the window moves; describe a boundary worth checking. No full implementation is required.\n\nTarget scope: ${contract.scopes[0]}${gapLine(g, contract.track)}`,
+      // Player-facing text only: the scheduled scope stays in the contract.
+      prompt: `An intake monitor reads ${JSON.stringify(values)}. A window of ${size} consecutive readings slides one position at a time.\n\nPredict the largest window total. Explain what changes and what stays the same each time the window slides, and name one edge case worth checking. No code is needed.${gapLine(g, contract.track)}`,
       rubric: [
         "Correct predicted total",
         "Explain update/state and a relevant boundary",
@@ -48,10 +49,10 @@ export function devProblem(
         : "Product decision / critique",
     prompt:
       contract.objectiveIds[0] === "PE:X09.1"
-        ? `Development rehearsal · Use a REAL project you worked on. Briefly state the user problem, your personal role, and one actual decision. Separate your own work from the team’s work. Do not invent metrics.\n\n${contract.scopes[0]}${gapLine(g, contract.track)}`
+        ? `Use a real project you worked on. Briefly state the user problem, your personal role, and one actual decision. Separate your own work from the team’s work. Do not invent metrics.\n\nWhat to cover: ${contract.scopes[0]}${gapLine(g, contract.track)}`
         : contract.track === "PY"
-          ? `Development rehearsal · D1\n\nRead this small Python trace:\n\nvalues = ${JSON.stringify(values)}\ncount = 0\nfor value in values:\n    if value > ${threshold}:\n        count += 1\n\nPredict count, explain the state after a processed prefix, and one boundary. This local practice is illustrative; the live generator must cover the exact scheduled scope below.\n\nScheduled scope: ${contract.scopes[0]}${gapLine(g, contract.track)}`
-          : `Development rehearsal · D1\n\nA customer-facing creative tool lets a signed-in owner share a project with a read-only collaborator. Shared links can be revoked immediately. The service has ${n * 100} daily users. Explain the following scheduled capability using this scenario. Identify one assumption and a failure or boundary case. Multiple defensible answers are allowed. No implementation is required.\n\n${contract.scopes[0]}${gapLine(g, contract.track)}`,
+          ? `Read this small Python trace:\n\nvalues = ${JSON.stringify(values)}\ncount = 0\nfor value in values:\n    if value > ${threshold}:\n        count += 1\n\nPredict the final value of count. Explain what count means partway through, after the loop has seen only the first few values, and name one edge case worth checking. No code is needed.${gapLine(g, contract.track)}`
+          : `A customer-facing creative tool lets a signed-in owner share a project with a read-only collaborator. Shared links can be revoked immediately. The service has ${n * 100} daily users.\n\nUsing this scenario, show how you would handle this: ${contract.scopes[0]} Identify one assumption and one failure or edge case. Several answers can be right. No code is needed.${gapLine(g, contract.track)}`,
     rubric: [
       "Address the supplied contract",
       "Explain assumptions and a boundary",

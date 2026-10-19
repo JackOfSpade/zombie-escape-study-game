@@ -141,9 +141,22 @@ const panelReturnFocus = new Map<string, HTMLElement>();
 function panelToggle(id: string) {
   return $(id === "settings" ? "#settings-toggle" : "#curriculum-button");
 }
+// The open terminal re-renders on every UI tick. Rewriting unchanged text or
+// markup replaces its nodes, which clears any selection the player is making,
+// so panel writes only touch the DOM when the content actually changes.
 function setText(selector: string, text: string) {
-  const el = $(selector);
+  setNodeText($(selector), text);
+}
+function setNodeText(el: Element, text: string) {
   if (el.textContent !== text) el.textContent = text;
+}
+const writtenHtml = new WeakMap<Element, string>();
+function setHtml(el: Element, html: string) {
+  // Compare with what was written: the browser normalises innerHTML (for
+  // example &#39; reads back as '), so reading it back never matches.
+  if (writtenHtml.get(el) === html) return;
+  writtenHtml.set(el, html);
+  el.innerHTML = html;
 }
 function openPanel(id: string, focus: string) {
   const panel = $(`#${id}`);
@@ -438,16 +451,22 @@ function renderTerminal(force = false) {
   if (!active || game.paused) return;
   const e = game.encounters[active];
   tab = terminalChannel(e);
-  $("#conversation-title").textContent =
-    tab === "tutor" ? "Terminal AI" : "Group chat";
-  $("#conversation-context").textContent =
+  setText(
+    "#conversation-title",
+    tab === "tutor" ? "Terminal AI" : "Group chat",
+  );
+  setText(
+    "#conversation-context",
     tab === "tutor"
       ? "@study · Answer and reason here. Terminal AI assumes you already know this and starts from the question that establishes the most at once; one good answer can settle several facets. If you do not know something, say so: the gap is recorded for later study and the key is still granted. Access and a key are awarded when it marks the conversation complete."
-      : "Discuss with your group. They can read the current answer draft. Chatting does not submit it.";
-  $("#answer-context").textContent =
+      : "Discuss with your group. They can read the current answer draft. Chatting does not submit it.",
+  );
+  setText(
+    "#answer-context",
     tab === "tutor"
       ? "This is your submission. Your tutor can help in the panel beside it."
-      : "This is the group's submission draft. Use group chat beside it to discuss changes.";
+      : "This is the group's submission draft. Use group chat beside it to discuss changes.",
+  );
   const dialogue = e.mode === "solo";
   $("#terminal").classList.toggle("dialogue-terminal", dialogue);
   $("#legacy-answer").hidden = dialogue;
@@ -455,7 +474,8 @@ function renderTerminal(force = false) {
   const conceded = encounterGaps(game, e);
   $("#dialogue-status").hidden =
     !dialogue || (e.state !== "consumed" && !probeLine);
-  $("#dialogue-status").textContent =
+  setText(
+    "#dialogue-status",
     e.state === "consumed"
       ? `${
           conceded.length
@@ -464,12 +484,13 @@ function renderTerminal(force = false) {
         } You can keep discussing the question.${probeLine ? ` ${probeLine}.` : ""}`
       : probeLine
         ? `Knowledge probe · ${probeLine}. Say so if you do not know something; the gap is recorded and the key still granted.`
-        : "Work through the question with Terminal AI. Your answers stay in this conversation.";
+        : "Work through the question with Terminal AI. Your answers stay in this conversation.",
+  );
   const composer = $<HTMLTextAreaElement>("#chat-input");
   if (force || document.activeElement !== composer)
     composer.value = e.chatDraft ?? "";
   $("#saved-answer").hidden = !dialogue || !e.workspace;
-  $("#saved-answer-text").textContent = e.workspace;
+  setText("#saved-answer-text", e.workspace);
   $("#submission-help").hidden = dialogue;
   const chatPending = (e.tutorRequests ?? []).some(
     (j) => j.state === "pending",
@@ -487,23 +508,29 @@ function renderTerminal(force = false) {
   );
   editor.dataset.mode = e.problem?.runtime ? "code" : "text";
   presentProblem(game, e, roadmap);
-  $("#terminal-type").textContent =
-    `${e.mode === "shared" ? "LINKED ROOM · ONE WORKSPACE" : e.questionRoom ? "ROOM QUESTION · PRIVATE ANSWER" : "INDIVIDUAL STATION"} / ${e.reward === "loot" ? "EQUIPMENT CACHE" : "PERSONAL STAIR ACCESS"}`;
-  $("#problem-title").textContent =
+  setText(
+    "#terminal-type",
+    `${e.mode === "shared" ? "LINKED ROOM · ONE WORKSPACE" : e.questionRoom ? "ROOM QUESTION · PRIVATE ANSWER" : "INDIVIDUAL STATION"} / ${e.reward === "loot" ? "EQUIPMENT CACHE" : "PERSONAL STAIR ACCESS"}`,
+  );
+  setText(
+    "#problem-title",
     e.problem?.title ??
-    (e.state === "consumed"
-      ? "Survivor-completed lock"
-      : e.error
-        ? "Connection unavailable"
-        : "Connecting…");
-  $("#terminal-provenance").textContent =
+      (e.state === "consumed"
+        ? "Survivor-completed lock"
+        : e.error
+          ? "Connection unavailable"
+          : "Connecting…"),
+  );
+  setText(
+    "#terminal-provenance",
     e.problem?.provenance === "chatgpt-handoff"
       ? "ChatGPT handoff · Native Study Mode unverified"
       : e.problem?.provenance === "study-mode"
         ? "Study Mode bridge · Saved provider provenance"
         : !e.problem && game.study.profile === "live"
           ? "Live study request · Awaiting a validated problem"
-          : "Development practice · AI acceptance required · No academic credit";
+          : "Development practice · AI acceptance required · No academic credit",
+  );
   if (e.problem?.contract.practice)
     $("#terminal-provenance").textContent +=
       " · Variety practice on another topic of this tier: knowledge is probed and recorded, but this is not the scheduled visit";
@@ -515,12 +542,14 @@ function renderTerminal(force = false) {
   )
     $("#terminal-provenance").textContent +=
       " · Resolved in your imported roadmap. Your original puzzle and draft remain playable; finishing grants gameplay rewards without another academic visit.";
-  $("#problem").textContent =
+  setText(
+    "#problem",
     e.problem?.prompt ??
-    (e.state === "consumed"
-      ? "Other survivors have already used this one-time terminal. No saved question is available for this simulated NPC-only outcome. It grants no human learning credit. Find an unused terminal to work toward your personal access."
-      : (e.error ??
-        "Generating a stable curriculum-scoped problem. You can leave immediately."));
+      (e.state === "consumed"
+        ? "Other survivors have already used this one-time terminal. No saved question is available for this simulated NPC-only outcome. It grants no human learning credit. Find an unused terminal to work toward your personal access."
+        : (e.error ??
+          "Generating a stable curriculum-scoped problem. You can leave immediately.")),
+  );
   if (force || document.activeElement !== editor || e.state === "consumed") {
     if (editor.value !== e.workspace) editor.value = e.workspace;
     editorRevision = e.revision;
@@ -542,7 +571,8 @@ function renderTerminal(force = false) {
       status().capabilities.includes("materialize-outcome");
     const signature = `${encounterKey(e)}/${inspection?.state}/${inspection?.error}/${e.outcomeNotice}/${ready}/${visible}`;
     if (signature !== outcomeSignature) {
-      $("#npc-outcome-status").textContent =
+      setText(
+        "#npc-outcome-status",
         inspection?.state === "applied" && !visible
           ? "Saved reconstruction deferred because its original outcome or current learning ceiling changed."
           : inspection?.state === "applied"
@@ -553,14 +583,17 @@ function renderTerminal(force = false) {
                 e.outcomeNotice ??
                 (ready
                   ? "This lock was completed by simulated survivors. Inspect a consistent solution without changing its outcome."
-                  : "Exact survivor solutions require a connected outcome-inspection capability. The simulated world result is preserved."));
+                  : "Exact survivor solutions require a connected outcome-inspection capability. The simulated world result is preserved.")),
+      );
       const button = $<HTMLButtonElement>("#inspect-npc-outcome");
       button.hidden = inspection?.state === "applied";
       button.disabled = !ready || inspection?.state === "pending";
-      button.textContent =
+      setNodeText(
+        button,
         inspection && inspection.state !== "pending"
           ? "Retry saved solution inspection"
-          : "Inspect survivor solution";
+          : "Inspect survivor solution",
+      );
       const body = $("#npc-outcome-body");
       body.innerHTML =
         visible && inspection?.candidate
@@ -620,21 +653,38 @@ function renderTerminal(force = false) {
     }
     proposalSignature = candidateSignature;
   }
-  $("#revision").textContent =
-    `v${e.revision}${e.state === "consumed" ? " · consumed / read-only" : ""}`;
+  setText(
+    "#revision",
+    `v${e.revision}${e.state === "consumed" ? " · consumed / read-only" : ""}`,
+  );
   $<HTMLButtonElement>("#submit").disabled =
     !e.problem ||
     e.state === "consumed" ||
     e.submissions.some((s) => s.status === "pending");
   const disconnected =
     status().mode === "development" && e.state !== "consumed";
-  $("#completion-connection").hidden = !disconnected && !reconnectProgress;
-  $("#completion-connection").textContent =
+  // Connected to the bridge, but no study terminal app or worker is serving it.
+  const unheard =
+    status().mode === "chatgpt-handoff" &&
+    relayListening() === false &&
+    e.state !== "consumed";
+  $("#completion-connection").hidden =
+    !disconnected && !unheard && !reconnectProgress;
+  setText(
+    "#completion-connection",
     reconnectProgress ??
-    (disconnected
-      ? "ChatGPT is disconnected. Your work is saved, but replies require reconnecting. Restarting the bridge turns sharing off until you enable it again. Game-server restarts reuse a running bridge."
-      : "");
-  $("#connect-completion").hidden = !disconnected || reconnectBusy;
+      (disconnected
+        ? "ChatGPT is disconnected. Your work is saved. Connect ChatGPT sets everything up and opens ChatGPT for you."
+        : unheard
+          ? "ChatGPT isn't listening for this terminal yet. Connect ChatGPT opens it for you with the request ready."
+          : ""),
+  );
+  $("#connect-completion").hidden =
+    (!disconnected && !unheard) || reconnectBusy;
+  const openLink = $<HTMLAnchorElement>("#open-chatgpt");
+  openLink.hidden = !reconnectChatUrl;
+  if (reconnectChatUrl && openLink.href !== reconnectChatUrl)
+    openLink.href = reconnectChatUrl;
   const lastSubmission = e.submissions.at(-1),
     retryCompletion = $<HTMLButtonElement>("#retry-submission");
   retryCompletion.hidden =
@@ -645,16 +695,19 @@ function renderTerminal(force = false) {
   runButton.hidden = !runnable;
   runButton.disabled =
     e.executions?.some((job) => job.status === "pending") ?? false;
-  runButton.textContent = runButton.disabled
-    ? "Running captured code…"
-    : e.problem?.runtime?.environment === "react"
-      ? "Run React checks"
-      : `Run ${e.problem?.runtime?.language ?? "code"}`;
+  setNodeText(
+    runButton,
+    runButton.disabled
+      ? "Running captured code…"
+      : e.problem?.runtime?.environment === "react"
+        ? "Run React checks"
+        : `Run ${e.problem?.runtime?.language ?? "code"}`,
+  );
   $("#execution-results").hidden = !e.executions?.length;
-  $("#execution-output").textContent = (e.executions ?? [])
-    .slice(-5)
-    .map(executionText)
-    .join("\n\n");
+  setText(
+    "#execution-output",
+    (e.executions ?? []).slice(-5).map(executionText).join("\n\n"),
+  );
   const previewJob = (e.executions ?? [])
       .slice()
       .reverse()
@@ -681,18 +734,23 @@ function renderTerminal(force = false) {
       image.width = previewJob.preview.width;
       image.height = previewJob.preview.height;
       image.alt = `Captured React output for workspace revision ${previewJob.revision}`;
-      caption.textContent = `Saved browser output · v${previewJob.revision}. Task checks run automatically; this image does not establish correctness or independent understanding.`;
+      setNodeText(
+        caption,
+        `Saved browser output · v${previewJob.revision}. Task checks run automatically; this image does not establish correctness or independent understanding.`,
+      );
       previewHost.append(image, caption);
     }
   }
   const submission = submissionView(e);
-  $("#submission-status").textContent = submission.label;
+  setText("#submission-status", submission.label);
   $("#submission-status").dataset.state = submission.tone;
-  $("#submission-help").textContent = submission.help;
-  $("#loot").innerHTML =
+  setText("#submission-help", submission.help);
+  setHtml(
+    $("#loot"),
     e.reward === "loot" && e.state === "consumed"
       ? `<p>Finite cache · choose within pack capacity</p>${e.loot.map((i) => `<button data-take="${escape(i.id)}">${escape(itemInfo(i.kind).label)} · ${i.weight} kg</button>`).join("")}`
-      : "";
+      : "",
+  );
   for (const el of document.querySelectorAll<HTMLButtonElement>("[data-take]"))
     el.onclick = () => {
       if (takeLoot(game, human(game), e.id, el.dataset.take!)) {
@@ -703,7 +761,7 @@ function renderTerminal(force = false) {
   presentMessages(game, e, tab);
   const latestCatchup = e.catchups?.at(-1);
   $("#catchup-status").hidden = tab !== "group" || !e.catchupNotice;
-  $("#catchup-status").textContent = e.catchupNotice ?? "";
+  setText("#catchup-status", e.catchupNotice ?? "");
   $("#retry-catchup").hidden =
     tab !== "group" ||
     !latestCatchup ||
@@ -720,14 +778,16 @@ function renderTerminal(force = false) {
     ].includes(h.kind),
   );
   const log = $<HTMLDetailsElement>("#work-log");
-  $("#team-work-status").textContent = e.materializationNotice ?? "";
+  setText("#team-work-status", e.materializationNotice ?? "");
   $("#team-work-status").hidden = !e.materializationNotice;
   $("#retry-team-work").hidden = !(e.materializations ?? []).some((j) =>
     ["failed", "interrupted"].includes(j.state),
   );
   log.hidden = tab !== "group" || !work.length;
-  log.querySelector("summary")!.textContent =
-    `Recorded group work (${work.length})`;
+  setNodeText(
+    log.querySelector("summary")!,
+    `Recorded group work (${work.length})`,
+  );
   if (tab === "group" && log.open) {
     presentWorkLog(game, e);
     const signature = `${encounterKey(e)}/${work.length}/${work.at(-1)?.seq}`;
@@ -761,7 +821,7 @@ function renderTerminal(force = false) {
             j.state === "pending"
               ? j.transportPhase === "queued"
                 ? relayListening() === false
-                  ? "Queued, but nothing is listening in ChatGPT. Open a ChatGPT chat with the zombie-escape-study-game app and ask it to open your study terminal (or resume it if it paused); a connected tunnel cannot generate replies. Survival continues."
+                  ? "Queued, but nothing is listening in ChatGPT yet. Press Connect ChatGPT below: it sets everything up and opens ChatGPT with the request ready. Survival continues."
                   : "Queued for ChatGPT. Keep the study terminal app open in a regular ChatGPT chat, or a bridge chat actively serving requests; a connected tunnel cannot generate replies. Survival continues."
                 : j.transportPhase === "working"
                   ? "Picked up by ChatGPT; waiting for its reply. Survival continues."
@@ -770,8 +830,8 @@ function renderTerminal(force = false) {
           }${j.state === "interrupted" ? `<button class="quiet" data-question-retry="${escape(j.id)}" data-channel="${tab}">Retry saved ${tab === "tutor" ? "private" : "group"} question</button>` : ""}</p>`,
       )
       .join("");
-  if (tutorStatus.innerHTML !== tutorHtml) {
-    tutorStatus.innerHTML = tutorHtml;
+  if (writtenHtml.get(tutorStatus) !== tutorHtml) {
+    setHtml(tutorStatus, tutorHtml);
     for (const button of tutorStatus.querySelectorAll<HTMLButtonElement>(
       "[data-question-retry]",
     ))
@@ -795,8 +855,8 @@ function renderTerminal(force = false) {
         `<div class="message ${m.kind}"><strong>${escape(game.survivors.find((a) => a.id === m.author)?.name ?? m.author)}</strong><p>${escape(m.text)}</p></div>`,
     )
     .join("");
-  if ($("#messages").innerHTML !== html) {
-    $("#messages").innerHTML = html;
+  if (writtenHtml.get($("#messages")) !== html) {
+    setHtml($("#messages"), html);
     $("#messages").scrollTop = $("#messages").scrollHeight;
   }
 }
@@ -828,7 +888,12 @@ $("#run-code").onclick = () => {
   renderTerminal();
 };
 $("#connect-completion").onclick = () => {
-  void reconnectChatGpt();
+  // Browsers only allow a new tab during the click itself, so reserve one now
+  // unless a terminal is already listening; setup then points it at ChatGPT.
+  const tab =
+    relayListening() === true ? null : window.open("about:blank", "_blank");
+  if (tab) tab.opener = null;
+  void reconnectChatGpt(tab);
 };
 $("#submit").onclick = () => {
   if (!active) return;
@@ -935,6 +1000,7 @@ $("#curriculum-button").onclick = () => {
   const readiness = (["PY", "PE"] as const)
     .map((track) => readinessHtml(game, roadmap, track))
     .join("");
+  // A full rebuild: the sections below are appended to this fresh summary.
   $("#inspector-content").innerHTML = inspectorSummaryHtml(
     game,
     roadmap,
@@ -1116,9 +1182,11 @@ $("#curriculum-button").onclick = () => {
         void assess(game, e, roadmap, a.evidenceCutoffSequence, true).then(
           () => {
             persist();
-            button.textContent =
+            setNodeText(
+              button,
               game.study.assessments.find((item) => item.id === a.id)?.status ??
-              "Saved";
+                "Saved",
+            );
           },
         );
     };
@@ -1137,11 +1205,15 @@ $("#curriculum-button").onclick = () => {
       game.study.roadmapExport = prepared;
       await persist();
       download("interview_prep_roadmap.md", prepared.content, "text/markdown");
-      $("#progress-export-status").textContent =
-        `Saved complete revision ${prepared.revision}. Original curriculum and historical evidence preserved. ${saveError || ""}`;
+      setText(
+        "#progress-export-status",
+        `Saved complete revision ${prepared.revision}. Original curriculum and historical evidence preserved. ${saveError || ""}`,
+      );
     } catch (err) {
-      $("#progress-export-status").textContent =
-        `Export needs review: ${err instanceof Error ? err.message : String(err)}`;
+      setText(
+        "#progress-export-status",
+        `Export needs review: ${err instanceof Error ? err.message : String(err)}`,
+      );
     } finally {
       button.disabled = false;
     }
@@ -1182,9 +1254,12 @@ async function refreshHandoff() {
       info.autonomousWork === true && game.settings.handoffAutonomous === true;
     $<HTMLInputElement>("#handoff-autonomous").disabled = !info.enabled;
     const external = info.public;
-    $("#handoff-public-status").textContent = external?.configured
-      ? `${info.tunnel?.verified ? "Connector discovery verified" : (info.tunnel?.state ?? "off")} · ${external.linked ? "ChatGPT paired" : "ChatGPT not paired"} · ${external.workerActive ? "Worker instructions created" : "No current worker"}${info.tunnel?.error ? ` · ${info.tunnel.error}` : ""}`
-      : "A separate connector has not been configured on this server yet.";
+    setText(
+      "#handoff-public-status",
+      external?.configured
+        ? `${info.tunnel?.verified ? "Connector discovery verified" : (info.tunnel?.state ?? "off")} · ${external.linked ? "ChatGPT paired" : "ChatGPT not paired"} · ${external.workerActive ? "Worker instructions created" : "No current worker"}${info.tunnel?.error ? ` · ${info.tunnel.error}` : ""}`
+        : "A separate connector has not been configured on this server yet.",
+    );
     $<HTMLInputElement>("#handoff-mcp-url").value = external?.mcpUrl ?? "";
     for (const id of [
       "start-public",
@@ -1196,24 +1271,26 @@ async function refreshHandoff() {
       "revoke",
     ])
       $<HTMLButtonElement>(`#handoff-${id}`).disabled = !external?.configured;
-    if (!external?.pairingOpen) $("#handoff-pairing-code").textContent = "";
+    if (!external?.pairingOpen) setText("#handoff-pairing-code", "");
     const replies = $("#handoff-replies");
     replies.replaceChildren();
     for (const job of info.recent ?? []) {
       if (job.status !== "done") continue;
       const button = document.createElement("button");
       button.className = "quiet";
-      button.textContent = `Request corrected ${job.operation} reply`;
+      setNodeText(button, `Request corrected ${job.operation} reply`);
       button.onclick = () => {
         void handoffControl("reopen", undefined, job.id);
       };
       replies.append(button);
     }
-    $("#handoff-status").textContent =
-      `${info.enabled ? "Released" : "Disabled"} · ${info.queued} waiting · ${info.working} with worker · ${info.done} answered.${info.heldAutonomous ? ` ${info.heldAutonomous} NPC requests held until unattended work is enabled again.` : ""} ChatGPT connection is configured separately.`;
+    setText(
+      "#handoff-status",
+      `${info.enabled ? "Released" : "Disabled"} · ${info.queued} waiting · ${info.working} with worker · ${info.done} answered.${info.heldAutonomous ? ` ${info.heldAutonomous} NPC requests held until unattended work is enabled again.` : ""} ChatGPT connection is configured separately.`,
+    );
   } catch (error) {
     if (version === handoffStatusVersion)
-      $("#handoff-status").textContent = String(error);
+      setText("#handoff-status", String(error));
   }
 }
 async function handoffControl(
@@ -1237,19 +1314,21 @@ async function handoffControl(
     if (action === "autonomous")
       game.settings.handoffAutonomous = result.autonomousWork === true;
     if (result.pairingCode)
-      $("#handoff-pairing-code").textContent =
-        `Pairing code: ${result.pairingCode}. Enter it only on the connector's authorization page; it is not a chat prompt.`;
+      setText(
+        "#handoff-pairing-code",
+        `Pairing code: ${result.pairingCode}. Enter it only on the connector's authorization page; it is not a chat prompt.`,
+      );
     if (action === "stop-worker" || action === "revoke")
       $<HTMLTextAreaElement>("#handoff-starter").value = "";
     if (result.starter)
       $<HTMLTextAreaElement>("#handoff-starter").value = result.starter;
     await checkBridge();
-    $("#bridge-detail").textContent = status().detail;
+    setText("#bridge-detail", status().detail);
     await refreshHandoff();
   } catch (error) {
     if (version !== handoffControlVersion || game !== requestGame) return;
     await refreshHandoff();
-    $("#handoff-status").textContent = String(error);
+    setText("#handoff-status", String(error));
   }
 }
 $<HTMLTextAreaElement>("#handoff-starter").value =
@@ -1285,16 +1364,28 @@ $("#handoff-copy").onclick = () => {
   void navigator.clipboard
     .writeText($<HTMLTextAreaElement>("#handoff-starter").value)
     .then(() => {
-      $("#handoff-status").textContent =
-        "Worker instructions copied. Paste them in your connected ChatGPT chat.";
+      setText(
+        "#handoff-status",
+        "Worker instructions copied. Paste them in your connected ChatGPT chat.",
+      );
     })
     .catch(() => {
-      $("#handoff-status").textContent =
-        "Select and copy the worker instructions above.";
+      setText(
+        "#handoff-status",
+        "Select and copy the worker instructions above.",
+      );
     });
 };
 let reconnectProgress: string | null = null,
-  reconnectBusy = false;
+  reconnectBusy = false,
+  reconnectChatUrl: string | null = null;
+/** A new ChatGPT chat with the request typed in. ChatGPT may send it on its
+ * own; links from other sites are sometimes only prefilled. */
+const CHATGPT_TERMINAL_URL =
+  "https://chatgpt.com/?q=" +
+  encodeURIComponent(
+    "Open my zombie-escape-study-game study terminal so it can serve my game's terminal turns.",
+  );
 function reportReconnect(text: string | null) {
   reconnectProgress = text;
   if (active) renderTerminal();
@@ -1321,8 +1412,16 @@ const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 /** One click does the whole reconnect: start the public connector if needed,
  * release live study requests, then wait for a study terminal or worker to
  * be ready in ChatGPT. Settings stay closed; progress is reported in place. */
-async function reconnectChatGpt() {
-  if (reconnectBusy) return;
+async function reconnectChatGpt(tab: Window | null = null) {
+  if (reconnectBusy) {
+    tab?.close();
+    return;
+  }
+  let chatOpened = false;
+  // Close the reserved tab only while it is still our blank page.
+  const closeUnusedTab = () => {
+    if (tab && !chatOpened && !tab.closed) tab.close();
+  };
   reconnectBusy = true;
   const requestGame = game;
   try {
@@ -1361,17 +1460,32 @@ async function reconnectChatGpt() {
       info = await handoffStatus();
       const ready = relayServes(info);
       if (ready) break;
+      if (i === 0) {
+        // Point the reserved tab at a new ChatGPT chat with the request typed
+        // in; if the browser blocked it, offer the same chat as a link.
+        if (tab && !tab.closed) {
+          tab.location.href = CHATGPT_TERMINAL_URL;
+          chatOpened = true;
+        } else reconnectChatUrl = CHATGPT_TERMINAL_URL;
+      }
       reportReconnect(
-        "Connected and released, but nothing is listening yet. In ChatGPT, open a chat with the zombie-escape-study-game app and ask it to open your study terminal (or press Resume if it paused); this notice clears when it is ready.",
+        chatOpened
+          ? "Connected and released. ChatGPT opened in a new tab with the request typed in; if it didn't send by itself, press Enter there. This clears when your terminal is ready."
+          : "Connected and released. Open ChatGPT below to start your study terminal; if the request doesn't send by itself, press Enter there. This clears when your terminal is ready.",
       );
       await wait(3000);
     }
+    reconnectChatUrl = null;
+    // Already listening: the reserved tab isn't needed.
+    closeUnusedTab();
     reportReconnect(
       "Done. ChatGPT is connected and your study terminal is ready; send a message below.",
     );
     await wait(6000);
     if (reconnectProgress?.startsWith("Done.")) reportReconnect(null);
   } catch (error) {
+    reconnectChatUrl = null;
+    closeUnusedTab();
     reportReconnect(String(error instanceof Error ? error.message : error));
     await wait(8000);
     reportReconnect(null);

@@ -53,7 +53,11 @@ test("a late player can use an initially generated opportunity after nineteen NP
   await page.locator("#world").focus();
   await page.keyboard.press("e");
   await expect(page.locator("#terminal")).toBeVisible();
-  await expect(page.locator("#problem")).toContainText("Development");
+  // The practice label lives in the provenance line, not in the question.
+  await expect(page.locator("#terminal-provenance")).toContainText(
+    "Development practice",
+  );
+  await expect(page.locator("#problem")).not.toBeEmpty();
   const problem = await page.locator("#problem").textContent();
   const draft =
     "Late arrival: my independent reasoning stays at this exact terminal.";

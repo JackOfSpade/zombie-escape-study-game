@@ -1,6 +1,15 @@
 import { expect, test, type Page } from "@playwright/test";
 
+/** Tests never reach the real ChatGPT: popups land on a local stub page. */
+async function stubChatGpt(page: Page) {
+  await page
+    .context()
+    .route("https://chatgpt.com/**", (route) =>
+      route.fulfill({ contentType: "text/html", body: "<title>stub</title>" }),
+    );
+}
 async function openSoloTerminal(page: Page) {
+  await stubChatGpt(page);
   await page.goto("/");
   await page.getByRole("button", { name: "Enter the building" }).click();
   await page.evaluate(async () => {
@@ -99,13 +108,22 @@ test("Reconnect ChatGPT runs the whole sequence itself, keeps Settings closed, r
     notice = page.locator("#completion-connection");
   await expect(button).toBeVisible();
   await expect(notice).toContainText("ChatGPT is disconnected");
+  await expect(button).toHaveText("Connect ChatGPT");
+  const popup = page.waitForEvent("popup");
   await button.click();
+  const chat = await popup;
   await expect(page.locator("#settings")).toBeHidden();
   await expect(button).toBeHidden();
   await expect(notice).toContainText("Connected and released", {
     timeout: 15_000,
   });
+  await expect(notice).toContainText("ChatGPT opened in a new tab");
   expect(actions).toEqual(["start-public", "enable"]);
+  // The reserved tab now holds a new ChatGPT chat with the request typed in.
+  await chat.waitForURL(/^https:\/\/chatgpt\.com\/\?q=/);
+  expect(new URL(chat.url()).searchParams.get("q")).toMatch(
+    /zombie-escape-study-game study terminal/,
+  );
   await expect(page.locator("#settings")).toBeHidden();
   relay.sessions = 1;
   await expect(notice).toContainText("Done. ChatGPT is connected", {
@@ -154,10 +172,14 @@ test("Reconnect ChatGPT reports what it cannot do on its own when the connector 
     await route.fulfill({ status: 409, json: { error: "unexpected" } });
   });
   await openSoloTerminal(page);
+  const popup = page.waitForEvent("popup");
   await page.locator("#connect-completion").click();
+  const reserved = await popup;
   await expect(page.locator("#completion-connection")).toContainText(
     "not paired",
   );
+  // Setup failed before ChatGPT was needed: the reserved blank tab is closed.
+  await expect.poll(() => reserved.isClosed()).toBe(true);
   await expect(page.locator("#settings")).toBeHidden();
   expect(actions).toEqual([]);
   await expect(page.locator("#connect-completion")).toBeVisible({
@@ -213,6 +235,19 @@ test("a queued terminal message says when nothing in ChatGPT is listening", asyn
     "nothing is listening in ChatGPT",
     { timeout: 15_000 },
   );
+  // One button sets up and opens the ChatGPT chat; no manual steps.
+  const button = page.locator("#connect-completion");
+  await expect(button).toBeVisible();
+  await expect(page.locator("#completion-connection")).toContainText(
+    "isn't listening for this terminal yet",
+  );
+  const popup = page.waitForEvent("popup");
+  await button.click();
+  const chat = await popup;
+  await chat.waitForURL(/^https:\/\/chatgpt\.com\/\?q=/);
+  await expect(page.locator("#completion-connection")).toContainText(
+    "ChatGPT opened in a new tab",
+  );
   activeSessions = 1;
   await expect(page.locator("#tutor-request-status")).toContainText(
     "Queued for ChatGPT. Keep the study terminal app open",
@@ -221,4 +256,10 @@ test("a queued terminal message says when nothing in ChatGPT is listening", asyn
   await expect(page.locator("#tutor-request-status")).not.toContainText(
     "nothing is listening",
   );
+  await expect(page.locator("#completion-connection")).toContainText(
+    "Done. ChatGPT is connected",
+    { timeout: 15_000 },
+  );
+  await expect(button).toBeHidden();
+  expect(chat.isClosed()).toBe(false);
 });

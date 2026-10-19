@@ -170,10 +170,6 @@
               ></span>
             </div>
           </div>
-          <p id="completion-connection" class="muted" role="status" hidden></p>
-          <button id="connect-completion" class="quiet" hidden>
-            Reconnect ChatGPT
-          </button>
           <p id="submission-help" class="muted"></p>
           <button id="retry-submission" class="quiet" hidden>
             Retry answer check
@@ -204,6 +200,16 @@
             <div id="work-log-body"></div>
           </details>
           <div id="tutor-request-status" hidden></div>
+          <p id="completion-connection" class="muted" role="status" hidden></p>
+          <button id="connect-completion" hidden>Connect ChatGPT</button>
+          <a
+            id="open-chatgpt"
+            class="quiet"
+            target="_blank"
+            rel="noopener noreferrer"
+            hidden
+            >Open ChatGPT</a
+          >
           <form id="chat-form">
             <textarea
               rows="3"

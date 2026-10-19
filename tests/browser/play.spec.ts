@@ -43,7 +43,11 @@ test("real browser: launch, playable movement, no typing capture, exact resume, 
   });
   await page.keyboard.press("e");
   await expect(page.locator("#terminal")).toBeVisible();
-  await expect(page.locator("#problem")).toContainText("Development");
+  // The practice label lives in the provenance line, not in the question.
+  await expect(page.locator("#terminal-provenance")).toContainText(
+    "Development practice",
+  );
+  await expect(page.locator("#problem")).not.toBeEmpty();
   const prompt = await page.locator("#problem").textContent();
   await page
     .locator("#workspace")
