@@ -86,6 +86,10 @@ Loading a saved game does not regenerate its floors or learning state. Restartin
 
 `vault-stacked-barricade.json` exercises adjacent furniture, native contacts and a mid-vault JSON/physics checkpoint. Vaults extend past every successive movable prop blocking the landing, stopping at the first safe gap; there is no object-count or arbitrary distance cap. Walls, closed doors, floor boundaries and occupied landings remain solid. Unit cases cover all five movable furniture types at multiple angles. NPC handling regressions cover conflicting restored plans, cooperative same-goal transport, progress toward handling/route goals, bounded retry and real egress blockers. Successful and failed human Space attempts are recorded in local run diagnostics.
 
+## Furniture weight against zombies
+
+`heavy-furniture-holds-crowd.json` and `desk-blocks-crowd.json` measure how long heavy furniture blocks a doorway: 60 s with no crossing, no shove and actual attack damage. `zombie-shoves-chair.json` checks that one zombie physically shoves a chair through within seconds instead of breaking it. The lab steps at a fixed 30 Hz, so `tests/zombie-furniture-push.test.ts` also replays these fixtures at 60 and 120 Hz; the old per-frame velocity reset pushed harder at higher display rates.
+
 ## Terminal conversation integration
 
 `tests/terminal-dialogue-harness.test.ts` uses a forward force-field `TestRunner` world and an isolated real loopback relay, memory-only queue and authenticated synthetic worker. It checks the actual `send`/poll/result path across a follow-up, malformed reply correction, sharing revocation during a claim, worker release, save/reload, byte-identical retry and exactly one personal key/stair reward. It also verifies that development completion leaves the learner ledger unchanged. No live connector, model, real save or credentials are used. Test worlds rebind every encounter’s `runId` to the scenario’s synthetic run ID; otherwise private session validation rejects these requests before they reach the relay.

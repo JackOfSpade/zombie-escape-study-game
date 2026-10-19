@@ -64,6 +64,10 @@ The source curriculum stays byte-identical to the supplied merged revision 9, in
 
 New runs randomize cross-halls and room exits so study rooms have forward routes toward the stairs without requiring a return through the original barricaded entrance. Existing saved floors stay intact; restarting retains learning progress and uses the new layouts.
 
+## Office building and furniture
+
+The building is drawn as an office: carpeted study rooms, vinyl corridors, lit walls and recognisable desks, shelves, sofas, fridges, office chairs, meeting tables, filing cabinets, water coolers, plants, printers, whiteboards and cubicle partitions. All of it is procedural; there are no bundled art files ([sources and techniques](docs/OFFICE_ART.md)). Generated (legacy-rules) floors place these pieces as ordinary physical objects with their own health. Fresh force-field runs keep no movable furniture and get the textures only. Heavy furniture now genuinely blocks zombies: a crowd must break it, not shove it. Chairs, office chairs and plants are lighter than one zombie's push and get shoved aside. The design decision has the measurements, including a friction bug in planck 1.5.1.
+
 ## Test Lab
 
 The Test Lab is an automated regression framework for coding agents. Agents create or load JSON scenarios, spawn entities, script actions and run time-bounded assertions against the real engine without opening the game. Run `npm run --silent test:agents` for the full suite, JSON output and replay artifacts in `.artifacts/game-tests/`. [Agent instructions](AGENTS.md) · [Claude Code](CLAUDE.md) · [Scenario authoring and replay guide](docs/GAME_TEST_LAB.md).

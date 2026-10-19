@@ -5,11 +5,15 @@ import { doorFrame } from "./doors";
 import { human, nearestGrip } from "./engine";
 import { CONFIG, distance, type Game, H, type Point, W } from "./model";
 import { BODY_RADIUS } from "./physics";
+import {
+  drawDebris,
+  drawFurniture,
+  drawWorkstation,
+  terrainCanvas,
+} from "./office-art";
 import { playerCanSee, sightRadius, visibilityPolygon } from "./visibility";
 import { stairContactCues } from "./zombie-stairs";
 const normal = {
-  ground: "#1b2c2e",
-  grid: "#213537",
   wall: "#354547",
   edge: "#536361",
   ink: "#d6e4d8",
@@ -21,8 +25,6 @@ const normal = {
   dim: "#121e22",
 };
 const mutation = {
-  ground: "#2b2338",
-  grid: "#392c47",
   wall: "#53405a",
   edge: "#887068",
   ink: "#f9e6bc",
@@ -70,35 +72,19 @@ export function render(canvas: HTMLCanvasElement, g: Game) {
   ctx.closePath();
   ctx.clip();
   const seen = new Set(a.seen);
+  const theme = g.surge.state === "active" ? "mutation" : "normal";
   // Terrain memory does not expose live occupants. Perception is identical in both palettes.
   for (let y = 0; y < H; y++)
     for (let x = 0; x < W; x++) {
       const pt = { x: x + 0.5, y: y + 0.5 },
-        vis = visible(pt),
         id = `tile-${a.floor}-${x}-${y}`;
-      if (vis && !seen.has(id)) {
+      if (!seen.has(id) && visible(pt)) {
         a.seen.push(id);
         seen.add(id);
       }
-      if (distance(a, pt) > radius + 1) continue;
-      ctx.globalAlpha = 1;
-      if (f.tiles[y][x]) {
-        ctx.fillStyle = p.wall;
-        ctx.fillRect(x, y, 1, 1);
-        ctx.fillStyle = p.edge;
-        ctx.fillRect(x, y, 1, 0.08);
-      } else {
-        ctx.fillStyle = p.ground;
-        ctx.fillRect(x, y, 1, 1);
-        ctx.strokeStyle = p.grid;
-        ctx.lineWidth = 0.025;
-        ctx.strokeRect(x, y, 1, 1);
-        if ((x * 13 + y * 7 + g.seed) % 27 === 0) {
-          ctx.fillStyle = p.grid;
-          ctx.fillRect(x + 0.2, y + 0.2, 0.25, 0.05);
-        }
-      }
     }
+  // Carpet, vinyl and wall textures are one cached image; the clip limits it to sight.
+  ctx.drawImage(terrainCanvas(f, theme, g.seed), 0, 0, W, H);
   ctx.globalAlpha = 1;
   drawBlood(ctx, f);
   const healthBars: {
@@ -172,8 +158,9 @@ export function render(canvas: HTMLCanvasElement, g: Game) {
   for (const s of f.stations) {
     if (!visible(s)) continue;
     const e = g.encounters[s.encounter];
+    drawWorkstation(ctx, s.x, s.y, theme);
     ctx.fillStyle = "#101b20";
-    ctx.fillRect(s.x - 0.5, s.y - 0.35, 1, 0.7);
+    ctx.fillRect(s.x - 0.4, s.y - 0.35, 0.8, 0.5);
     ctx.fillStyle = e.state === "consumed" ? p.edge : p.terminal;
     ctx.shadowColor = p.terminal;
     ctx.shadowBlur = e.state === "consumed" ? 0 : 8;
@@ -198,14 +185,7 @@ export function render(canvas: HTMLCanvasElement, g: Game) {
     const x = o.x - o.w / 2,
       y = o.y - o.h / 2;
     if (o.destroyed) {
-      ctx.strokeStyle = p.furniture;
-      ctx.lineWidth = 0.06;
-      for (let n = 0; n < 5; n++) {
-        ctx.beginPath();
-        ctx.moveTo(x + n * 0.3, y + 0.2);
-        ctx.lineTo(x + n * 0.3 + 0.2, y + 0.6);
-        ctx.stroke();
-      }
+      drawDebris(ctx, o, theme);
       if (o.field && distance(a, o) < 3)
         label("FIELD BROKEN", o.x, y + o.h + 0.65, p.ink, 0.3);
       continue;
@@ -302,18 +282,10 @@ export function render(canvas: HTMLCanvasElement, g: Game) {
       Math.sin(g.time * 16 + o.x) > 0.5
     )
       ctx.translate(Math.sin(g.time * 39) * 0.025, 0);
-    ctx.fillStyle = p.furniture;
-    ctx.fillRect(-o.w / 2, -o.h / 2, o.w, o.h);
-    ctx.strokeStyle = "#382f2b";
-    ctx.lineWidth = 0.07;
-    ctx.strokeRect(-o.w / 2 + 0.1, -o.h / 2 + 0.1, o.w - 0.2, o.h - 0.2);
-    if (o.kind === "shelf")
-      for (let i = 1; i < 5; i++) {
-        ctx.fillStyle = i % 2 ? p.wall : p.edge;
-        ctx.fillRect(-o.w / 2 + (i * o.w) / 6, -o.h / 2 + 0.15, 0.1, o.h - 0.3);
-      }
+    drawFurniture(ctx, o, theme);
     if (damage > 0.2) {
       ctx.strokeStyle = p.sky;
+      ctx.lineWidth = 0.07;
       ctx.beginPath();
       ctx.moveTo(-o.w / 3, -o.h / 2);
       ctx.lineTo(0.1, 0);

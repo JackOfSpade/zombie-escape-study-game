@@ -493,3 +493,9 @@ The main entrance is a normal hinged door from world creation, initially closed 
 
 New runs start spawning outside zombies at ten simulation seconds; a second spawn guard also protects older saved early deadlines. Pausing stops the simulation clock, and reload retains elapsed time and the existing next-spawn deadline. The opening batch and normal reinforcement interval remain unchanged. This is a spawn delay, not damage immunity: any existing zombie can attack normally. The HUD displays the remaining spawn countdown. Diagnostic logs remain local and download only through explicit export controls; death does not initiate export.
 
+
+### Office art, floor friction and zombie push (2026-10-19)
+
+- `office-art.ts`: procedural top-down office art. A cached whole-floor terrain canvas (carpet tiles, vinyl, paving, wall caps/shadows) and per-kind cached furniture sprites, both themed for the Surge. `render.ts` draws them inside the unchanged visibility clip; the per-tile loop now only records explored cells.
+- `office-layout.ts`: deterministic back-to-wall placement of office fixtures on generated floors, with terminal/doorway clearance and a flood-fill guarantee that no reachable cell or terminal is cut off.
+- `physics.ts`: floor friction is a per-kind `resist` from `FURNITURE`. Unheld objects rest as static bodies until the measured contact push exceeds `resist` (`stickOrSlip`), and kinetic friction is applied as an impulse each substep, because planck 1.5.1's FrictionJoint applies no linear impulse. Zombies in a contact chain with movable furniture (`pressing`) drive with a bounded force (`ZOMBIE_PUSH`) instead of a per-frame velocity reset. See DESIGN_DECISIONS for the measurements.

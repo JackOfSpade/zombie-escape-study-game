@@ -17,6 +17,7 @@ import {
   W,
 } from "./model";
 import { makeNpcProfile } from "./npc-cognition";
+import { furnishOffice, legacyOfficeZones } from "./office-layout";
 export function actor(id: string, name: string, index: number): Actor {
   const result: Actor = {
     id,
@@ -141,6 +142,22 @@ export function createGame(
     g.floors.push(generateFloor(g, fi));
   if (options.layout === "forward")
     for (const floor of g.floors) forwardLayout(floor, seed);
+  for (const floor of g.floors)
+    furnishOffice(
+      floor,
+      legacyOfficeZones(floor),
+      [
+        ...floor.doors,
+        floor.stairs,
+        floor.entry,
+        ...(floor.rooms ?? []).flatMap((r) =>
+          [r.forwardEntry, r.forwardExit, r.innerMouth].filter(
+            (p) => p !== undefined,
+          ),
+        ),
+      ],
+      floor.entry,
+    );
   for (const floor of g.floors)
     for (const o of floor.furniture) {
       if (o.id === "main-gate") ensureDoor(o, floor);

@@ -41,6 +41,7 @@ import {
   type Point,
   type Zombie,
   CONFIG,
+  FURNITURE,
   distance,
   event,
   rand,
@@ -63,6 +64,7 @@ import {
   physicsFloor,
   physicsKick,
   physicsMove,
+  ZOMBIE_PUSH,
 } from "./physics";
 import {
   canPlace,
@@ -320,8 +322,8 @@ export function vault(g: Game, a: Actor, obstacleId?: string): boolean {
   a.vault = {
     from: { x: a.x, y: a.y },
     to,
-    left: o.kind === "chair" ? 0.45 : 1.1,
-    duration: o.kind === "chair" ? 0.45 : 1.1,
+    left: o.kind === "chair" || o.kind === "officeChair" ? 0.45 : 1.1,
+    duration: o.kind === "chair" || o.kind === "officeChair" ? 0.45 : 1.1,
     obstacle: o.id,
     obstacles,
   };
@@ -1041,7 +1043,9 @@ function followFurniturePlan(g: Game, a: Actor, dt: number) {
     releaseFurniturePlan(a);
     return false;
   }
-  while (plan.route.length && distance(object, plan.route[0]) < 0.08) {
+  // Real floor friction stops a released object where it is left, so placement
+  // must reach the waypoint itself rather than rely on coasting.
+  while (plan.route.length && distance(object, plan.route[0]) < 0.03) {
     plan.route.shift();
     delete plan.bestDistance;
     delete plan.bestApproach;
@@ -2159,7 +2163,13 @@ function zombie(
         x: Math.max(ob.x - ob.w / 2, Math.min(z.x, ob.x + ob.w / 2)),
         y: Math.max(ob.y - ob.h / 2, Math.min(z.y, ob.y + ob.h / 2)),
       };
-      if (distance(z, surface) > 0.42) {
+      // Objects lighter than one zombie's push (chairs, plants) are shoved
+      // aside while being struck; heavier ones stop the zombie to attack.
+      const shove =
+        ob.speed > 0 && !ob.field && FURNITURE[ob.kind].resist < ZOMBIE_PUSH;
+      if (shove && distance(z, surface) <= 0.42 && z.cooldown <= 0)
+        strikeFurniture(g, z, ob, z.floor, z);
+      if (shove || distance(z, surface) > 0.42) {
         moveZombie(
           g,
           z,

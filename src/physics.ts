@@ -13,6 +13,7 @@ import {
 } from "planck";
 import { DOOR_SWING, doorPose, ensureDoor, latchDoor } from "./doors";
 import {
+  FURNITURE,
   H,
   W,
   distance,
@@ -25,6 +26,16 @@ import {
 import { move, solid } from "./spatial";
 
 export const BODY_RADIUS = 0.26;
+/** Largest force one zombie applies while pressing furniture or a crowd that
+ * touches it. Free zombies keep direct velocity control. */
+export const ZOMBIE_PUSH = 30;
+/** Static floor friction of an unheld object. Unknown kinds keep the old mass rule. */
+const floorResist = (o: Furniture) =>
+  FURNITURE[o.kind]?.resist ?? (20 / Math.max(0.05, o.speed)) * 6;
+/** Friction spread over the footprint resists turning in proportion to its size,
+ * so a long desk cannot be swung open by one zombie at its end. */
+const floorTorque = (o: Furniture) =>
+  (floorResist(o) * Math.hypot(o.w, o.h)) / 3;
 type Entity = Actor | Zombie | Furniture;
 const furniture = (e: Entity): e is Furniture => "kind" in e;
 const actor = (e: Entity): e is Actor => "alive" in e;
@@ -54,6 +65,10 @@ interface RecordBody {
     vault?: Actor["vault"];
   };
   drive?: Point;
+  /** Desired velocity of a zombie pressing furniture, applied as a bounded force. */
+  motor?: Point;
+  /** Contact impulse received from moving bodies during the current solver step. */
+  push?: number;
 }
 interface FloorPhysics {
   world: World;
@@ -154,12 +169,17 @@ class PhysicsLayer {
               contact.setEnabled(false);
           }
       });
-      world.on("post-solve", (contact) => {
+      world.on("post-solve", (contact, impulse) => {
         const a = contact.getFixtureA().getBody().getUserData() as
             Entity | undefined,
           b = contact.getFixtureB().getBody().getUserData() as
             Entity | undefined;
         if (!a || !b) return;
+        const total = impulse.normalImpulses.reduce((n, i) => n + i, 0);
+        for (const e of [a, b]) {
+          const r = this.records.get(e);
+          if (r && furniture(e)) r.push = (r.push ?? 0) + total;
+        }
         for (const [person, object] of [
           [a, b],
           [b, a],
@@ -261,7 +281,9 @@ class PhysicsLayer {
           type: dynamic ? "dynamic" : "static",
           position: Vec2(e.x, e.y),
           angle,
-          bullet: true,
+          // Zombie impacts on furniture must go through the main solver, where
+          // floor friction applies; planck's TOI sub-steps ignore joints.
+          bullet: furniture(e) || actor(e),
           fixedRotation: !furniture(e),
           linearDamping: furniture(e) ? 4 : actor(e) ? 0 : 4,
           angularDamping: 5,
@@ -280,14 +302,7 @@ class PhysicsLayer {
           restitution: 0,
         },
       );
-      if (furniture(e) && e.speed > 0) {
-        const mass = 20 / e.speed;
-        body.setMassData({
-          mass,
-          center: Vec2(0, 0),
-          I: (mass * (e.w * e.w + e.h * e.h)) / 12,
-        });
-      }
+      if (furniture(e) && e.speed > 0) this.setFurnitureMass(body, e);
       r = {
         entity: e,
         body,
@@ -324,7 +339,7 @@ class PhysicsLayer {
       } else if (furniture(e) && e.speed > 0) {
         r.friction = p.world.createJoint(
           new FrictionJoint(
-            { maxForce: body.getMass() * 6, maxTorque: body.getMass() * 2 },
+            { maxForce: floorResist(e), maxTorque: floorTorque(e) },
             p.ground,
             body,
             body.getPosition(),
@@ -591,6 +606,69 @@ class PhysicsLayer {
         this.grips.set(a, { object, joint, state: a.grip });
       }
   }
+  /** Static floor friction. An unheld object rests as a static body, so crowd
+   * compression and solver error cannot creep it, and becomes dynamic only
+   * when the contact push it receives exceeds its floor resistance. Positions
+   * are never written; only the body type and its velocity change. */
+  private stickOrSlip(h: number) {
+    for (const r of this.records.values()) {
+      const o = r.entity;
+      if (!furniture(o) || o.door || o.speed <= 0) continue;
+      const held = this.g.survivors.some(
+          (a) =>
+            a.alive &&
+            !a.escaped &&
+            (a.grip?.object === o.id || a.handling === o.id),
+        ),
+        pushed = (r.push ?? 0) / h > floorResist(o);
+      if (r.body.isStatic()) {
+        if (held || pushed) this.slide(r, o);
+      } else if (
+        !held &&
+        !pushed &&
+        r.body.getLinearVelocity().length() < 0.03 &&
+        Math.abs(r.body.getAngularVelocity()) < 0.03
+      )
+        r.body.setType("static");
+    }
+  }
+  /** Let a resting object move again under its own mass. */
+  private slide(r: RecordBody, o: Furniture) {
+    if (!r.body.isStatic() || o.speed <= 0) return;
+    r.body.setType("dynamic");
+    this.setFurnitureMass(r.body, o);
+    r.body.setAwake(true);
+  }
+  private setFurnitureMass(body: Body, e: Furniture) {
+    const mass = 20 / e.speed;
+    body.setMassData({
+      mass,
+      center: Vec2(0, 0),
+      I: (mass * (e.w * e.w + e.h * e.h)) / 12,
+    });
+  }
+  /** Zombies touching (or about to touch) movable furniture, directly or through other zombies. */
+  private pressing() {
+    const found = new Set<RecordBody>(),
+      queue: RecordBody[] = [];
+    const visit = (body: Body) => {
+      // Broad-phase contacts include bodies about to touch, so a zombie at the
+      // back of a crowd cannot flicker in and out and re-inject its momentum.
+      for (let edge = body.getContactList(); edge; edge = edge.next) {
+        const other = edge.other?.getUserData() as Entity | undefined,
+          r = other && this.records.get(other);
+        if (!r || !other || furniture(other) || actor(other) || found.has(r))
+          continue;
+        found.add(r);
+        queue.push(r);
+      }
+    };
+    for (const r of this.records.values())
+      if (furniture(r.entity) && r.entity.speed > 0 && !r.entity.door)
+        visit(r.body);
+    for (let i = 0; i < queue.length; i++) visit(queue[i].body);
+    return found;
+  }
   finish(dt: number): Furniture[] {
     // Arrivals, deaths, stairs and broken props can change membership during AI decisions.
     const entities: Entity[] = [
@@ -598,6 +676,7 @@ class PhysicsLayer {
       ...this.g.survivors,
       ...this.g.zombies,
     ];
+    const pressing = this.pressing();
     for (const e of entities) {
       const old = this.records.get(e);
       if (!active(e)) {
@@ -629,12 +708,16 @@ class PhysicsLayer {
         if (speed > max) {
           v = { x: (v.x * max) / speed, y: (v.y * max) / speed };
         }
-        if (actor(e) || e.stagger <= 0) r.body.setLinearVelocity(v);
+        r.motor = undefined;
+        if (!actor(e) && pressing.has(r)) {
+          if (e.stagger <= 0) r.motor = v;
+        } else if (actor(e) || e.stagger <= 0) r.body.setLinearVelocity(v);
         if (Math.hypot(v.x, v.y) > 0) r.body.setAwake(true);
       } else if (
         !e.door &&
         (distance(e, r.start) > 1e-8 || Math.abs(angle - r.start.angle) > 1e-8)
       ) {
+        this.slide(r, e);
         r.body.setLinearVelocity({ x: delta.x / dt, y: delta.y / dt });
         r.body.setAngularVelocity((angle - r.start.angle) / dt);
         r.body.setAwake(true);
@@ -646,7 +729,8 @@ class PhysicsLayer {
             !a.escaped &&
             (a.grip?.object === e.id || a.handling === e.id),
         );
-        r.friction?.setMaxForce(held ? 0 : r.body.getMass() * 6);
+        if (held && !e.door) this.slide(r, e);
+        r.friction?.setMaxForce(held ? 0 : floorResist(e));
         r.body.setLinearDamping(held && !e.door ? 0 : 4);
         r.body.setAngularDamping(held && !e.door ? 0 : 5);
         const braced = this.g.survivors.some(
@@ -654,7 +738,7 @@ class PhysicsLayer {
         );
         // A deliberate balanced carry resists torque; an end grip stays free to pivot.
         r.friction?.setMaxTorque(
-          braced ? r.body.getMass() * 100 : held ? 0 : r.body.getMass() * 2,
+          braced ? r.body.getMass() * 100 : held ? 0 : floorTorque(e),
         );
         if (e.door && r.hinge) {
           const d = e.door;
@@ -706,6 +790,23 @@ class PhysicsLayer {
       }
     const steps = Math.max(1, Math.ceil(dt / (1 / 120)));
     for (let i = 0; i < steps; i++) {
+      // Resetting a pressing zombie's velocity every frame would inject m·v of
+      // momentum per frame: an unbounded, frame-rate dependent shove. A bounded
+      // motor gives the same free-space walk and a fixed push per zombie.
+      for (const r of this.records.values())
+        if (r.motor) {
+          const v = r.body.getLinearVelocity(),
+            m = r.body.getMass(),
+            limit = (ZOMBIE_PUSH * dt) / steps;
+          let jx = m * (r.motor.x - v.x),
+            jy = m * (r.motor.y - v.y);
+          const n = Math.hypot(jx, jy);
+          if (n > limit) {
+            jx *= limit / n;
+            jy *= limit / n;
+          }
+          r.body.applyLinearImpulse(Vec2(jx, jy), r.body.getPosition(), true);
+        }
       for (const r of this.records.values())
         if (furniture(r.entity)) {
           const o = r.entity,
@@ -791,7 +892,27 @@ class PhysicsLayer {
           { ...this.records.get(a)!.body.getPosition() },
         ]),
       );
+      // Kinetic floor friction. planck 1.5.1's FrictionJoint never applies its
+      // linear impulse (its clamp aliases the accumulated impulse), so the
+      // joint only resists turning and sliding friction is applied here.
+      for (const r of this.records.values()) {
+        const o = r.entity;
+        if (!furniture(o) || o.door || o.speed <= 0 || r.body.isStatic())
+          continue;
+        const limit = r.friction?.getMaxForce() ?? 0,
+          v = r.body.getLinearVelocity(),
+          speed = v.length();
+        if (!limit || speed < 1e-9) continue;
+        const j = Math.min(r.body.getMass() * speed, (limit * dt) / steps);
+        r.body.applyLinearImpulse(
+          Vec2((-v.x / speed) * j, (-v.y / speed) * j),
+          r.body.getWorldCenter(),
+          true,
+        );
+      }
+      for (const r of this.records.values()) r.push = 0;
       for (const f of this.floors) f.world.step(dt / steps, 12, 20);
+      this.stickOrSlip(dt / steps);
       if (fieldPeople.length) {
         for (const a of fieldPeople)
           Object.assign(a, this.records.get(a)!.body.getPosition());

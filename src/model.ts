@@ -258,7 +258,21 @@ export interface Zombie extends Point {
   stairUntil?: number;
 }
 export type FurnitureKind =
-  "chair" | "desk" | "sofa" | "fridge" | "shelf" | "gate" | "door";
+  | "chair"
+  | "desk"
+  | "sofa"
+  | "fridge"
+  | "shelf"
+  | "gate"
+  | "door"
+  | "officeChair"
+  | "table"
+  | "cabinet"
+  | "cooler"
+  | "plant"
+  | "printer"
+  | "whiteboard"
+  | "partition";
 export interface Furniture extends Point {
   field?: {
     publicEntry?: boolean;
@@ -549,17 +563,28 @@ export const CONFIG = {
   openingBatch: 3,
   reinforcementBatch: 1,
 };
+/** `resist` is the static floor friction (solver force units) an unheld object
+ * offers before it slides. One pressing zombie supplies ZOMBIE_PUSH (30), so a
+ * chair yields to one zombie while a fridge or shelf holds against a crowd. */
 export const FURNITURE: Record<
   FurnitureKind,
-  { w: number; h: number; hp: number; speed: number }
+  { w: number; h: number; hp: number; speed: number; resist: number }
 > = {
-  chair: { w: 0.8, h: 0.8, hp: 95, speed: 1.7 },
-  desk: { w: 2.2, h: 1, hp: 850, speed: 0.8 },
-  sofa: { w: 2.7, h: 1, hp: 1400, speed: 0.55 },
-  fridge: { w: 1.1, h: 1.1, hp: 2100, speed: 0.38 },
-  shelf: { w: 2.8, h: 1, hp: 3200, speed: 0.32 },
-  gate: { w: 2, h: 0.7, hp: 600, speed: 0 },
-  door: { w: 1, h: 3, hp: 240, speed: 0 },
+  chair: { w: 0.8, h: 0.8, hp: 95, speed: 1.7, resist: 20 },
+  desk: { w: 2.2, h: 1, hp: 850, speed: 0.8, resist: 160 },
+  sofa: { w: 2.7, h: 1, hp: 1400, speed: 0.55, resist: 230 },
+  fridge: { w: 1.1, h: 1.1, hp: 2100, speed: 0.38, resist: 340 },
+  shelf: { w: 2.8, h: 1, hp: 3200, speed: 0.32, resist: 380 },
+  gate: { w: 2, h: 0.7, hp: 600, speed: 0, resist: 0 },
+  door: { w: 1, h: 3, hp: 240, speed: 0, resist: 0 },
+  officeChair: { w: 0.7, h: 0.7, hp: 80, speed: 1.9, resist: 8 },
+  table: { w: 3, h: 1.4, hp: 1000, speed: 0.5, resist: 210 },
+  cabinet: { w: 0.9, h: 0.7, hp: 1300, speed: 0.5, resist: 270 },
+  cooler: { w: 0.6, h: 0.6, hp: 160, speed: 1.1, resist: 40 },
+  plant: { w: 0.7, h: 0.7, hp: 60, speed: 1.4, resist: 25 },
+  printer: { w: 1.1, h: 0.8, hp: 450, speed: 0.75, resist: 120 },
+  whiteboard: { w: 2, h: 0.35, hp: 220, speed: 1.1, resist: 45 },
+  partition: { w: 2, h: 0.25, hp: 420, speed: 0.7, resist: 110 },
 };
 export function rand(g: { rng: number }) {
   let t = (g.rng += 0x6d2b79f5);

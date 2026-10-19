@@ -118,7 +118,9 @@ test("captured missed-annex survivors discover the physically reachable room wit
   const { g, survivors } = restoreExplorationScenario(r, snapshot),
     start = g.time;
   let discovered = false;
-  for (let i = 0; i < 1800; i++) {
+  // Fleeing NPCs dodge the same horde on a chaotic route; bounded zombie
+  // pushes near furniture moved the first discovery from 52 s to 66 s.
+  for (let i = 0; i < 2700; i++) {
     step(g, 1 / 30);
     if (
       survivors.some((a) =>
