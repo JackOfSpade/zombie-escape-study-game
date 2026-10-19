@@ -20,6 +20,75 @@ export function inFurniture(p: Point, f: Furniture, pad = 0) {
       ) < pad
     : Math.abs(q.x) < f.w / 2 && Math.abs(q.y) < f.h / 2;
 }
+/**
+ * Per-floor cell buckets of furniture for point queries during one engine
+ * step. Outside a step every query scans the floor's list exactly as before.
+ * A bucket holds every object whose conservative reach, widened by the
+ * largest indexed pad plus this tick's movement allowance, covers the cell,
+ * in the floor list's order, so first-match and any-match results are
+ * identical to a full scan. Each query still runs the exact inFurniture test.
+ */
+const INDEX_MAX_PAD = 0.5;
+// A step lasts at most 0.1 s and a carried object moves at most about 8 m/s,
+// so one metre covers any in-step motion before the next rebuild.
+const INDEX_SLACK = INDEX_MAX_PAD + 1;
+let indexEpoch = 0;
+// Only the game's own floors are indexed. Temporary floor copies with a
+// filtered furniture list (vault and barricade planning) keep the plain scan.
+let indexedFloors: ReadonlySet<Floor> = new Set();
+const furnitureIndexes = new WeakMap<
+  Floor,
+  { epoch: number; list: Furniture[]; length: number; cells: Furniture[][] }
+>();
+export function beginFurnitureIndex(floors: readonly Floor[]) {
+  indexEpoch = (indexEpoch % 1_000_000_000) + 1;
+  indexedFloors = new Set(floors);
+}
+export function endFurnitureIndex() {
+  indexEpoch = 0;
+  indexedFloors = new Set();
+}
+/** Furniture that may contain `p` within `pad`, in floor order; undefined means scan all. */
+export function furnitureNear(
+  f: Floor,
+  p: Point,
+  pad: number,
+): readonly Furniture[] | undefined {
+  if (!indexEpoch || pad > INDEX_MAX_PAD || !indexedFloors.has(f))
+    return undefined;
+  let index = furnitureIndexes.get(f);
+  if (
+    !index ||
+    index.epoch !== indexEpoch ||
+    index.list !== f.furniture ||
+    index.length !== f.furniture.length
+  ) {
+    // Reuse this floor's bucket arrays; only their contents change per step.
+    const cells =
+      index?.cells ?? Array.from({ length: W * H }, (): Furniture[] => []);
+    for (const cell of cells) cell.length = 0;
+    for (const o of f.furniture) {
+      const reach = (o.w + o.h) / 2 + INDEX_SLACK;
+      const x1 = Math.max(0, Math.floor(o.x - reach)),
+        x2 = Math.min(W - 1, Math.floor(o.x + reach)),
+        y1 = Math.max(0, Math.floor(o.y - reach)),
+        y2 = Math.min(H - 1, Math.floor(o.y + reach));
+      for (let y = y1; y <= y2; y++)
+        for (let x = x1; x <= x2; x++) cells[y * W + x].push(o);
+    }
+    index = {
+      epoch: indexEpoch,
+      list: f.furniture,
+      length: f.furniture.length,
+      cells,
+    };
+    furnitureIndexes.set(f, index);
+  }
+  const x = Math.floor(p.x),
+    y = Math.floor(p.y);
+  if (x < 0 || y < 0 || x >= W || y >= H) return undefined;
+  return index.cells[y * W + x];
+}
 export function wall(f: Floor, x: number, y: number) {
   return (
     x < 0 ||
@@ -46,7 +115,7 @@ export function solid(
         ) < pad
       )
         return true;
-  return f.furniture.some(
+  return (furnitureNear(f, p, pad) ?? f.furniture).some(
     (o) =>
       // Cheap distance rejection before permission checks.
       Math.abs(p.x - o.x) <= (o.w + o.h) / 2 + pad &&

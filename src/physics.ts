@@ -612,10 +612,9 @@ class PhysicsLayer {
    * compression and solver error cannot creep it, and becomes dynamic only
    * when the contact push it receives exceeds its floor resistance. Positions
    * are never written; only the body type and its velocity change. */
-  private stickOrSlip(h: number) {
-    for (const r of this.records.values()) {
-      const o = r.entity;
-      if (!furniture(o) || o.door || o.speed <= 0) continue;
+  private stickOrSlip(h: number, movable: readonly RecordBody[]) {
+    for (const r of movable) {
+      const o = r.entity as Furniture;
       const held = this.held.has(o.id),
         pushed = (r.push ?? 0) / h > floorResist(o);
       if (r.body.isStatic()) {
@@ -791,11 +790,32 @@ class PhysicsLayer {
         });
       }
     const steps = Math.max(1, Math.ceil(dt / (1 / 120)));
+    // Membership is settled above, so partition the bodies once per frame
+    // rather than filtering every record in each loop of every substep.
+    const motors: RecordBody[] = [],
+      furnitureBodies: RecordBody[] = [],
+      movable: RecordBody[] = [],
+      doors: RecordBody[] = [];
+    for (const r of this.records.values()) {
+      if (r.motor) motors.push(r);
+      const o = r.entity;
+      if (!furniture(o)) continue;
+      furnitureBodies.push(r);
+      if (o.door) doors.push(r);
+      else if (o.speed > 0) movable.push(r);
+    }
+    const fieldPeople = this.g.floors.some((f) =>
+      f.furniture.some((o) => o.field && !o.destroyed),
+    )
+      ? this.g.survivors.filter(
+          (a) => a.alive && !a.escaped && this.records.has(a),
+        )
+      : [];
     for (let i = 0; i < steps; i++) {
       // Resetting a pressing zombie's velocity every frame would inject m·v of
       // momentum per frame: an unbounded, frame-rate dependent shove. A bounded
       // motor gives the same free-space walk and a fixed push per zombie.
-      for (const r of this.records.values())
+      for (const r of motors)
         if (r.motor) {
           const v = r.body.getLinearVelocity(),
             m = r.body.getMass(),
@@ -809,9 +829,9 @@ class PhysicsLayer {
           }
           r.body.applyLinearImpulse(Vec2(jx, jy), r.body.getPosition(), true);
         }
-      for (const r of this.records.values())
-        if (furniture(r.entity) && !r.body.isStatic()) {
-          const o = r.entity,
+      for (const r of furnitureBodies)
+        if (!r.body.isStatic()) {
+          const o = r.entity as Furniture,
             v = r.body.getLinearVelocity(),
             speed = v.length(),
             limit = carriers.get(o.id) ?? 3;
@@ -869,13 +889,6 @@ class PhysicsLayer {
             true,
           );
         }
-      const fieldPeople = this.g.floors.some((f) =>
-        f.furniture.some((o) => o.field && !o.destroyed),
-      )
-        ? this.g.survivors.filter(
-            (a) => a.alive && !a.escaped && this.records.has(a),
-          )
-        : [];
       const beforeFields = new Map(
         fieldPeople.map((a) => [
           a.id,
@@ -885,10 +898,8 @@ class PhysicsLayer {
       // Kinetic floor friction. planck 1.5.1's FrictionJoint never applies its
       // linear impulse (its clamp aliases the accumulated impulse), so the
       // joint only resists turning and sliding friction is applied here.
-      for (const r of this.records.values()) {
-        const o = r.entity;
-        if (!furniture(o) || o.door || o.speed <= 0 || r.body.isStatic())
-          continue;
+      for (const r of movable) {
+        if (r.body.isStatic()) continue;
         const limit = r.friction?.getMaxForce() ?? 0,
           v = r.body.getLinearVelocity(),
           speed = v.length();
@@ -902,7 +913,7 @@ class PhysicsLayer {
       }
       for (const r of this.records.values()) r.push = 0;
       for (const f of this.floors) f.world.step(dt / steps, 12, 20);
-      this.stickOrSlip(dt / steps);
+      this.stickOrSlip(dt / steps, movable);
       if (fieldPeople.length) {
         for (const a of fieldPeople)
           Object.assign(a, this.records.get(a)!.body.getPosition());
@@ -916,21 +927,20 @@ class PhysicsLayer {
           }
         }
       }
-      for (const r of this.records.values())
-        if (furniture(r.entity) && r.entity.door) {
-          const d = r.entity.door,
-            angle = r.body.getAngle();
-          // Choose a swing side only beyond the solver’s angular contact slop.
-          // Tiny contact corrections at release must not lock the wrong side.
-          if (!d.latched && !d.side && Math.abs(angle) > 0.06) {
-            d.side = angle > 0 ? 1 : -1;
-            r.hinge!.setLimits(
-              d.side > 0 ? 0 : -DOOR_SWING,
-              d.side > 0 ? DOOR_SWING : 0,
-            );
-          }
-          if (Math.abs(angle) > 0.06) d.swung = true;
+      for (const r of doors) {
+        const d = (r.entity as Furniture).door!,
+          angle = r.body.getAngle();
+        // Choose a swing side only beyond the solver’s angular contact slop.
+        // Tiny contact corrections at release must not lock the wrong side.
+        if (!d.latched && !d.side && Math.abs(angle) > 0.06) {
+          d.side = angle > 0 ? 1 : -1;
+          r.hinge!.setLimits(
+            d.side > 0 ? 0 : -DOOR_SWING,
+            d.side > 0 ? DOOR_SWING : 0,
+          );
         }
+        if (Math.abs(angle) > 0.06) d.swung = true;
+      }
     }
     const moved: Furniture[] = [];
     for (const r of this.records.values()) {

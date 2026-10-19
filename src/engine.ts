@@ -75,6 +75,9 @@ import {
   solid,
   soundGain,
   wall,
+  beginFurnitureIndex,
+  endFurnitureIndex,
+  furnitureNear,
 } from "./spatial";
 import { advanceStairs, beginStairs, cancelStairs } from "./stair-travel";
 import {
@@ -2141,7 +2144,9 @@ function zombie(
       dx = (p.x - z.x) / d,
       dy = (p.y - z.y) / d;
     const probe = { x: z.x + dx * 0.55, y: z.y + dy * 0.55 },
-      ob = f.furniture.find((o) => inFurniture(probe, o, 0.23));
+      ob = (furnitureNear(f, probe, 0.23) ?? f.furniture).find((o) =>
+        inFurniture(probe, o, 0.23),
+      );
     if (ob?.door && !ob.door.latched) {
       moveZombie(
         g,
@@ -2328,6 +2333,7 @@ export function step(
     return;
   dt = Math.min(dt, 0.1);
   beginPhysics(g);
+  beginFurnitureIndex(g.floors);
   try {
     advanceStep(g, dt, input);
     for (const object of finishPhysics(g, dt))
@@ -2340,6 +2346,7 @@ export function step(
       }
     recordZombieTrails(g);
   } finally {
+    endFurnitureIndex();
     cancelPhysics(g);
   }
 }

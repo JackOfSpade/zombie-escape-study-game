@@ -4,7 +4,7 @@ TypeScript + Canvas 2D + semantic DOM terminal UI; Vite builds the local browser
 
 - `model.ts`: serializable state and configurable defaults. Deterministic seeded RNG; simulation and evidence sequences are distinct from wall-clock retention dates.
 - `world.ts`: frozen seeded floors, one-use encounter/station identity and finite furniture/loot; 20 survivors and four building floors plus roof.
-- `spatial.ts`: geometry, collision, ray/LOS and weighted path search. Zombies seek open alternatives before breaking furniture. Furniture objects retain independent HP and footprints.
+- `spatial.ts`: geometry, collision, ray/LOS and weighted path search. Zombies seek open alternatives before breaking furniture. Furniture objects retain independent HP and footprints. During each engine step, point queries against furniture (`solid` and the zombie's look-ahead probe) use a per-floor cell index (`furnitureNear`) rebuilt once per step; buckets keep floor order and every hit is still the exact `inFurniture` test, so results match a full scan. Temporary floor copies and calls outside a step keep the plain scan.
 - `navigation.ts`: actor-width grid/portal graph with explicit door and complete vault traversals; cached by actual floor geometry. Door approaches and vault directions/landings are planned together, with collision checks through the entire trajectory.
 - `npc-threat-memory.ts`: bounded copies of actual local sightings for retreat planning, separate from current perception/rendering. Six-second/floor limits, nearest-eight capacity, sampled positions and immediate new sightings preserve uncertainty without following hidden actors.
 - `zombie-stairs.ts`: pure completed-flight arrival decisions, static/furniture/body collision, protective fields and one oldest-flight contact at the actual upper exit. Shared engine strike handlers retain ordinary damage/cooldown/Surge behavior.
@@ -38,11 +38,9 @@ Human editor evidence stores both revision snapshots and actual inserted/removed
 
 Encounter references include a UUID run identity; location names reused in a new building do not collide with old study visits. Partial learning and raw artifacts survive death in archives, while new locks start with new workspaces. Pending assessments can be retried with their original evidence cutoff; interrupted live requests never substitute development completions.
 
-
 Physical contact now reserves face-specific attack positions throughout each attacker's cooldown. Rear queues cannot reach through a front body, and a narrow end face cannot inherit the object's unrelated long-side width. New outside arrivals use empty physical slots; legacy overlaps recover through bounded legal movement. The entrance closure waits for occupants rather than creating a collider through a body. The initial closure window is three seconds in new runs, ahead of the ordinary outside wave; existing saved object state remains intact.
 
 Furniture captures its initial placement/orientation as part of the run. Defense qualification compares actual approach connectivity against that initial state, with an existing closed door treated open for the comparison so it cannot hide a second layer. Late touching or returning initially sealing furniture to its old pose earns no new contribution; current physical helpers can share a decisive placement. No durability/resistance bonus is added. Strategy and long-study pacing remain unaccepted.
-
 
 ## Physical study-space and congestion audit
 
@@ -54,11 +52,9 @@ Vaulting retains the traversed object identity. Attack sight ignores only that o
 
 The following camera fits the entire finite sight circle at a legible scale. Higher-floor entry stairs are labeled RETURN when visible; existing physical descent remains available. The defense lab records continuous attack pressure as well as survival, because congestion-induced inactivity is not a credible defensive success.
 
-
 `execution.ts` captures a complete workspace revision before dispatch. Edits can continue; the asynchronous receipt is accepted only for the captured code hash/language and immutable image ID. Its history entry refers to the actual contributing edit sequences and the stored job. The assessor receives real output as untrusted text; the learning validator requires that stored receipt rather than accepting a free-form execution claim. No automatic task completion or academic credit is coupled to running. Pending jobs recover as interrupted after reload, in both active and archived encounters. Archives keep the original encounter object so a late result can arrive after a fresh run without appearing in the new lock.
 
 `scripts/code-runner.mjs` resolves a trusted installed image, creates a stopped restricted container, then attaches input to a separately started container. Cleanup targets only that generated container name. A container-side timeout plus host-side bounds contain runaway jobs; startup failure is not reported as execution. The interpreter emits a private per-job startup marker; only a complete marker line counts, so a Docker/bootstrap diagnostic containing command source cannot impersonate a successful start. Output decoding is bounded even for invalid UTF-8. `test:runner` performs actual container and HTTP pipeline tests, independently of the fast engine suite. The optional container browser workflow uses a synthetic test-mode curriculum with real execution; no human learning is claimed.
-
 
 ## Surface grips, staged fortification and exit recovery
 
@@ -72,7 +68,6 @@ Exploration retains a destination until arrival. Previously the fallback recompu
 
 The NPC benchmark supports `SIM_SECONDS`, `SIM_STEP`, `SIM_SEEDS`, `SIM_REPORT` and optional `SIM_SNAPSHOT` for a private full diagnostic. Reports identify the timestep/configuration/source fingerprint and retain progression, routes and credentials. Counts accumulate events across the ring buffer. The human is explicitly absent/marked escaped in this NPC-only diagnostic; it awards no academic learning and does not substitute for a human play session.
 
-
 ## Route exposure, evacuation and curriculum context
 
 `survivor-strategy.ts` scores danger along the complete retreat route, rather than only its destination. It considers actual traversable vault paths as well as body-clear walking segments. Vault landings occupied by a living survivor or zombie are rejected using the physical landing rule. Available aircraft add an evacuation bias; new pickup trips invalidate stale flight choices. No survivor speed, healing or extra inventory is supplied by planning.
@@ -83,9 +78,7 @@ Station discovery, claiming, continuing the human terminal interface and collect
 
 Generated questions are validated against the current scheduled track/objectives/depth, review status, phase and ledger version. After validation their contract is replaced with the local canonical contract so a provider cannot strip history/evidence constraints or rewrite scheduler metadata.
 
-
 `final-requirements.ts` derives the actual selected final-gate scope from the source transfer/integration/ENV tables. Track-qualified topic IDs refer to transfers without creating ordinary D4 cells. Selected extensions use their explicit objective targets and do not acquire extra transfer gates. Integration definitions retain their authoritative criteria and source scope choices. The inspector reports separate checkpoint, transfer, interview-integration, environment and delayed-retention counts. Supported new checkpoint P states require nonempty reviewed facets and matching independent evidence; historical gap reconciliation remains depth-specific. ENV and retention are separate from the Tier-4 gate. This is a read-only source/ledger readiness layer; final-requirement scheduling, new evidence recording and export projection remain unfinished.
-
 
 ## Tier-4 final learning transactions
 
@@ -95,7 +88,6 @@ Tier-4 diagnosis prioritizes topic transfers, while selected-extension D4 object
 
 The same atomic evidence transaction handles actual human authorship, assistance, scope coverage, independent complementary proof, attempt lineage and once-only primary visits for both target kinds. Final status never writes ordinary checkpoint cells. Source-preserving exports validate final proof separately and project transfer/integration tables and exact covered/missing facets. Untouched optional final defaults are omitted from semantic fingerprints, so a legacy-save upgrade or preview cannot manufacture an export revision. Advanced-source/browser fixtures are explicitly synthetic and are never user learning evidence.
 
-
 ## Historical proof reconciliation
 
 `historical-proof.ts` parses the exact source evidence records selected by track/objective/depth. Optional `Assessment.historicalMappings` maps source observations to already registered stable semantic facets. Validation rejects mismatched hashes/scope, unknown IDs, unscored exposure and assisted independence claims. Mixed-source rows require an exact independent excerpt, while the trusted assessor remains responsible for actual semantic equivalence. The complete original progress context is included in the evidence packet.
@@ -103,7 +95,6 @@ The same atomic evidence transaction handles actual human authorship, assistance
 `historicalReviews` is a receipt-bound append-only ledger audit, distinct from new `LearningEvidence`. Valid original references can support complementary facet proof without receiving new observation IDs. Later current independent/contradictory technical work takes precedence; subsequent source review corrections can withdraw historical support while preserving audit history. The transaction's provisional receipt exists only in its private clone until all validation succeeds. Duplicate delivery cannot repeat evidence, primary visits or review records.
 
 Readiness and export resolve both genuine new evidence and approved historical support. Unknown scope does not demote an imported canonical P; actual new contradictions still do. Source-only review recovery retains original date-only observations and does not claim a new exact observation time or delayed review. The inspector separates mapping review dates from original observation dates. Markdown export retains original evidence rows and a separate semantic reconciliation audit, never raw review rationale or source excerpts. Native-provider identity and semantic mapping quality remain external/unverified; structural acceptance is not a semantic correctness certificate.
-
 
 ## NPC cognition and public conversation snapshots
 
@@ -115,7 +106,6 @@ Catch-up cursor ownership is restricted to materialized event ranges. Closing ch
 
 `Message.presented` is optional until the appropriate visible channel is rendered. `presentMessages` allocates first-display sequences and tags the underlying chat/proposal artifact. Learning packets and assistance checks exclude unpresented material. Consequently, a privately generated but hidden answer is neither public group context nor earlier learner assistance. Existing saved presentation markers remain intact. Assessment identity anchors to accepted submission/current human work, rather than later NPC activity or completion logs, preserving duplicate-delivery/reload idempotency.
 
-
 ## Retrospective catch-up transactions
 
 `chat-catchup.ts` coordinates optional source-bound opening/reopening generation. Each encounter retains a batch with from/to cursor, source revision, event refs, selected historical speakers and stable public context. Its payload hash binds explicit retries to that captured input. Workspace content reconstructs from the journal or immutable accepted submission instead of copying a full editor buffer into every saved batch. Prior transcript presentation state and speaker profiles are captured, so later visibility/skill changes do not alter a retry. Bounded immutable snapshots persist only while a batch is pending/unavailable; completed/superseded jobs release them.
@@ -124,20 +114,17 @@ In-flight coordination uses encounter-object identity. Recovery marks a persiste
 
 Main UI starts the asynchronous catch-up without pausing the engine, exposes pending/failure/retry state and an independently readable recorded-work log. The log retains earlier facts and candidates; display generates assistance exposure rather than dialogue or progress. `assistanceSources` includes actual technical work-log exposure where an earlier visible group message has not already covered it. Public and private provider sessions are distinct run-qualified namespaces. Recorded-only fallback is explicitly identified whenever the configured bridge lacks retrospective capability.
 
-
 ### Updated-roadmap review boundary
 
 `roadmap-review.ts` compares the unchanged bundled source, a current progress-export snapshot and an uploaded merged Markdown file. It validates the supported identity/schema, unique ordered blocks, protected digests/bytes and direct complete-file ancestry; compares progress rows by block/section/table/row identity; and marks concurrent incompatible changes. Scope/facet and historical receipt tables use compound identities. Historical evidence changes are escalated to review. A complete-parent match proves lineage only, never academic validity.
 
 The inspector generates the current export on a cloned study state, escapes all uploaded content and displays source/local/incoming differences. Review has no commit path and awards nothing. Structural results cannot enable native APIs or execute document instructions. Missing semantic/gate/counter validation, longer ancestry proof, non-table prose review and reconciliation/adoption remain explicit gaps. JSON backups remain the complete game-resume format.
 
-
 ### Concrete NPC edit review
 
 Normal group responses may include a proposal-only UTF-16 single-range patch. `group-grounding.ts` checks exact captured source and schema before any messages commit. `workspace-proposals.ts` stores immutable authored patch provenance separately from mutable review disposition, reconstructs its source from the edit journal, and uses an exact revision/source comparison for application. The same patch is retained on the proposal artifact and compared before apply. Human terminal access and an unfinished shared encounter are required; a loaded save reacquires physical access before review.
 
 Apply appends a human `activity` review and an NPC `edit` delta; it never relabels the code, starts a study visit or assigns mastery. Existing workspace reconstruction, immutable submissions and execution receipts continue to identify the actual revision. Multiple candidates for one source become stale after the first changes it. Applied/dismissed states, source patches and history persist in normal run backups. Candidate contents acquire actual first-presentation markers through group chat, work-log or expanded diff rendering. Semantic quality and autonomous offscreen materialization remain unverified/incomplete.
-
 
 ### Run-scoped sound and accessibility
 
@@ -147,7 +134,6 @@ Apply appends a human `activity` review and an NPC `edit` delta; it never relabe
 
 Reduced-motion rendering stabilizes decorative canvas effects as well as CSS transitions. It changes no visibility, movement or curriculum rules. Real Chromium OfflineAudioContext metrics and canvas-pixel/editor-focus checks supplement mocked-node timing and physical-event tests. Perceptual comfort and actual assistive-technology behavior are still external human acceptance work.
 
-
 ### Equipment boundaries and expiry ordering
 
 `equipment.ts` owns chosen item constants, readable card/guide descriptions, active-survivor eligibility and exact visible target selection. The same finite wall/opaque-furniture geometry used for sight gates weapon/repulsor targets. Dead targets and other floors are excluded. No-op healing and attacks without an exposed living target do not spend a charge. Use does not create academic artifacts or alter the learner ledger.
@@ -156,7 +142,6 @@ At the start of each physical step, expired effects are retired; expired bubbles
 
 Current chosen mechanics retain the existing numeric balance: medkit55 HP, bubble22s/3.5 tiles, flare65s/8 tiles, battery lamp80s/6 tiles, decoy20s/10 acoustic tiles, weapon60 damage/5 tiles and repulsor5 tiles. The battery kind represents a deployable lamp, not tutoring currency. Tactical NPC use of every equipment type, long-session balance and human playtest quality remain broader acceptance work.
 
-
 ### Doorway exploration and narrow passages
 
 `exploration.ts` provides doorway crossing goals, entered-door observation, sparse room sampling plus narrow-passage cells, and deduplicated visited-place memory. A visible door supplies the local crossing direction/goal; hidden station coordinates do not select that goal. Normal body-clear routing, door interaction, movement, collision and vault timing still govern the actual approach. Selecting or opening a door does not mark its far side entered. The observer records the physical crossing independently of whether seeing a terminal has changed the survivor's next action.
@@ -164,7 +149,6 @@ Current chosen mechanics retain the existing numeric balance: medkit55 HP, bubbl
 Persistent `Actor.exploringDoor` retains the door/floor/goal; actual stair transitions clear it. Existing `explored-door-*` markers describe the older selection behavior and cannot suppress an unobserved crossing. Stalled crossings enter a bounded retry list without a false visit record. Coarse open-room scans gain cells bounded by opposite walls, ensuring that a two-tile stride does not skip a one-tile corridor. Existing finite sight/occlusion still gates candidate visibility and station discovery. Repeat fallback destinations are remembered once rather than appended each cycle.
 
 The sanitized `missed-annex.json` fixture retains a captured physical world, original NPC health/access/ownership/puzzle progress and conceptual work. It excludes the original learner and event ring and trims NPC activity-only encounter history; the restore helper installs a fresh ledger. Its replay tests discovery under the recorded pressure without claiming a new opening-to-roof run. Fresh long simulations remain separate fingerprinted evidence and still expose poor overall survival. Exhausted one-use opportunities do not receive a fabricated replacement, free access or inherited dead-owner solution.
-
 
 ### Committed retreat and contact-aware routes
 
@@ -380,11 +364,9 @@ A saved checkpoint after the actual earned ascent is replayed in Chromium with o
 
 Only main.ts and result-backdrop CSS changed in the application during this phase. An archive comparison verifies every other58 TypeScript module is identical to the continuing-inflow source, preserving the engine/learning boundary for previous long-study evidence. Full current core/browser checks and immutable current sources/stylesheet/driver snapshots are retained separately.
 
-
 ### Compound-cover NPC exit recovery
 
 When an ordinary survivor route is unavailable, exit recovery first tries the legal inside-door approach/interaction. It can rearrange visible previously moved furniture near the room's inner mouth or outer door, including horizontal layers; full-object transport still uses `furnitureRoute`/`followFurniturePlan` and `pushFurniture`. A visible vertical inner-mouth blocker gets additional inward clearance for a real vault landing; other layers move inward by a smaller bounded distance. An NPC may walk/vault to the cleared static mouth to observe an outer layer before selecting it. Geometry and doors remain physical, finite visibility still gates new object selection, and the original retry/idle bounds remain. Three compound-cover regressions compare against a legal manual witness, including exact save/reload during handling; the outer fridge is traversed without changing its position or HP. Controlled egress evidence is separate from horde survival and human learning.
-
 
 ### Source-qualified unresolved branch histories
 
@@ -392,13 +374,11 @@ When an ordinary survivor route is unavailable, exit recovery first tries the le
 
 Both proposal normalization and adoption compilation revalidate the exact retained rows, dependencies and audit history. Explicit conflict decisions are still required. Unresolved observations cannot bind to the local same-named task or supply new imported facet/ENV proof; incoming identifier floors remain reserved even for quarantined rows. S0.8 separates the portable audit from strict S0.7 counter metadata. Subsequent imports cannot strip, duplicate or rewrite the audit. Existing exact backups, stale-work checks and explicit user adoption remain mandatory. The review UI labels the unresolved history and escapes provider text. This preserves branch work while deferring semantic conflict resolution; it does not solve session identity collisions, certify human understanding, revise terminal history or establish genuine native bridge availability.
 
-
 ### Manual final-evidence depth from authoritative source registers
 
 `importedMappingValid` first respects an observation's explicit `D1`–`D4` title. Without that label, existing game-export final titles remain supported; manual final mappings may instead derive depth4 from an exact source-register evidence link. `finalRegisterDepth` accepts only a bare selected topic-transfer/integration target with a `/T4` scope and its same-track authoritative0.7/0.8 row. It reads transfer evidence references (not delayed-review references), requires ACTIVE integration selection, and matches the complete evidence identifier. A checkpoint scope such asT01.1 cannot be expanded to the wholeT01 transfer. Existing exact excerpts, observed scores, independence/assistance, issued non-invalidated task, facet scope and full semantic-coverage guards still govern proof. A contradictory explicit depth is never overridden by a final title or register link.
 
 Four synthetic PY/PE transfer/integration adoptions exercise the new manual representation, exact reload and a later changed export. Negative cases cover lower/conflicting depth labels, checkpoint/wrong scope, retention-only/missing/prefix references, guidance, invalidation and deselection. An explicitD4 case preserves compatibility. The real browser workflow downloads the exact complete proposal, explicitly adopts it and retains final status after reload with no gameplay study visits/evidence. These fixtures test invariants and transport, not genuine native semantic quality or actual human achievement.
-
 
 ### Current observation qualification versus receipt integrity
 
@@ -407,7 +387,6 @@ Four synthetic PY/PE transfer/integration adoptions exercise the new manual repr
 `independentProofValid` and `importedProofValid` consult this current qualification before accepting prior independent evidence. `importedMappingValid` still validates each receipt against its own immutable source: a historically authentic receipt can remain valid history while no longer being current proof. Export continues checking exact proposal/canonical hashes and old receipt integrity; no old observation or receipt is rewritten.
 
 After compiling a new reviewed source, adoption finds mapped independent facets whose invalidated references have no remaining qualified independent support. It changes those derived facet outcomes to unknown while retaining all evidence IDs. Source-backed U/G transitions are allowed only with actual withdrawn support and must preserve unaffected positive facets and material gaps. A new R requires an actual reviewed contradiction, not invalidation alone. Keeping unsupported mapped checkpoint/final P, discarding unaffected knowledge or recycling invalidated observations rejects. Stable definitions, private work, observed facts, world rewards and academic visit history remain unchanged. Current tests exercise imported final scopes, separate unaffected facets/gaps, old-receipt integrity, direct-evidence rejection, reload and changed export. Full ordinary higher-gate reopening/baseline correction and terminal-history workflows still require dedicated implementation/acceptance work.
-
 
 ### Source-backed closed-assessment corrections and stable gap projection
 
@@ -435,11 +414,9 @@ The integration tests use controlled source judgments and real unchanged-curricu
 
 The original-checkpoint UI summary tolerates malformed native reply shapes. It cannot assume that a saved error proposal has passed semantic validation. A browser regression submits a null definitions field, verifies a visible validation error and inert learner, retries the same saved source context, and then completes review/download/adoption/reload.
 
-
 ## Non-API ChatGPT handoff
 
 The local relay composes `chatgpt-handoff-queue.mjs` and `chatgpt-handoff-routes.mjs` with the existing native adapter. Queue release is explicit and off after restart. `chatgpt-handoff-mcp.mjs` is a local stdio worker; `chatgpt-public-bridge.mjs` supplies the distinct protected public MCP/OAuth surface. `chatgpt-tunnel-config.mjs` provisions only the game's pinned tunnel; `chatgpt-tunnel-supervisor.mjs` owns its child/watchdog lifecycle. Security modules and provenance live under `scripts/chatgpt-security/`. No local API routes are exposed through the public socket. Client state and evidence retain the actual `chatgpt-handoff` provider rather than claiming native Study Mode. See CHATGPT_HANDOFF.md for setup, trust boundaries and recovery limits.
-
 
 Player visibility decision — 2026-10-17: only walls block the human view and rendered light. `playerCanSee` and `visibilityPolygon` share the wall ray; furniture, closed doors and gates cast no player-view shadows. Actor perception, physical reach, movement, projectiles and acoustics retain their separate cover rules. Rendered actors/names/terminals/previews and local stair-contact cues all use the player view. Original finite radii, normal/dark lighting and Surge geometry remain bounded. The earlier wall/door player-visibility decision is superseded by this explicit request.
 
@@ -481,18 +458,15 @@ The React controller uses one bounded newline-framed JSON packet rather than blo
 
 Python, TypeScript and JavaScript controllers use the same EOF-independent packet principle. Their host encoder base64-encodes exact UTF-8 source bytes into one bounded JSON line. The isolated bootstrap writes only the decoded source file, then gives the learner process EOF on stdin. Shell interpolation, host execution, mounts, credentials and runtime ceilings are unchanged. The separate real-container regression checks Unicode and EOF behavior for all three languages.
 
-
 ### Permanent floor trails
 
 `blood.ts` records actual post-contact zombie movement without consuming simulation RNG. Movement anchors persist on zombies; floor changes and teleports reset anchors instead of drawing false connecting lines. Per-floor stain rows use four cells per world unit with compact eight-direction, left/right foot glyphs, bounded by 23,936 characters plus row overhead. A 0.28-unit stride alternates feet, including after save/reload. Cached glyphs use a small separate heel and forefoot; older numeric stain cells remain supported and display as footprints. There is no lifetime expiry. Rows serialize with the normal checkpoint, remain after death/removal, and are rendered on cached transparent floor layers beneath props and bodies, inside the existing finite wall-clipped visibility polygon. Repainting only changed rows avoids an ever-growing per-frame decal traversal.
-
 
 ### Physical entrance and opening spawn delay
 
 The main entrance is a normal hinged door from world creation, initially closed and latched, with 600 HP versus 240 HP for room doors. E releases its latch without changing its angle; contact swings it, pushing shut relatches, and another E release permits opening from the other side. The former three-second disappearing shutter and automatic closure are removed. Legacy main-gate saves migrate on load/physics synchronization, preserving identity, damage, destroyed state and learning; an old countdown-open shutter restores as an unlatched physical leaf. Arriving NPCs can release and push the entrance as a real door. It is excluded from NPC study-exploration goals, so an indoor student does not deliberately explore back outside. Diagnostics retain its hinge/latch state. Ended runs ignore gameplay keys.
 
 New runs start spawning outside zombies at ten simulation seconds; a second spawn guard also protects older saved early deadlines. Pausing stops the simulation clock, and reload retains elapsed time and the existing next-spawn deadline. The opening batch and normal reinforcement interval remain unchanged. This is a spawn delay, not damage immunity: any existing zombie can attack normally. The HUD displays the remaining spawn countdown. Diagnostic logs remain local and download only through explicit export controls; death does not initiate export.
-
 
 ### Office art, floor friction and zombie push (2026-10-19)
 
