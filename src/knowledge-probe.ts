@@ -614,3 +614,78 @@ export function knowledgeProbeContext(g: Game, track: string): string {
     .filter(Boolean)
     .join("\n\n");
 }
+
+/** Bounded probe records for one track, for the question generator. */
+export interface ProbeRecords {
+  note: string;
+  established: {
+    facetId: string;
+    description: string;
+    status: "demonstrated" | "implied";
+    impliedBy?: string;
+    partOf?: ProbeFacet;
+    objectiveIds: string[];
+    depth: number;
+  }[];
+  openGaps: {
+    facetId: string;
+    description: string;
+    statement: string;
+    partOf?: ProbeFacet;
+    objectiveIds: string[];
+    depth: number;
+  }[];
+  closedGaps: {
+    facetId: string;
+    description: string;
+    partOf?: ProbeFacet;
+    objectiveIds: string[];
+    depth: number;
+    resolvedAt: string;
+  }[];
+}
+export const PROBE_RECORDS_NOTE =
+  "Terminal probe observations for this track, never curriculum mastery. When openGaps name facets inside the eligible scope, reuse their exact facet ids and descriptions in scopeDefinitions and make the facet they blocked the question's apex; do not spend the question on facets listed as established unless the scope requires them; a closedGap means the facet it blocked should be asked again, since known parts never imply it. The scheduler alone chooses the scope; copy the eligible contract exactly.";
+export function probeRecordsForTrack(g: Game, track: string): ProbeRecords {
+  const onTrack = <T extends { track: string }>(rows: T[] | undefined) =>
+    (rows ?? []).filter((r) => r.track === track);
+  const parent = (r: { partOf?: ProbeFacet }) =>
+    r.partOf ? { partOf: { ...r.partOf } } : {};
+  const gaps = onTrack(g.study.knowledgeGaps);
+  return {
+    note: PROBE_RECORDS_NOTE,
+    established: onTrack(g.study.knowledgeEstablished)
+      .slice(-40)
+      .map((r) => ({
+        facetId: r.facet.id,
+        description: r.facet.description,
+        status: r.status,
+        ...(r.impliedBy ? { impliedBy: r.impliedBy } : {}),
+        ...parent(r),
+        objectiveIds: [...r.objectiveIds],
+        depth: r.depth,
+      })),
+    openGaps: gaps
+      .filter((r) => !r.resolved)
+      .slice(-20)
+      .map((r) => ({
+        facetId: r.facet.id,
+        description: r.facet.description,
+        statement: r.statement.slice(0, 200),
+        ...parent(r),
+        objectiveIds: [...r.objectiveIds],
+        depth: r.depth,
+      })),
+    closedGaps: gaps
+      .filter((r) => r.resolved)
+      .slice(-20)
+      .map((r) => ({
+        facetId: r.facet.id,
+        description: r.facet.description,
+        ...parent(r),
+        objectiveIds: [...r.objectiveIds],
+        depth: r.depth,
+        resolvedAt: r.resolved!.at,
+      })),
+  };
+}

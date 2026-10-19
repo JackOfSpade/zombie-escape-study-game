@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
-import { ensureProblem } from "../src/ai";
+import { checkBridge, ensureProblem } from "../src/ai";
+import { eligible, initialStudy } from "../src/curriculum";
+import { devProblem } from "../src/practice-problem";
 import {
   encounterEstablished,
   encounterGaps,
@@ -10,6 +12,8 @@ import {
   knowledgeProbeContext,
   openGaps,
   parseProbeReply,
+  PROBE_RECORDS_NOTE,
+  probeRecordsForTrack,
   probeContract,
   probeFacets,
   probeState,
@@ -982,5 +986,206 @@ test("declared parts join the encounter's universe and are carried in records an
       (x) => x.facet.id === "enumerative-combinatorics",
     )!.partOf!.description,
     "Integer partition identities",
+  );
+});
+
+test("probeRecordsForTrack is bounded, track-scoped, keeps parents and splits open from closed gaps", () => {
+  const g = createPlayableGame(9, r);
+  const parent = { id: "apex", description: "Apex facet" };
+  g.study.knowledgeEstablished = Array.from({ length: 45 }, (_, i) => ({
+    id: `known-${i}`,
+    encounter: `run/e${i}`,
+    runId: "run",
+    track: i % 9 === 0 ? "PE" : "PY",
+    objectiveIds: ["PY:T01.1"],
+    depth: 1,
+    facet: { id: `f-${i}`, description: `Facet ${i}` },
+    status: i % 2 ? ("implied" as const) : ("demonstrated" as const),
+    ...(i % 2 ? { impliedBy: "f-0" } : {}),
+    ...(i === 44 ? { partOf: parent } : {}),
+    requestId: `q${i}`,
+    provider: "chatgpt-handoff",
+    at: "2026-10-18T00:00:00.000Z",
+  }));
+  g.study.knowledgeGaps = Array.from({ length: 25 }, (_, i) => ({
+    id: `gap-${i}`,
+    encounter: `run/e${i}`,
+    runId: "run",
+    track: "PY",
+    objectiveIds: ["PY:T01.2"],
+    depth: 1,
+    facet: { id: `g-${i}`, description: `Gap ${i}` },
+    statement: "x".repeat(300),
+    ...(i === 24 ? { partOf: parent } : {}),
+    requestId: `q${i}`,
+    provider: "chatgpt-handoff",
+    at: "2026-10-18T00:00:00.000Z",
+    ...(i % 5 === 0
+      ? {
+          resolved: {
+            at: "2026-10-19T00:00:00.000Z",
+            encounter: "run/later",
+            requestId: "later",
+            status: "demonstrated" as const,
+          },
+        }
+      : {}),
+  }));
+  const py = probeRecordsForTrack(g, "PY");
+  assert.equal(py.note, PROBE_RECORDS_NOTE);
+  assert.match(py.note, /never curriculum mastery/);
+  assert.match(py.note, /copy the eligible contract exactly/);
+  assert.equal(py.established.length, 40);
+  assert.ok(
+    py.established.every((k) => !k.facetId.match(/^f-(0|9|18|27|36)$/)),
+  );
+  assert.deepEqual(py.established.at(-1), {
+    facetId: "f-44",
+    description: "Facet 44",
+    status: "demonstrated",
+    partOf: parent,
+    objectiveIds: ["PY:T01.1"],
+    depth: 1,
+  });
+  assert.equal(py.established.at(-2)!.impliedBy, "f-0");
+  assert.equal(py.openGaps.length, 20);
+  assert.ok(py.openGaps.every((x) => x.statement.length === 200));
+  assert.deepEqual(py.openGaps.at(-1)!.partOf, parent);
+  assert.equal(py.closedGaps.length, 5);
+  assert.ok(
+    py.closedGaps.every((x) => x.resolvedAt === "2026-10-19T00:00:00.000Z"),
+  );
+  assert.ok(!("statement" in py.closedGaps[0]));
+  const pe = probeRecordsForTrack(g, "PE");
+  assert.equal(pe.established.length, 5);
+  assert.deepEqual(pe.openGaps, []);
+  assert.deepEqual(pe.closedGaps, []);
+  assert.deepEqual(probeRecordsForTrack(createPlayableGame(1, r), "PY"), {
+    note: PROBE_RECORDS_NOTE,
+    established: [],
+    openGaps: [],
+    closedGaps: [],
+  });
+});
+
+test("live question generation sends the track's probe records and a policy that targets open gaps", async () => {
+  const original = globalThis.fetch;
+  let generatePayload: any;
+  globalThis.fetch = async (input, init) => {
+    if (String(input) === "/api/status")
+      return Response.json({
+        mode: "study-mode",
+        label: "Isolated transport fixture",
+        capabilities: ["generate", "tutor", "group", "complete", "assess"],
+        detail: "Test fixture only; not a native Study Mode verification.",
+      });
+    const body = JSON.parse(String(init?.body));
+    assert.equal(body.operation, "generate");
+    generatePayload = body.payload;
+    const c = body.payload.contract;
+    return Response.json({
+      title: "Fixture question",
+      prompt: "Isolated pipeline fixture.",
+      starter: "",
+      rubric: ["scope"],
+      contract: c,
+      scopeDefinitions: [
+        {
+          id: `${c.objectiveIds[0]}/D${c.depth}`,
+          objectiveId: c.objectiveIds[0],
+          depth: c.depth,
+          sourceScope: c.scopes[0],
+          facets: [{ id: "scope", description: "Complete scope fixture" }],
+        },
+      ],
+    });
+  };
+  try {
+    await checkBridge();
+    // Created live so no development practice problem is pre-assigned.
+    const g = createPlayableGame(33, r, initialStudy(r, "live"));
+    g.status = "playing";
+    const track = eligible(r, g.study).track;
+    g.study.knowledgeGaps = [
+      {
+        id: "gap-1",
+        encounter: "earlier/e",
+        runId: "earlier",
+        track,
+        objectiveIds: ["X:1"],
+        depth: 1,
+        facet: {
+          id: "enumerative-combinatorics",
+          description: "Enumerative combinatorics",
+        },
+        statement: "never learned it",
+        requestId: "q",
+        provider: "study-mode",
+        at: "2026-10-18T00:00:00.000Z",
+      },
+    ];
+    const e = g.encounters[g.floors[0].stations[0].encounter];
+    await ensureProblem(g, e, r);
+    assert.equal(e.problem?.provenance, "study-mode");
+    assert.equal(generatePayload.probeRecords.note, PROBE_RECORDS_NOTE);
+    assert.deepEqual(
+      generatePayload.probeRecords.openGaps.map((x: any) => x.facetId),
+      ["enumerative-combinatorics"],
+    );
+    assert.deepEqual(generatePayload.probeRecords.established, []);
+    assert.match(generatePayload.generationPolicy, /Use probeRecords/);
+    assert.match(generatePayload.generationPolicy, /blocked as the apex/);
+  } finally {
+    globalThis.fetch = async () =>
+      Response.json({
+        mode: "development",
+        label: "Synthetic cleanup",
+        detail: "No real AI",
+        capabilities: [],
+      });
+    await checkBridge();
+    globalThis.fetch = original;
+  }
+});
+
+test("development practice lists open gaps for the scheduled track in its prompt, never closed or other-track ones", () => {
+  const g = createPlayableGame(12, r);
+  const track = eligible(r, g.study).track;
+  const gap = (id: string, t: string, resolved = false) => ({
+    id,
+    encounter: "run/e",
+    runId: "run",
+    track: t,
+    objectiveIds: ["X:1"],
+    depth: 1,
+    facet: { id, description: `Facet ${id}` },
+    statement: "no",
+    requestId: "q",
+    provider: "study-mode",
+    at: "2026-10-18T00:00:00.000Z",
+    ...(resolved
+      ? {
+          resolved: {
+            at: "2026-10-19T00:00:00.000Z",
+            encounter: "run/later",
+            requestId: "later",
+            status: "demonstrated" as const,
+          },
+        }
+      : {}),
+  });
+  const before = devProblem({ ...g, rng: 7 }, r).prompt;
+  assert.doesNotMatch(before, /Recorded gaps to work on/);
+  g.study.knowledgeGaps = [
+    gap("open-a", track),
+    gap("closed-b", track, true),
+    gap("other-c", track === "PY" ? "PE" : "PY"),
+  ];
+  const after = devProblem({ ...g, rng: 7 }, r).prompt;
+  assert.match(after, /Recorded gaps to work on: Facet open-a\.$/);
+  assert.doesNotMatch(after, /closed-b|other-c/);
+  assert.equal(
+    after.replace(/\n\nRecorded gaps to work on: Facet open-a\./, ""),
+    before,
   );
 });

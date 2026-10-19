@@ -4,6 +4,7 @@ import { completionVerdict } from "./completion-verdict";
 import {
   knowledgeProbeContext,
   parseProbeReply,
+  probeRecordsForTrack,
   probeContract,
   probeFacets,
   recordProbeTurn,
@@ -271,13 +272,14 @@ async function ensureIndividualProblem(g: Game, e: Encounter, r: Roadmap) {
         encounterId: e.id,
         contract,
         generationPolicy:
-          "@study Diagnose before teaching. For D1, keep the learner workspace starter empty; put essential scenario or code-reading material in the prompt without supplying the key explanation, endpoint update, worked result or a leading solution hint. Do not interpret an objective's implementation verb as a D1 implementation requirement. Preserve legitimate prior context and assistance attribution without presenting supplied steps as fresh independent understanding.",
+          "@study Diagnose before teaching. For D1, keep the learner workspace starter empty; put essential scenario or code-reading material in the prompt without supplying the key explanation, endpoint update, worked result or a leading solution hint. Do not interpret an objective's implementation verb as a D1 implementation requirement. Preserve legitimate prior context and assistance attribution without presenting supplied steps as fresh independent understanding. Use probeRecords: build the question around open gaps inside the eligible scope, reusing their exact facet ids and descriptions with the facet they blocked as the apex; do not spend the question on established facets unless the scope requires them; re-ask what a closed gap blocked.",
         runtimeSupport: {
           scripts: ["python", "typescript"],
           react:
             "Optional D2+ TypeScript runtime: {language:typescript,environment:react,steps:[{kind:click|fill|press|expect-text|expect-count,selector:CSS,...}]}. Single TSX module default-exporting App; only installed React imports, no network, workers or external packages. At most eight bounded interaction/check steps. Runtime errors/DOM checks/preview are observations, never automatic correctness or ENV credit; TSX transpilation is not static TypeScript type checking. Docker runtime must be installed locally.",
         },
         existingScopeDefinitions: g.study.learner?.scopes,
+        probeRecords: probeRecordsForTrack(g, contract.track),
         progressContext:
           adoptedSourceText(study.learner!)
             ?.split(`<!-- BEGIN ${contract.track}_PROGRESS -->`)[1]
