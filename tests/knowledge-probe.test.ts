@@ -3,8 +3,11 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 import { ensureProblem } from "../src/ai";
 import {
+  encounterEstablished,
   encounterGaps,
+  knowledgeEstablishedContext,
   knowledgeGapContext,
+  knowledgeProbeContext,
   parseProbeReply,
   probeContract,
   probeFacets,
@@ -52,8 +55,14 @@ test("the probe contract assumes knowledge, asks the apex question first, and co
     assert.match(text, /Do not walk the rubric item by item/);
     assert.match(text, /mark Y and Z implied by X/);
     assert.match(text, /Read how the answer is given/);
-    assert.match(text, /do not lecture or withhold the reward/);
+    assert.match(text, /do not lecture and do not withhold the reward/);
+    assert.match(text, /probe Y and Z next, one level down/);
+    assert.match(text, /only the parts actually missing/);
   }
+  assert.match(
+    TERMINAL_DIALOGUE_INSTRUCTION,
+    /no lower-level facet is left to probe/,
+  );
   assert.match(TERMINAL_DIALOGUE_INSTRUCTION, /outcome:"gap"/);
   assert.match(TERMINAL_DIALOGUE_INSTRUCTION, /knowledge\.signal/);
   const contract = probeContract(rubricProblem);
@@ -210,6 +219,16 @@ test("cumulative state re-judges per facet and conceding records only unestablis
   );
   assert.deepEqual(created, []);
   assert.equal(probeState(e).established, 1);
+  // A correct answer records the facet in the carried study state at once.
+  assert.deepEqual(
+    g.study.knowledgeEstablished!.map((r) => [r.facet.id, r.status]),
+    [["window-total", "demonstrated"]],
+  );
+  assert.equal(
+    g.study.knowledgeEstablished![0].encounter,
+    `${e.runId}/${e.id}`,
+  );
+  assert.equal(g.study.knowledgeEstablished![0].requestId, "t1");
   assert.equal(
     probeSummary(e),
     "1 of 3 facets established · last answer partial",
@@ -238,6 +257,8 @@ test("cumulative state re-judges per facet and conceding records only unestablis
   );
   assert.equal(probeState(e).established, 0);
   assert.equal(probeState(e).gaps, 1);
+  // Re-judging the facet as a gap withdraws its established record.
+  assert.equal(g.study.knowledgeEstablished, undefined);
   assert.deepEqual(
     g.study.knowledgeGaps,
     undefined,
@@ -301,6 +322,15 @@ test("cumulative state re-judges per facet and conceding records only unestablis
     "2 of 3 facets established · 1 recorded gap · last answer declared a gap",
   );
   assert.equal(encounterGaps(g, e).length, 1);
+  // X answered records X and the Y it implied, with the implication kept.
+  assert.deepEqual(
+    encounterEstablished(g, e).map((r) => [r.facet.id, r.status, r.impliedBy]),
+    [
+      ["window-total", "implied", "running-update"],
+      ["running-update", "demonstrated", undefined],
+    ],
+  );
+  assert.ok(encounterEstablished(g, e).every((r) => r.requestId === "t3"));
   // Replaying the same request, or conceding again, never duplicates the record.
   assert.deepEqual(
     recordProbeTurn(
@@ -365,18 +395,34 @@ test("cumulative state re-judges per facet and conceding records only unestablis
   );
   assert.equal(g.study.knowledgeGaps!.length, 1);
   assert.equal(e.probe!.turns.length, 5);
+  assert.equal(encounterEstablished(g, e).length, 2);
   e.state = "in-progress";
   const context = knowledgeGapContext(g, e.problem!.contract.track);
   assert.match(context, /Learner-declared knowledge gaps/);
   assert.match(context, /Stop before the incoming index passes/);
   assert.match(context, /I don't know the boundary/);
   assert.equal(knowledgeGapContext(g, "ZZ"), "");
+  const known = knowledgeEstablishedContext(g, e.problem!.contract.track);
+  assert.match(known, /already established at earlier terminals/);
+  assert.match(known, /do not re-probe them/);
+  assert.match(known, /Subtract outgoing, add incoming · demonstrated/);
+  assert.match(
+    known,
+    /Largest window total · implied \(implied by running-update\)/,
+  );
+  assert.doesNotMatch(known, /Stop before the incoming index/);
+  assert.equal(knowledgeEstablishedContext(g, "ZZ"), "");
+  const both = knowledgeProbeContext(g, e.problem!.contract.track);
+  assert.ok(both.startsWith(known));
+  assert.ok(both.endsWith(context));
+  assert.equal(knowledgeProbeContext(g, "ZZ"), "");
   // Gaps survive save/reload and ride the carried study state into a new run.
   const reloaded = recover(decode(encode(g)));
   assert.equal(reloaded.study.knowledgeGaps!.length, 1);
   assert.equal(reloaded.encounters[e.id].probe!.turns.length, 5);
   const next = createPlayableGame(99, r, reloaded.study);
   assert.equal(next.study.knowledgeGaps![0].facet.id, "boundary");
+  assert.equal(next.study.knowledgeEstablished!.length, 2);
   assert.equal(next.encounters[e.id]?.probe, undefined);
 });
 

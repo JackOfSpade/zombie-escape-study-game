@@ -929,7 +929,18 @@ function readinessHtml(track: "PY" | "PE") {
 }
 function knowledgeGapsHtml(g: Game) {
   const gaps = g.study.knowledgeGaps ?? [];
-  return `<section data-knowledge-gaps><h3>Recorded knowledge gaps (${gaps.length})</h3><p>Facets you told Terminal AI you did not know. The key was still granted; these are study targets carried across runs, never failures or mastery. The next question on the same track sees them.</p>${
+  const known = g.study.knowledgeEstablished ?? [];
+  return `<section data-knowledge-established><h3>Established at terminals (${known.length})</h3><p>Facets you answered, or that a correct answer necessarily implied. Later terminals on the same scope skip them. Terminal observations carried across runs, not curriculum credit.</p>${
+    known
+      .slice()
+      .reverse()
+      .slice(0, 40)
+      .map(
+        (r) =>
+          `<p><strong>${escape(r.objectiveIds.join(", "))} · D${r.depth}</strong> · ${escape(r.facet.description)}<br><small>${escape(r.at.slice(0, 10))} · ${escape(r.status)}${r.impliedBy ? ` · implied by ${escape(r.impliedBy)}` : ""}</small></p>`,
+      )
+      .join("") || "<p>None recorded.</p>"
+  }</section><section data-knowledge-gaps><h3>Recorded knowledge gaps (${gaps.length})</h3><p>Facets you told Terminal AI you did not know. The key was still granted; these are study targets carried across runs, never failures or mastery. The next question on the same track sees them.</p>${
     gaps
       .slice()
       .reverse()

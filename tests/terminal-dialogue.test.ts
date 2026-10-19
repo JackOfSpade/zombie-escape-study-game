@@ -265,7 +265,23 @@ test("a declared gap lets Terminal AI concede the key, records the gap with the 
     if (next.problem.contract.track === e.problem.contract.track) {
       assert.match(next.progressContext, /Learner-declared knowledge gaps/);
       assert.match(next.progressContext, /don't know what the boundary/);
-    } else assert.doesNotMatch(next.progressContext, /Learner-declared/);
+      assert.match(
+        next.progressContext,
+        /already established at earlier terminals/,
+      );
+      assert.ok(
+        next.progressContext.includes(
+          `${facets[0].description} · demonstrated`,
+        ),
+      );
+    } else {
+      assert.doesNotMatch(next.progressContext, /Learner-declared/);
+      assert.doesNotMatch(next.progressContext, /already established/);
+    }
+    assert.deepEqual(
+      g.study.knowledgeEstablished.map((k: any) => k.facet.id),
+      [facets[0].id],
+    );
     const nextRun = createPlayableGame(5, r, recover(decode(encode(g))).study);
     assert.equal(nextRun.study.knowledgeGaps!.length, facets.length - 1);
   }));

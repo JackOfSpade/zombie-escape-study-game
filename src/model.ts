@@ -83,6 +83,8 @@ export interface StudyState {
   roadmapExport?: import("./roadmap-export").RoadmapExport;
   /** Learner-declared gaps conceded at terminals; carried across runs, never mastery. */
   knowledgeGaps?: import("./knowledge-probe").KnowledgeGapRecord[];
+  /** Facets established at terminals (answered or implied); carried across runs, never mastery. */
+  knowledgeEstablished?: import("./knowledge-probe").KnowledgeEstablishedRecord[];
   profile?: "development" | "live";
   learner?: LearnerLedger;
   version: number;

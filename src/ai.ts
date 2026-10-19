@@ -2,7 +2,7 @@ import { devProblem } from "./practice-problem";
 import { roomEncounters, assignRoomProblem } from "./room-questions";
 import { completionVerdict } from "./completion-verdict";
 import {
-  knowledgeGapContext,
+  knowledgeProbeContext,
   parseProbeReply,
   probeContract,
   probeFacets,
@@ -1070,7 +1070,7 @@ export async function send(
             ?.split(`<!-- BEGIN ${problem.contract.track}_PROGRESS -->`)[1]
             ?.split(`<!-- END ${problem.contract.track}_PROGRESS -->`)[0] ??
             r.tracks[problem.contract.track].progress,
-          knowledgeGapContext(g, problem.contract.track),
+          knowledgeProbeContext(g, problem.contract.track),
         ]
           .filter(Boolean)
           .join("\n\n"),

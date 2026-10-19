@@ -60,6 +60,22 @@ export interface KnowledgeGapRecord {
   provider: string;
   at: string;
 }
+/** A facet established at a terminal (answered, or implied by an answer); carried across runs, never mastery. */
+export interface KnowledgeEstablishedRecord {
+  id: string;
+  encounter: string;
+  runId: string;
+  track: string;
+  objectiveIds: string[];
+  depth: number;
+  facet: ProbeFacet;
+  status: "demonstrated" | "implied";
+  /** For implied facets: the facet whose correct answer entailed this one. */
+  impliedBy?: string;
+  requestId: string;
+  provider: string;
+  at: string;
+}
 export type FacetState = ProbeFindingStatus | "open";
 export interface ProbeState {
   facets: (ProbeFacet & { status: FacetState; impliedBy?: string })[];
@@ -71,7 +87,7 @@ export interface ProbeState {
 }
 
 export const PROBE_STANCE =
-  'Assume the learner already has this knowledge; they will tell you when they do not. Do not walk the rubric item by item. Open with the single highest-leverage question: the one whose correct answer necessarily depends on the other facets, so one good answer establishes several at once. When an answer demonstrates facet X and X cannot be answered correctly without Y and Z, mark Y and Z implied by X instead of asking about them. Read how the answer is given, not only whether it is right: precise vocabulary, correct ordering of steps, unprompted boundaries and confident specifics are evidence of knowledge; vague restatement, hedging, guessed numbers or asking what the question means are signals to probe one level down rather than to assume a gap. Ask about a facet only when nothing so far establishes it. When the learner states they do not know a facet, or asks for the answer, stop probing that facet: report it as a gap with their own words, do not lecture or withhold the reward, and return complete:true with outcome:"gap" once every remaining facet is either established or declared a gap. A declared gap is recorded for later study; it is not a failure and never a reason to keep the learner at the terminal.';
+  'Assume the learner already has this knowledge; they will tell you when they do not. Do not walk the rubric item by item. Open with the single highest-leverage question: the one whose correct answer necessarily depends on the other facets, so one good answer establishes several at once. When an answer demonstrates facet X and X cannot be answered correctly without Y and Z, mark Y and Z implied by X instead of asking about them. Read how the answer is given, not only whether it is right: precise vocabulary, correct ordering of steps, unprompted boundaries and confident specifics are evidence of knowledge; vague restatement, hedging, guessed numbers or asking what the question means are signals to probe one level down rather than to assume a gap. Ask about a facet only when nothing so far establishes it. When the learner states they do not know a facet, or asks for the answer, do not lecture and do not withhold the reward. If that facet encompasses other facets (it is the apex question X whose answer depends on Y and Z), the gap is not yet fleshed out: probe Y and Z next, one level down, so the recorded gap is only the parts actually missing; mark the parts they can answer demonstrated and only the parts they cannot as gaps. Once a facet has no parts left to descend to, report it as a gap with their own words and stop probing it. Return complete:true with outcome:"gap" once every remaining facet is either established or declared a gap at its lowest level. A declared gap is recorded for later study; it is not a failure and never a reason to keep the learner at the terminal.';
 
 export const TERMINAL_DIALOGUE_FORMAT = {
   text: "string",
@@ -96,7 +112,7 @@ export const TERMINAL_DIALOGUE_FORMAT = {
 export const TERMINAL_DIALOGUE_INSTRUCTION =
   "@study: Continue this private puzzle conversation. Judge the learner's accumulated answers against every part of the question and rubric. Return {text,complete,outcome?,knowledge?}. " +
   PROBE_STANCE +
-  ' Ask a focused follow-up with complete:false while a facet is still open. Set complete:true with outcome:"solved" when the learner\'s messages and saved work supply a correct, sufficiently supported solution; set complete:true with outcome:"gap" when the learner has declared they do not know what remains, and name those facets as gaps in knowledge.facets. In knowledge.facets use only ids from probe.facets, with status demonstrated, implied (with impliedBy) or gap; add knowledge.signal describing how the latest answer was given. Your own explanations are assistance, not learner evidence. Do not demand a separate submission or repeat already demonstrated reasoning. Do not claim execution without matching receipts. Gameplay completion is separate from independent mastery.';
+  ' Ask a focused follow-up with complete:false while a facet is still open. Set complete:true with outcome:"solved" when the learner\'s messages and saved work supply a correct, sufficiently supported solution; set complete:true with outcome:"gap" when the learner has declared they do not know what remains and no lower-level facet is left to probe, and name those facets as gaps in knowledge.facets. In knowledge.facets use only ids from probe.facets, with status demonstrated, implied (with impliedBy) or gap; add knowledge.signal describing how the latest answer was given. Your own explanations are assistance, not learner evidence. Do not demand a separate submission or repeat already demonstrated reasoning. Do not claim execution without matching receipts. Gameplay completion is separate from independent mastery.';
 
 const facetId = (value: string) =>
   value
@@ -316,9 +332,11 @@ export function recordProbeTurn(
     questionSequence: context.questionSequence,
     at,
   });
-  // Gaps are recorded only when the key is conceded; later chat at a solved
-  // terminal is kept as probe history but opens no new study targets.
-  if (reply.outcome !== "gap" || e.state === "consumed") return [];
+  // Chat after the key was awarded is kept as probe history, but it neither
+  // rewrites what the terminal established nor opens new study targets.
+  if (e.state === "consumed") return [];
+  syncEstablished(g, e, context, at);
+  if (reply.outcome !== "gap") return [];
   const state = probeState(e);
   const declared = new Set(
     reply.findings.filter((f) => f.status === "gap").map((f) => f.id),
@@ -354,6 +372,78 @@ export function recordProbeTurn(
   return created;
 }
 
+/**
+ * Mirror this encounter's established facets into the carried study state:
+ * a correct answer to X records X, and every Y and Z it implied, so a later
+ * terminal on the same scope does not probe them again. A later re-judgment
+ * within the encounter replaces or withdraws the record.
+ */
+function syncEstablished(
+  g: Game,
+  e: Encounter,
+  context: { requestId: string; provider: string },
+  at: string,
+) {
+  const problem = e.problem;
+  if (!problem) return;
+  const encounterRef = `${e.runId ?? g.id}/${e.id}`;
+  const records = (g.study.knowledgeEstablished ??= []);
+  const established = probeState(e).facets.filter(
+    (f) => f.status === "demonstrated" || f.status === "implied",
+  );
+  for (let i = records.length - 1; i >= 0; i--) {
+    const r = records[i];
+    if (r.encounter !== encounterRef) continue;
+    const current = established.find((f) => f.id === r.facet.id);
+    if (!current) {
+      records.splice(i, 1);
+      continue;
+    }
+    if (current.status !== r.status || current.impliedBy !== r.impliedBy) {
+      const { impliedBy: _dropped, ...rest } = r;
+      records[i] = {
+        ...rest,
+        status: current.status as "demonstrated" | "implied",
+        ...(current.impliedBy ? { impliedBy: current.impliedBy } : {}),
+        requestId: context.requestId,
+        at,
+      };
+    }
+  }
+  for (const f of established) {
+    if (
+      records.some((r) => r.encounter === encounterRef && r.facet.id === f.id)
+    )
+      continue;
+    records.push({
+      id: `known-${encounterRef}-${f.id}`,
+      encounter: encounterRef,
+      runId: e.runId ?? g.id,
+      track: problem.contract.track,
+      objectiveIds: [...problem.contract.objectiveIds],
+      depth: problem.contract.depth,
+      facet: { id: f.id, description: f.description },
+      status: f.status as "demonstrated" | "implied",
+      ...(f.impliedBy ? { impliedBy: f.impliedBy } : {}),
+      requestId: context.requestId,
+      provider: context.provider,
+      at,
+    });
+  }
+  if (!records.length) delete g.study.knowledgeEstablished;
+}
+
+/** Established records for an encounter. */
+export function encounterEstablished(
+  g: Game,
+  e: Encounter,
+): KnowledgeEstablishedRecord[] {
+  const ref = `${e.runId ?? g.id}/${e.id}`;
+  return (g.study.knowledgeEstablished ?? []).filter(
+    (r) => r.encounter === ref,
+  );
+}
+
 /** Gap records for an encounter, for the terminal and inspector views. */
 export function encounterGaps(g: Game, e: Encounter): KnowledgeGapRecord[] {
   const ref = `${e.runId ?? g.id}/${e.id}`;
@@ -374,4 +464,29 @@ export function knowledgeGapContext(g: Game, track: string): string {
       )
       .join("\n")
   );
+}
+
+/** Progress-context note listing facets already established, so they are not probed again. */
+export function knowledgeEstablishedContext(g: Game, track: string): string {
+  const known = (g.study.knowledgeEstablished ?? []).filter(
+    (r) => r.track === track,
+  );
+  if (!known.length) return "";
+  return (
+    "Facets already established at earlier terminals (answered, or implied by a correct answer). Treat them as known: do not re-probe them unless the current answer contradicts one. Terminal observations, not curriculum mastery:\n" +
+    known
+      .slice(-40)
+      .map(
+        (r) =>
+          `- ${r.objectiveIds.join(", ")} D${r.depth} · ${r.facet.description} · ${r.status}${r.impliedBy ? ` (implied by ${r.impliedBy})` : ""}`,
+      )
+      .join("\n")
+  );
+}
+
+/** Both notes for the next tutor request on a track. */
+export function knowledgeProbeContext(g: Game, track: string): string {
+  return [knowledgeEstablishedContext(g, track), knowledgeGapContext(g, track)]
+    .filter(Boolean)
+    .join("\n\n");
 }
