@@ -21,8 +21,11 @@ test("fresh run uses force fields, personal keys and a solo study workspace", as
     return {
       rules: g.rules,
       solo: Object.values(g.encounters).every((x: any) => x.mode === "solo"),
+      // Fields have no door leaves; everything else is movable office furniture.
       fields: g.floors.every((f: any) =>
-        f.furniture.every((o: any) => o.field && !o.door),
+        f.furniture.every((o: any) =>
+          o.field ? !o.door : /-office\d+-/.test(o.id) && o.speed > 0,
+        ),
       ),
       inventory: g.survivors[0].inventory.length,
       startingKeys: g.survivors.every((a: any) => a.keys === 0),

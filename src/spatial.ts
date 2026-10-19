@@ -101,6 +101,8 @@ export function line(
 interface PathCache {
   signature: string;
   routes: Map<string, Point[]>;
+  /** Cells whose centre lies within a body radius of intact furniture. */
+  furniture?: Uint8Array;
 }
 const routeCache = new WeakMap<Floor, PathCache>();
 export function path(f: Floor, a: Point, b: Point, breakable = false): Point[] {
@@ -122,7 +124,8 @@ export function path(f: Floor, a: Point, b: Point, breakable = false): Point[] {
   const key = `${Math.floor(a.x)},${Math.floor(a.y)}/${Math.floor(b.x)},${Math.floor(b.y)}/${breakable}`;
   let route = cache.routes.get(key);
   if (!route) {
-    route = computePath(f, a, b, breakable);
+    cache.furniture ??= furnitureCells(f);
+    route = computePath(f, a, b, breakable, cache.furniture);
     if (cache.routes.size >= 512)
       cache.routes.delete(cache.routes.keys().next().value!);
     cache.routes.set(key, route);
@@ -130,8 +133,36 @@ export function path(f: Floor, a: Point, b: Point, breakable = false): Point[] {
   // Callers consume routes and sometimes modify individual points.
   return route.map((p) => ({ ...p }));
 }
+function furnitureCells(f: Floor) {
+  const cells = new Uint8Array(W * H);
+  for (const o of f.furniture) {
+    const r = (o.w + o.h) / 2 + 0.22;
+    for (
+      let y = Math.max(0, Math.floor(o.y - r));
+      y <= Math.min(H - 1, Math.floor(o.y + r));
+      y++
+    )
+      for (
+        let x = Math.max(0, Math.floor(o.x - r));
+        x <= Math.min(W - 1, Math.floor(o.x + r));
+        x++
+      )
+        if (
+          !cells[y * W + x] &&
+          inFurniture({ x: x + 0.5, y: y + 0.5 }, o, 0.22)
+        )
+          cells[y * W + x] = 1;
+  }
+  return cells;
+}
 // Dijkstra with positive furniture traversal costs: zombies prefer open alternatives, then break a physical route.
-function computePath(f: Floor, a: Point, b: Point, breakable = false): Point[] {
+function computePath(
+  f: Floor,
+  a: Point,
+  b: Point,
+  breakable: boolean,
+  furniture: Uint8Array,
+): Point[] {
   const start = Math.floor(a.y) * W + Math.floor(a.x),
     end = Math.floor(b.y) * W + Math.floor(b.x);
   const dist = new Float64Array(W * H).fill(Infinity),
@@ -185,9 +216,7 @@ function computePath(f: Floor, a: Point, b: Point, breakable = false): Point[] {
       if (wall(f, xx + 0.5, yy + 0.5)) continue;
       const id = yy * W + xx;
       if (closed[id]) continue;
-      const ob = f.furniture.find((o) =>
-        inFurniture({ x: xx + 0.5, y: yy + 0.5 }, o, 0.22),
-      );
+      const ob = furniture[id] === 1;
       if (ob && !breakable) continue;
       const nd = cost + 1 + (ob ? 18 : 0);
       if (nd < dist[id]) {

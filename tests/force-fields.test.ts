@@ -19,11 +19,28 @@ const fixture = (id: string) =>
     roadmap,
   );
 
-test("fresh worlds have only fields, independent solo stations, keys and no equipment", () => {
+test("fresh worlds have fields, movable office furniture clear of every opening, independent solo stations, keys and no equipment", () => {
   for (const seed of [1, 42, 2682889803]) {
     const g = createPlayableGame(seed, roadmap);
+    for (const f of g.floors) {
+      const fields = f.furniture.filter((o) => o.field);
+      assert.ok(fields.every((o) => !o.door));
+      for (const o of f.furniture.filter((o) => !o.field)) {
+        assert.match(o.id, /-office\d+-/);
+        assert.ok(o.speed > 0 && o.hp === o.maxHp, o.id);
+        // No piece can seal or crowd a field opening.
+        for (const field of fields)
+          assert.ok(
+            Math.abs(o.x - field.x) > field.w / 2 + 1 ||
+              Math.abs(o.y - field.y) > field.h / 2 + 1,
+            `${o.id} near ${field.id}`,
+          );
+      }
+    }
     assert.ok(
-      g.floors.every((f) => f.furniture.every((o) => o.field && !o.door)),
+      g.floors
+        .slice(0, 4)
+        .every((f) => f.furniture.filter((o) => !o.field).length >= 10),
     );
     const stations = g.floors.flatMap((f) => f.stations);
     assert.equal(

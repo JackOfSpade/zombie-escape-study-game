@@ -204,3 +204,52 @@ export function legacyOfficeZones(f: Floor): OfficeZone[] {
   ];
   return f.index < 4 ? zones : [];
 }
+
+/** Office zones for fresh force-field floors: each study stage and both lobbies. */
+export function pursuitOfficeZones(f: Floor): OfficeZone[] {
+  const stages = f.generation?.stages;
+  if (f.index >= 4 || !stages) return [];
+  const rooms: Record<number, FurnitureKind[]> = {
+    // Rear free hall, then meeting, open-plan and storage rooms.
+    2: ["cooler", "plant", "cabinet"],
+    3: ["whiteboard", "cabinet", "officeChair", "plant"],
+    0: ["partition", "printer", "cabinet", "plant"],
+    1: ["whiteboard", "cabinet", "officeChair", "plant"],
+  };
+  return [
+    ...stages.map((s) => ({
+      id: `room${s.room}`,
+      x1: 2,
+      y1: s.front + 1,
+      x2: 41,
+      y2: s.rear - 1,
+      kinds: rooms[s.room] ?? ["plant"],
+    })),
+    {
+      id: "entry",
+      x1: 2,
+      y1: stages[0].rear + 1,
+      x2: 41,
+      y2: 27,
+      kinds: ["plant", "plant"],
+    },
+    {
+      id: "lobby",
+      x1: 2,
+      y1: 2,
+      x2: 41,
+      y2: stages[stages.length - 1].front - 1,
+      kinds: ["cooler", "printer", "plant"],
+    },
+  ];
+}
+/** Points a fresh force-field floor must keep clear: every cell of every field
+ * opening, the stairs and the entry, so furniture can never seal a field. */
+export function fieldClearance(f: Floor): Point[] {
+  const points: Point[] = [f.stairs, f.entry];
+  for (const o of f.furniture)
+    if (o.field)
+      for (let d = -o.w / 2 + 0.5; d <= o.w / 2 - 0.5; d++)
+        points.push({ x: o.x + d, y: o.y });
+  return points;
+}

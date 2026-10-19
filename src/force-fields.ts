@@ -1,4 +1,9 @@
 import { pursuitLayout } from "./pursuit-layout";
+import {
+  fieldClearance,
+  furnishOffice,
+  pursuitOfficeZones,
+} from "./office-layout";
 import { rayBodyDistance } from "./visibility";
 import { inFurniture, line, solid } from "./spatial";
 import { preparePracticeRooms } from "./room-questions";
@@ -71,6 +76,8 @@ export function redesign(g: Game, roadmap?: Roadmap) {
   }
   const assigned = new Set<string>();
   for (const f of g.floors) {
+    // Generated legacy furniture is replaced: doors become fields and the
+    // office pieces are placed again for the new floor plan below.
     f.furniture = f.furniture.filter(
       (o) => o.kind === "door" || o.kind === "gate",
     );
@@ -120,7 +127,17 @@ export function redesign(g: Game, roadmap?: Roadmap) {
     }
   }
   for (const floor of g.floors)
-    if (floor.generation?.version === 2) pursuitLayout(g, floor);
+    if (floor.generation?.version === 2) {
+      pursuitLayout(g, floor);
+      // Fresh runs are furnished as an office: a few movable physical pieces
+      // per room, kept clear of every field opening and terminal.
+      furnishOffice(
+        floor,
+        pursuitOfficeZones(floor),
+        fieldClearance(floor),
+        floor.entry,
+      );
+    }
   const used = new Set(
     g.floors.flatMap((f) => f.stations.map((s) => s.encounter)),
   );
