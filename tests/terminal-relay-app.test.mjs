@@ -34,8 +34,18 @@ const dialoguePayload = (requestId, messages, extra = {}) => ({
   ...extra,
 });
 const human = (text, seq) => ({ kind: "human", author: "human", text, seq });
+/** A queue whose requests come from a game that is still polling for the reply. */
+function waitingGame(queue) {
+  const enqueue = queue.enqueue;
+  queue.enqueue = (...args) => {
+    const receipt = enqueue(...args);
+    queue.result(receipt.id, receipt.hash);
+    return receipt;
+  };
+  return queue;
+}
 function setup(options = {}) {
-  const queue = createHandoffQueue();
+  const queue = waitingGame(createHandoffQueue());
   const app = createTerminalRelayApp({ queue, ...options });
   const open = (grant = owner) =>
     state(app.call("open_study_terminal", {}, grant));
@@ -495,7 +505,7 @@ test("owners are isolated, sessions are bounded and oversized packets omit conte
 
 test("status counts only app sessions that are still calling in as active", () => {
   let clock = 1_000_000;
-  const queue = createHandoffQueue();
+  const queue = waitingGame(createHandoffQueue());
   const app = createTerminalRelayApp({ queue, now: () => clock });
   const s = state(app.call("open_study_terminal", {}, owner));
   assert.deepEqual(app.status(), {
@@ -525,4 +535,115 @@ test("chunked terminal packets are reassembled and all parts are read before a r
   assert.equal(claimed.turn.question.title, "Synthetic window");
   reply(s.relayId, claimed.turn.turnId, "Noted", false);
   assert.equal(queue.result(job.id, job.hash).status, "done");
+});
+
+test("a turn whose game stopped polling never blocks the live game's turn", () => {
+  let clock = 1_000_000;
+  const queue = createHandoffQueue({ now: () => clock });
+  const app = createTerminalRelayApp({ queue, now: () => clock });
+  queue.enable(true);
+  const s = state(app.call("open_study_terminal", {}, owner));
+  // An earlier run queued a turn and is claimed, then the page reloads.
+  const stale = queue.enqueue(
+    "tutor",
+    dialoguePayload("synthetic-old-run", [human("count == 2", 1)]),
+  );
+  queue.result(stale.id, stale.hash);
+  const first = state(
+    app.call(
+      "claim_study_terminal_turn",
+      { relayId: s.relayId, revision: s.revision },
+      owner,
+    ),
+  );
+  assert.equal(first.turn.requestId, "synthetic-old-run");
+  clock += 31_000;
+  // The new run's game queues and keeps polling its own turn.
+  const live = queue.enqueue(
+    "tutor",
+    dialoguePayload("synthetic-new-run", [human("[1,6,5] largest", 1)]),
+  );
+  queue.result(live.id, live.hash);
+  // While the app waits on the stale turn it reads, and is handed the live one.
+  const moved = state(
+    app.call("read_study_terminal", { relayId: s.relayId }, owner),
+  );
+  assert.equal(moved.turn.requestId, "synthetic-new-run");
+  assert.notEqual(moved.turn.turnId, first.turn.turnId);
+  assert.equal(moved.recent.at(-1).status, "released");
+  assert.equal(queue.snapshot().queued, 1, "the stale turn is kept, not lost");
+  assert.throws(
+    () =>
+      app.call(
+        "reply_study_terminal_job",
+        {
+          relayId: s.relayId,
+          turnId: first.turn.turnId,
+          text: "late",
+          complete: false,
+        },
+        owner,
+      ),
+    /does not match/,
+  );
+  // If that old game comes back and polls again, its turn is served next.
+  app.call(
+    "reply_study_terminal_job",
+    {
+      relayId: s.relayId,
+      turnId: moved.turn.turnId,
+      text: "Right.",
+      complete: true,
+    },
+    owner,
+  );
+  assert.equal(queue.result(live.id, live.hash).answer.complete, true);
+  queue.result(stale.id, stale.hash);
+  const back = state(
+    app.call(
+      "claim_study_terminal_turn",
+      { relayId: s.relayId, revision: moved.revision + 1 },
+      owner,
+    ),
+  );
+  assert.equal(back.turn.requestId, "synthetic-old-run");
+});
+
+test("an embedded app left open across a relay restart keeps serving its owner", () => {
+  const queue = waitingGame(createHandoffQueue());
+  queue.enable(true);
+  const before = createTerminalRelayApp({ queue });
+  const s = state(before.call("open_study_terminal", {}, owner));
+  const seen = state(
+    before.call(
+      "claim_study_terminal_turn",
+      { relayId: s.relayId, revision: s.revision },
+      owner,
+    ),
+  );
+  queue.enqueue(
+    "tutor",
+    dialoguePayload("synthetic-restart", [human("answer", 1)]),
+  );
+  const restarted = createTerminalRelayApp({ queue });
+  const resumed = state(
+    restarted.call(
+      "claim_study_terminal_turn",
+      { relayId: s.relayId, revision: seen.revision },
+      owner,
+    ),
+  );
+  assert.equal(resumed.relayId, s.relayId);
+  assert.ok(resumed.revision > seen.revision, "the open app accepts it");
+  assert.equal(resumed.turn.requestId, "synthetic-restart");
+  // Another owner cannot take over that relay id, and a second app for the
+  // same owner still has to reopen.
+  assert.throws(
+    () => restarted.call("read_study_terminal", { relayId: s.relayId }, other),
+    /reopen the study terminal/,
+  );
+  assert.throws(
+    () => restarted.call("read_study_terminal", { relayId: "other-id" }, owner),
+    /reopen the study terminal/,
+  );
 });

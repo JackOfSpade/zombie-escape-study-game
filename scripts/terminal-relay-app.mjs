@@ -119,18 +119,51 @@ const isTerminalDialogue = (job) =>
 
 /** An app session counts as listening only while its UI keeps calling in. */
 export const ACTIVE_WINDOW_MS = 20_000;
+/** A turn is served only while its game keeps polling for the reply; a game
+ * polls every half second, so this outlasts brief hiccups but frees a turn
+ * left behind by a reload or an earlier run within seconds. */
+export const REQUESTER_LIVE_MS = 30_000;
 export function createTerminalRelayApp({
   queue,
   now = Date.now,
   maxSessions = 64,
   promptLimit = PROMPT_LIMIT,
   activeWindowMs = ACTIVE_WINDOW_MS,
+  requesterLiveMs = REQUESTER_LIVE_MS,
 } = {}) {
   if (!queue) throw Error("The terminal relay requires the handoff queue");
   const sessions = new Map();
+  const newSession = (id, account, revision = 0) => {
+    for (const [key, s] of sessions)
+      if (now() - s.updated > 60 * 60_000 && s.turn?.status !== "claimed")
+        sessions.delete(key);
+    if (sessions.size >= maxSessions)
+      throw Error("Terminal relay is at capacity; try later");
+    const s = {
+      id,
+      owner: account,
+      worker: `app-${hash("terminal-relay:" + account).slice(0, 40)}`,
+      updated: now(),
+      revision,
+      turn: null,
+      recent: [],
+      answered: 0,
+      receipts: new Map(),
+    };
+    sessions.set(id, s);
+    return s;
+  };
   const get = (grant, relayId) => {
-    const session = sessions.get(relayId);
-    if (!session || session.owner !== grantOwner(grant))
+    const account = grantOwner(grant);
+    let session = sessions.get(relayId);
+    // A relay restart forgets its sessions while the embedded app stays open
+    // in ChatGPT. Re-register the open app for its authenticated owner rather
+    // than making the player reopen it; a second app for an owner who already
+    // has one is still refused.
+    // Its revisions restart above any the app saw, so the app accepts them.
+    if (!session && ![...sessions.values()].some((s) => s.owner === account))
+      session = newSession(relayId, account, now());
+    if (!session || session.owner !== account)
       throw Error("Terminal relay unavailable; reopen the study terminal");
     session.updated = now();
     return session;
@@ -272,7 +305,9 @@ export function createTerminalRelayApp({
       }
       return;
     }
-    const served = queue.get(s.worker, undefined, isTerminalDialogue);
+    const served = queue.get(s.worker, undefined, isTerminalDialogue, {
+      liveWithinMs: requesterLiveMs,
+    });
     if (served.status !== "served") {
       if (s.turn?.status === "claimed") {
         s.turn.status = "released";
@@ -343,30 +378,22 @@ export function createTerminalRelayApp({
       const account = grantOwner(grant);
       checkToolArguments(terminalRelayTools(), name, args);
       if (name === "open_study_terminal") {
-        let s = [...sessions.values()].find((s) => s.owner === account);
-        if (!s) {
-          for (const [id, s] of sessions)
-            if (now() - s.updated > 60 * 60_000 && s.turn?.status !== "claimed")
-              sessions.delete(id);
-          if (sessions.size >= maxSessions)
-            throw Error("Terminal relay is at capacity; try later");
-          s = {
-            id: randomUUID(),
-            owner: account,
-            worker: `app-${hash("terminal-relay:" + account).slice(0, 40)}`,
-            updated: now(),
-            revision: 0,
-            turn: null,
-            recent: [],
-            answered: 0,
-            receipts: new Map(),
-          };
-          sessions.set(s.id, s);
-        }
+        const s =
+          [...sessions.values()].find((s) => s.owner === account) ??
+          newSession(randomUUID(), account);
         return result(s);
       }
       const s = get(grant, args.relayId);
-      if (name === "read_study_terminal") return result(s);
+      if (name === "read_study_terminal") {
+        // The game that asked for this turn stopped waiting (reload or new
+        // run): hand the app the live turn instead of an unanswerable one.
+        if (
+          s.turn?.status === "claimed" &&
+          !queue.requesterLive(s.turn.jobId, requesterLiveMs)
+        )
+          claim(s);
+        return result(s);
+      }
       if (name === "claim_study_terminal_turn") {
         if (!Number.isSafeInteger(args.revision) || args.revision > s.revision)
           throw Error("Invalid terminal revision");

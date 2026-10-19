@@ -534,8 +534,18 @@ export function createHandoffQueue({
       round: j.round ?? 0,
     })),
   });
+  // When each job's requester last asked for its result. Memory only: after a
+  // relay restart a still-waiting game polls again within a second.
+  const polled = new Map();
+  const requesterLive = (job, windowMs) =>
+    now() - (polled.get(job.id) ?? -Infinity) <= windowMs;
   const api = {
     snapshot,
+    /** Whether the game that queued this job is still polling for its answer. */
+    requesterLive(id, windowMs) {
+      const job = state.jobs.find((j) => j.id === id);
+      return !!job && requesterLive(job, windowMs);
+    },
     enable(enabled) {
       if (typeof enabled !== "boolean") throw Error("enabled must be boolean");
       state.enabled = enabled;
@@ -613,11 +623,18 @@ export function createHandoffQueue({
       const job = state.jobs.find((j) => j.id === id && j.hash === digest);
       if (!job) throw Error("Unknown exact handoff request");
       checkAutonomous(job.operation, job.payload);
+      polled.set(job.id, now());
       return job.status === "done"
         ? { status: "done", answer: structuredClone(job.answer) }
         : { status: "pending" };
     },
-    get(worker, requestPrefix, select) {
+    /**
+     * Serve `worker` its current claim or the next queued job. With
+     * `liveWithinMs`, only jobs whose game polled within that window are
+     * served, and a claim whose game stopped polling (a reload or a new run)
+     * goes back to the queue, so an abandoned turn never blocks a live one.
+     */
+    get(worker, requestPrefix, select, { liveWithinMs } = {}) {
       checkEnabled();
       if (select !== undefined && typeof select !== "function")
         throw Error("Invalid job selector");
@@ -634,6 +651,22 @@ export function createHandoffQueue({
         (requestPrefix === undefined ||
           job.requestId.startsWith(requestPrefix)) &&
         (select === undefined || select(job) === true);
+      const live = (job) =>
+        liveWithinMs === undefined || requesterLive(job, liveWithinMs);
+      let released = false;
+      for (const j of state.jobs)
+        if (
+          j.status === "working" &&
+          j.worker === worker &&
+          inScope(j) &&
+          !live(j)
+        ) {
+          j.status = "queued";
+          delete j.worker;
+          delete j.claim;
+          delete j.readParts;
+          released = true;
+        }
       const own = state.jobs.find(
         (j) =>
           j.status === "working" &&
@@ -648,6 +681,7 @@ export function createHandoffQueue({
             (j) =>
               j.status === "queued" &&
               inScope(j) &&
+              live(j) &&
               (state.autonomousWork ||
                 !autonomousHandoff(j.operation, j.payload)),
           )
@@ -659,17 +693,19 @@ export function createHandoffQueue({
                   Math.floor((now() - b.createdAt) / 30_000)) ||
               a.createdAt - b.createdAt,
           )[0];
-      if (!job)
+      if (!job) {
+        if (released) save();
         return {
           status: "waiting",
           note: "No released work. Wait for the player's next request; do not invent a task or answer.",
         };
+      }
       if (!own) {
         job.status = "working";
         job.worker = worker;
         job.claim = randomUUID();
         save();
-      }
+      } else if (released) save();
       const text = JSON.stringify(job.payload),
         chunks = chunkPayload(job.payload);
       return {

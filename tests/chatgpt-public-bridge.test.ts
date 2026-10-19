@@ -369,12 +369,14 @@ test("separate game connector requires local pairing, PKCE, a signed client asse
     assert.equal(relay.released, false);
     assert.equal(q.snapshot().enabled, false);
     q.enable(true);
-    q.enqueue("tutor", {
+    const dialogue = q.enqueue("tutor", {
       requestId: "synthetic-terminal-dialogue",
       mode: "terminal-dialogue",
       problem: { title: "Synthetic", prompt: "Terminal", rubric: ["r"] },
       messages: [{ kind: "human", text: "hello", seq: 1 }],
     });
+    // The game is waiting on this turn; the relay serves only waited-on turns.
+    q.result(dialogue.id, dialogue.hash);
     const relayCall = async (name: string, args: unknown) =>
       (
         await (
@@ -467,12 +469,13 @@ test("separate game connector requires local pairing, PKCE, a signed client asse
       problem: { prompt: "Synthetic stop test" },
     });
     const held = await rpc("get_study_handoff", { session: second.session });
-    q.enqueue("tutor", {
+    const heldTurn = q.enqueue("tutor", {
       requestId: "synthetic-terminal-held",
       mode: "terminal-dialogue",
       problem: { title: "Synthetic", prompt: "Held", rubric: [] },
       messages: [{ kind: "human", text: "held", seq: 1 }],
     });
+    q.result(heldTurn.id, heldTurn.hash);
     const relayHeld = (
       await relayCall("claim_study_terminal_turn", {
         relayId: relay.relayId,
