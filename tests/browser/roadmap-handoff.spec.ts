@@ -52,6 +52,9 @@ test("ChatGPT roadmap review survives reload with exact files and provider, then
         "| Learner | Synthetic administrative review; Mid-level",
       );
     await page.goto("/");
+    // The app exposes __deadAir only after its top-level bridge/log awaits,
+    // which can finish after the load event that goto waits for.
+    await page.waitForFunction(() => !!(window as any).__deadAir);
     await page.evaluate(async () => {
       const root = "/src/",
         { createGame } = await import(root + "world.ts"),
@@ -105,6 +108,8 @@ test("ChatGPT roadmap review survives reload with exact files and provider, then
         .count(),
     ).toBe(0);
     await page.getByRole("button", { name: "Save run", exact: true }).click();
+    // The click resolves before the async save; reloading earlier loses it.
+    await expect(page.locator("#notice")).toContainText("Run saved locally");
     await page.reload();
     await page.locator("#curriculum-button").click();
     await page
@@ -148,6 +153,10 @@ test("ChatGPT roadmap review survives reload with exact files and provider, then
         ),
       )
       .toBe("chatgpt-handoff");
+    // Adoption is applied in memory before it is persisted; wait for the save.
+    await expect(page.locator("#roadmap-adoption-status")).toContainText(
+      "adopted and saved",
+    );
     await page.reload();
     await page.waitForFunction(() => !!(window as any).__deadAir);
     const saved = await page.evaluate(() => {

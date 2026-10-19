@@ -3,7 +3,12 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 import { assess } from "../src/ai";
 import { beginVisit, eligible, initialStudy } from "../src/curriculum";
-import { initialLearner, practiceContract } from "../src/learner";
+import {
+  beginLearningAttempt,
+  initialLearner,
+  interruptLearningAttempt,
+  practiceContract,
+} from "../src/learner";
 import type { Roadmap, Track } from "../src/model";
 import { decode, encode } from "../src/persistence";
 import {
@@ -258,4 +263,66 @@ test("a live practice contract mirrors the formal bookkeeping, is marked practic
   beginVisit(r, g.study, e);
   assert.equal(l.attempts.length, 0);
   assert.equal(g.study.pending, undefined);
+});
+
+test("development spawns never cool the live scheduled visit", () => {
+  const s = initialStudy(r);
+  const devFormal = formalFor(s);
+  for (let i = 0; i < SPAWN_COOLDOWN; i++)
+    recordSpawn(s, devFormal, `dev-room-${i}`, i);
+  assert.equal(pickSpawnTopic(r, s, devFormal).practice, true);
+  s.profile = "live";
+  s.learner = initialLearner(r);
+  const formal = formalFor(s);
+  assert.deepEqual(pickSpawnTopic(r, s, formal), {
+    topic: topicOf(formal.objectiveIds[0]),
+    practice: false,
+  });
+  // Live spawns cool live terminals, and entries saved without a profile
+  // still count for both.
+  recordSpawn(s, formal, "live-room-0", 10);
+  spawnState(s).recent.push({
+    track: formal.track,
+    topic: topicOf(formal.objectiveIds[0]),
+    encounter: "legacy-entry",
+    at: 11,
+  });
+  assert.equal(pickSpawnTopic(r, s, formal).practice, true);
+  assert.equal(spawnState(s).recent.at(-2)!.profile, "live");
+});
+
+test("an interrupted formal visit resumes as the next formal question despite its cooldown", () => {
+  const s = initialStudy(r, "live");
+  const l = (s.learner = initialLearner(r));
+  const formal = formalFor(s);
+  const g = createPlayableGame(7, r, s);
+  const [first, second] = Object.values(g.encounters).filter(
+    (x) => x.mode === "solo",
+  );
+  const problem = (contract: typeof formal) => ({
+    title: "Formal",
+    prompt: "Formal",
+    rubric: ["x"],
+    starter: "",
+    provenance: "study-mode" as const,
+    contract,
+  });
+  first.problem = problem(formal);
+  const issued = beginLearningAttempt(r, l, first);
+  recordSpawn(s, formal, first.id, 0);
+  // While the visit is bound, the cooled topic gives other terminals practice.
+  assert.equal(pickSpawnTopic(r, s, formal).practice, true);
+  interruptLearningAttempt(l, first);
+  assert.deepEqual(pickSpawnTopic(r, s, formal), {
+    topic: topicOf(formal.objectiveIds[0]),
+    practice: false,
+  });
+  const resumed = spawnContract(r, s);
+  assert.equal(resumed.practice, undefined);
+  second.problem = problem(resumed);
+  const child = beginLearningAttempt(r, l, second);
+  assert.equal(child.parentAttempt, issued.id);
+  recordSpawn(s, resumed, second.id, 1);
+  // Once resumed, the ordinary cooldown applies again.
+  assert.equal(pickSpawnTopic(r, s, formal).practice, true);
 });

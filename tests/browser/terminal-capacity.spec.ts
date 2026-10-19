@@ -39,10 +39,13 @@ test("a late player can use an initially generated opportunity after nineteen NP
     g.nextSpawn = 999999;
     g.surge.anchor = 999999;
     g.zombies = [];
+    const { topicSpawn, ...learning } = g.study;
     return {
       id: remaining[0].id,
+      room: remaining[0].questionRoom ?? remaining[0].id,
       access: [...a.access],
-      learning: JSON.stringify(g.study),
+      learning: JSON.stringify(learning),
+      spawns: JSON.stringify(topicSpawn?.recent ?? []),
       count: Object.keys(g.encounters).length,
     };
   });
@@ -61,6 +64,8 @@ test("a late player can use an initially generated opportunity after nineteen NP
     .poll(() => page.evaluate(() => (window as any).__deadAir.game.time))
     .toBeGreaterThan(time + 0.4);
   await page.getByRole("button", { name: "Save run", exact: true }).click();
+  // The click resolves before the async save; reloading earlier loses it.
+  await expect(page.locator("#notice")).toContainText("Run saved locally");
   await page.reload();
   await page.waitForFunction(() => !!(window as any).__deadAir);
   await page.locator("#world").focus();
@@ -69,11 +74,13 @@ test("a late player can use an initially generated opportunity after nineteen NP
   await expect(page.locator("#chat-input")).toHaveValue(draft);
   await expect(page.locator("#problem")).toHaveText(problem!);
   const after = await page.evaluate((id) => {
-    const g = (window as any).__deadAir.game;
+    const g = (window as any).__deadAir.game,
+      { topicSpawn, ...learning } = g.study;
     return {
       owner: g.encounters[id].owner,
       access: g.survivors[0].access,
-      learning: JSON.stringify(g.study),
+      learning: JSON.stringify(learning),
+      spawns: topicSpawn.recent,
       count: Object.keys(g.encounters).length,
       consumed: Object.values(g.encounters).filter(
         (e: any) =>
@@ -84,6 +91,13 @@ test("a late player can use an initially generated opportunity after nineteen NP
   expect(after.owner).toBe("human");
   expect(after.access).toEqual([]);
   expect(after.learning).toBe(baseline.learning);
+  // Opening the terminal generated its question, which the topic-variety
+  // policy records exactly once (not learning evidence); reload adds none.
+  expect(JSON.stringify(after.spawns.slice(0, -1))).toBe(baseline.spawns);
+  expect(after.spawns.at(-1)).toMatchObject({
+    encounter: baseline.room,
+    profile: "development",
+  });
   expect(after.count).toBe(baseline.count);
   expect(after.consumed).toBe(19);
   await page.locator("#leave").click();

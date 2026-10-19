@@ -535,14 +535,7 @@ export function beginLearningAttempt(
     throw Error("The unfinished visit stays bound to its original encounter.");
   const session = nextSession(r, l);
   l.sessions.find((s) => s.id === session)!.startedAt ??= at;
-  const parent = l.continuations.find(
-    (c) =>
-      c.objectiveIds.some((id) => next.objectiveIds.includes(id)) &&
-      c.depth === next.depth &&
-      !l.attempts.some(
-        (a) => a.status === "served" && attemptRoot(l, a) === c.attemptId,
-      ),
-  );
+  const parent = openContinuation(l, next);
   const attempt: LearningAttempt = {
     id: allocate(r, l, session, "A"),
     session,
@@ -555,6 +548,20 @@ export function beginLearningAttempt(
   };
   l.attempts.push(attempt);
   return attempt;
+}
+/** The interrupted attempt that a new attempt on this contract continues, if any. */
+export function openContinuation(
+  l: LearnerLedger,
+  c: Pick<Contract, "objectiveIds" | "depth">,
+) {
+  return l.continuations.find(
+    (k) =>
+      k.objectiveIds.some((id) => c.objectiveIds.includes(id)) &&
+      k.depth === c.depth &&
+      !l.attempts.some(
+        (a) => a.status === "served" && attemptRoot(l, a) === k.attemptId,
+      ),
+  );
 }
 export function interruptLearningAttempt(
   l: LearnerLedger,

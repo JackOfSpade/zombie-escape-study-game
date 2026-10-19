@@ -1,6 +1,9 @@
 import { eligible } from "./curriculum";
-import { practiceContract } from "./learner";
+import { openContinuation, practiceContract } from "./learner";
 import type { Contract, Roadmap, StudyState, Track } from "./model";
+
+type StudyProfile = NonNullable<StudyState["profile"]>;
+const profileOf = (s: StudyState): StudyProfile => s.profile ?? "development";
 
 /**
  * Which topic a terminal spawns.
@@ -19,8 +22,19 @@ import type { Contract, Roadmap, StudyState, Track } from "./model";
 export interface TopicSpawn {
   /** `${track}:${topic}` entries the player switched off for variety spawns. */
   disabled: string[];
-  /** Newest last; bounded. `at` is simulation time of the run that spawned it. */
-  recent: { track: Track; topic: string; encounter: string; at: number }[];
+  /**
+   * Newest last; bounded. `at` is simulation time of the run that spawned it.
+   * `profile` keeps development and live cooldowns apart: development rooms
+   * prepare every question at world creation and must not cool the live
+   * scheduled visit. Entries saved before it was recorded count for both.
+   */
+  recent: {
+    track: Track;
+    topic: string;
+    encounter: string;
+    at: number;
+    profile?: StudyProfile;
+  }[];
 }
 /** A topic is not spawned again while it is among the last N spawns on its track. */
 export const SPAWN_COOLDOWN = 2;
@@ -80,8 +94,11 @@ export function spawnCandidates(
 }
 
 function recentOnTrack(s: StudyState, track: Track) {
+  const profile = profileOf(s);
   return spawnState(s)
-    .recent.filter((x) => x.track === track)
+    .recent.filter(
+      (x) => x.track === track && (x.profile ?? profile) === profile,
+    )
     .map((x) => x.topic);
 }
 const onCooldown = (recent: string[], topic: string) =>
@@ -98,7 +115,22 @@ export function pickSpawnTopic(
   const recent = recentOnTrack(s, track);
   // The formal visit (a due review included) spawns whenever it has cooled;
   // a visit bound elsewhere is unaffected, since binding is per terminal.
-  if (!onCooldown(recent, formalTopic))
+  // An interrupted visit (left unanswered at death or a run's end) resumes as
+  // the next formal question: it was never finished, so it has not cooled
+  // anything, and delaying it would leave the curriculum's resumption unserved.
+  const l = s.profile === "live" ? s.learner : undefined;
+  const last = l?.attempts
+    .filter(
+      (a) =>
+        a.contract.depth === formal.depth &&
+        a.contract.objectiveIds.some((id) => formal.objectiveIds.includes(id)),
+    )
+    .at(-1);
+  const resumes =
+    last?.status === "interrupted" &&
+    !!openContinuation(l!, formal) &&
+    !l!.attempts.some((a) => a.status === "in-progress");
+  if (resumes || !onCooldown(recent, formalTopic))
     return { topic: formalTopic, practice: false };
   const gapTopics = new Set(
     (s.knowledgeGaps ?? [])
@@ -181,7 +213,13 @@ export function recordSpawn(
   const state = spawnState(s);
   const topic = topicOf(contract.objectiveIds[0] ?? "");
   if (!topic) return;
-  state.recent.push({ track: contract.track, topic, encounter, at });
+  state.recent.push({
+    track: contract.track,
+    topic,
+    encounter,
+    at,
+    profile: profileOf(s),
+  });
   if (state.recent.length > RECENT_LIMIT)
     state.recent.splice(0, state.recent.length - RECENT_LIMIT);
 }

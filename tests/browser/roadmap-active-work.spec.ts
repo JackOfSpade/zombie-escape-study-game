@@ -343,6 +343,8 @@ for (const scenario of ["unchanged", "stale", "new-work"])
       }),
     ).toEqual([0, 0, 0, 1]);
     await page.getByRole("button", { name: "Save run", exact: true }).click();
+    // The click resolves before the async save; reloading earlier loses it.
+    await expect(page.locator("#notice")).toContainText("Run saved locally");
     await page.reload();
     await page.waitForFunction(() => !!(window as any).__deadAir);
     expect(
