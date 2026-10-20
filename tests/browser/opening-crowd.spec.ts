@@ -31,6 +31,5 @@ test("reported opening seed clears the entrance with solid NPC traffic", async (
   expect(result.inside).toBeGreaterThanOrEqual(16);
   expect(result.zombies).toBe(0);
   expect(result.minimum).toBeGreaterThanOrEqual(0.495);
-  await expect(page.locator("#run-time")).toContainText("00:04");
   await page.screenshot({ path: "test-results/opening-crowd.png" });
 });

@@ -1731,8 +1731,6 @@ function ui() {
       ? "ROOFTOP / EXTRACTION"
       : `FLOOR ${String(a.floor + 1).padStart(2, "0")} / ${CONFIG.floors}`;
   $("#floor-name").textContent = f.name;
-  $("#run-time").textContent =
-    `${String(Math.floor(game.time / 60)).padStart(2, "0")}:${String(Math.floor(game.time % 60)).padStart(2, "0")}`;
   $("#health").textContent = String(Math.ceil(a.hp));
   $("#health-fill").style.width = `${a.hp}%`;
   // The HUD overlays the canvas; write to it only when a value changes so the

@@ -167,17 +167,6 @@ h2 {
 p {
   line-height: 1.6;
 }
-.timer {
-  text-align: right;
-}
-.timer strong {
-  display: block;
-  font:
-    500 24px "Space Grotesk",
-    sans-serif;
-  letter-spacing: 2px;
-  margin-top: 5px;
-}
 .viewport {
   height: calc(100vh - 250px);
   min-height: 440px;
