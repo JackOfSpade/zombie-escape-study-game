@@ -42,7 +42,7 @@ test("all stations in each room share the exact question, with independent solo 
   assert.deepEqual(restored.encounters, g.encounters);
 });
 
-test("normal GameTest AI uses the same room question for equal-skilled NPC timing", () => {
+test("normal GameTest AI shares room difficulty while retaining individual work rhythms", () => {
   const s = emptyScenario();
   Object.assign(s, {
     template: "building",
@@ -85,11 +85,22 @@ test("normal GameTest AI uses the same room question for equal-skilled NPC timin
       seen: stations.map((st) => st.id),
     });
   const question = g.encounters[stations[0].encounter];
-  const expected = npcThinkingRate(a, question) * 1.2;
+  const otherQuestion = g.encounters[stations[1].encounter];
+  // Station choice must not change the difficulty or rhythm of the same
+  // person's work on the same room question.
+  assert.equal(npcThinkingRate(a, question), npcThinkingRate(a, otherQuestion));
+  const expectedA = (npcThinkingRate(a, question) * 1.2) / 30,
+    expectedB = (npcThinkingRate(b, otherQuestion) * 1.2) / 30;
+  runner.advance(1);
+  assert.ok(Math.abs(a.thought - expectedA) < 1e-9);
+  assert.ok(Math.abs(b.thought - expectedB) < 1e-9);
   assert.equal(runner.run().status, "passed");
   assert.ok(a.thought > 0);
-  assert.ok(Math.abs(a.thought - b.thought) < 1e-9);
-  assert.ok(Math.abs(a.thought - expected) < 1e-9);
+  assert.ok(b.thought > 0);
+  assert.ok(
+    Math.abs(a.thought - b.thought) > 1e-4,
+    "Equal expertise must still allow individual pacing",
+  );
   const harder = structuredClone(question);
   harder.problem!.contract.depth = 3;
   assert.ok(npcThinkingRate(a, harder) < npcThinkingRate(a, question));

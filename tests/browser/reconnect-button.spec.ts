@@ -34,112 +34,146 @@ async function openSoloTerminal(page: Page, resume = false) {
   await expect(page.locator("#chat-input")).toBeVisible();
 }
 
-test("Reconnect ChatGPT runs the whole sequence itself, keeps Settings closed, reports done and disappears", async ({
-  page,
-}) => {
-  await page.context().grantPermissions(["clipboard-read", "clipboard-write"]);
-  const relay = {
-    enabled: false,
-    verified: false,
-    linked: true,
-    sessions: 0,
-  };
-  const actions: string[] = [];
-  await page.route("**/api/status", (route) =>
-    route.fulfill({
-      json: relay.enabled
-        ? {
-            mode: "chatgpt-handoff",
-            label: "ChatGPT handoff",
-            capabilities: ["tutor"],
-            detail: "Synthetic handoff",
-          }
-        : {
-            mode: "development",
-            label: "Development fallback",
-            capabilities: [],
-            detail: "Synthetic disconnected",
+for (const clipboardBlocked of [false, true]) {
+  test(`Reconnect ChatGPT exposes the prompt with clipboard ${clipboardBlocked ? "blocked" : "available"}, keeps Settings closed, reports done and disappears`, async ({
+    page,
+  }) => {
+    await page
+      .context()
+      .grantPermissions(["clipboard-read", "clipboard-write"]);
+    if (clipboardBlocked)
+      await page.addInitScript(() => {
+        Object.defineProperty(navigator.clipboard, "writeText", {
+          configurable: true,
+          value: async () => {
+            throw new DOMException("Denied", "NotAllowedError");
           },
-    }),
-  );
-  await page.route("**/api/handoff/status", (route) =>
-    route.fulfill({
-      json: {
-        enabled: relay.enabled,
-        autonomousWork: false,
-        heldAutonomous: 0,
-        queued: 0,
-        working: 0,
-        done: 0,
-        recent: [],
-        public: {
-          configured: true,
-          linked: relay.linked,
-          workerActive: false,
-          terminalRelay: {
-            sessions: relay.sessions,
-            activeSessions: relay.sessions,
-            pendingTurns: 0,
+        });
+      });
+    const relay = {
+      enabled: false,
+      verified: false,
+      linked: true,
+      sessions: 0,
+    };
+    const actions: string[] = [];
+    await page.route("**/api/status", (route) =>
+      route.fulfill({
+        json: relay.enabled
+          ? {
+              mode: "chatgpt-handoff",
+              label: "ChatGPT handoff",
+              capabilities: ["tutor"],
+              detail: "Synthetic handoff",
+            }
+          : {
+              mode: "development",
+              label: "Development fallback",
+              capabilities: [],
+              detail: "Synthetic disconnected",
+            },
+      }),
+    );
+    await page.route("**/api/handoff/status", (route) =>
+      route.fulfill({
+        json: {
+          enabled: relay.enabled,
+          autonomousWork: false,
+          heldAutonomous: 0,
+          queued: 0,
+          working: 0,
+          done: 0,
+          recent: [],
+          public: {
+            configured: true,
+            linked: relay.linked,
+            workerActive: false,
+            terminalRelay: {
+              sessions: relay.sessions,
+              activeSessions: relay.sessions,
+              pendingTurns: 0,
+            },
+            mcpUrl: "https://synthetic.lullascape.com/mcp",
+            pairingOpen: false,
+            diagnostics: [],
           },
-          mcpUrl: "https://synthetic.lullascape.com/mcp",
-          pairingOpen: false,
-          diagnostics: [],
+          tunnel: {
+            state: relay.verified ? "connected" : "off",
+            verified: relay.verified,
+            error: null,
+          },
         },
-        tunnel: {
-          state: relay.verified ? "connected" : "off",
-          verified: relay.verified,
-          error: null,
-        },
-      },
-    }),
-  );
-  await page.route("**/api/handoff/control", async (route) => {
-    const body = route.request().postDataJSON();
-    actions.push(body.action);
-    if (body.action === "start-public") {
-      setTimeout(() => {
-        relay.verified = true;
-      }, 500);
-      await route.fulfill({ json: { state: "starting", verified: false } });
-    } else if (body.action === "enable") {
-      relay.enabled = body.enabled;
-      await route.fulfill({ json: { enabled: relay.enabled } });
-    } else await route.fulfill({ status: 409, json: { error: "unexpected" } });
+      }),
+    );
+    await page.route("**/api/handoff/control", async (route) => {
+      const body = route.request().postDataJSON();
+      actions.push(body.action);
+      if (body.action === "start-public") {
+        setTimeout(() => {
+          relay.verified = true;
+        }, 500);
+        await route.fulfill({ json: { state: "starting", verified: false } });
+      } else if (body.action === "enable") {
+        relay.enabled = body.enabled;
+        await route.fulfill({ json: { enabled: relay.enabled } });
+      } else
+        await route.fulfill({ status: 409, json: { error: "unexpected" } });
+    });
+    await openSoloTerminal(page);
+    const button = page.locator("#connect-completion"),
+      notice = page.locator("#completion-connection");
+    await expect(button).toBeVisible();
+    await expect(notice).toContainText("ChatGPT is disconnected");
+    await expect(button).toHaveText("Connect ChatGPT");
+    const popup = page.waitForEvent("popup");
+    await button.click();
+    const chat = await popup;
+    await expect(page.locator("#settings")).toBeHidden();
+    await expect(button).toBeHidden();
+    await expect(notice).toContainText("Connected and released", {
+      timeout: 15_000,
+    });
+    await expect(notice).toContainText("ChatGPT opened in a new tab");
+    expect(actions).toEqual(["start-public", "enable"]);
+    // The reserved tab now holds a new, empty ChatGPT chat; the request is on
+    // the clipboard so the player picks the thinking level before sending.
+    await chat.waitForURL(/^https:\/\/chatgpt\.com\/$/);
+    await expect(page.locator("#chatgpt-prompt-text")).toHaveValue(
+      "Open my zombie-escape-study-game study terminal so it can serve my game's terminal turns.",
+    );
+    await expect(page.locator("#chatgpt-prompt-text")).toBeVisible();
+    if (clipboardBlocked) {
+      await expect(page.locator("#chatgpt-copy-status")).toContainText(
+        "Select and copy",
+      );
+      // Retrying after permission is restored must copy the same visible prompt.
+      await page.evaluate(() => {
+        delete (navigator.clipboard as any).writeText;
+      });
+    } else {
+      await expect(notice).toContainText("paste it, then press Enter");
+    }
+    await page.bringToFront();
+    await page.locator("#copy-chatgpt-prompt").click();
+    await expect(page.locator("#chatgpt-copy-status")).toContainText(
+      "Prompt copied",
+    );
+    expect(await page.evaluate(() => navigator.clipboard.readText())).toMatch(
+      /zombie-escape-study-game study terminal/,
+    );
+    await expect(page.locator("#settings")).toBeHidden();
+    relay.sessions = 1;
+    await expect(notice).toContainText("Done. ChatGPT is connected", {
+      timeout: 15_000,
+    });
+    await expect(button).toBeHidden();
+    await expect(page.locator("#chat-form button")).toBeEnabled();
+    await expect(notice).toBeHidden({ timeout: 15_000 });
+    await expect(page.locator("#chatgpt-prompt")).toBeHidden();
+    expect(actions).toEqual(["start-public", "enable"]);
+    expect(actions).toEqual(["start-public", "enable"]);
   });
-  await openSoloTerminal(page);
-  const button = page.locator("#connect-completion"),
-    notice = page.locator("#completion-connection");
-  await expect(button).toBeVisible();
-  await expect(notice).toContainText("ChatGPT is disconnected");
-  await expect(button).toHaveText("Connect ChatGPT");
-  const popup = page.waitForEvent("popup");
-  await button.click();
-  const chat = await popup;
-  await expect(page.locator("#settings")).toBeHidden();
-  await expect(button).toBeHidden();
-  await expect(notice).toContainText("Connected and released", {
-    timeout: 15_000,
-  });
-  await expect(notice).toContainText("ChatGPT opened in a new tab");
-  expect(actions).toEqual(["start-public", "enable"]);
-  // The reserved tab now holds a new, empty ChatGPT chat; the request is on
-  // the clipboard so the player picks the thinking level before sending.
-  await chat.waitForURL(/^https:\/\/chatgpt\.com\/$/);
-  await expect(notice).toContainText("paste it, then press Enter");
-  expect(await page.evaluate(() => navigator.clipboard.readText())).toMatch(
-    /zombie-escape-study-game study terminal/,
-  );
-  await expect(page.locator("#settings")).toBeHidden();
-  relay.sessions = 1;
-  await expect(notice).toContainText("Done. ChatGPT is connected", {
-    timeout: 15_000,
-  });
-  await expect(button).toBeHidden();
-  await expect(page.locator("#chat-form button")).toBeEnabled();
-  await expect(notice).toBeHidden({ timeout: 15_000 });
-  expect(actions).toEqual(["start-public", "enable"]);
-  expect(actions).toEqual(["start-public", "enable"]);
-});
+}
 
 test("Reconnect ChatGPT reports what it cannot do on its own when the connector is not paired", async ({
   page,

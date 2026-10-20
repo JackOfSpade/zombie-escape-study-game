@@ -872,6 +872,8 @@ function renderTerminal(force = false) {
   $("#connect-completion").hidden =
     (!disconnected && !unheard) || reconnectBusy;
   const openLink = $<HTMLAnchorElement>("#open-chatgpt");
+  $("#chatgpt-prompt").hidden =
+    !terminalRequestShown || (!disconnected && !unheard && !reconnectBusy);
   openLink.hidden = !reconnectChatUrl;
   if (reconnectChatUrl && openLink.href !== reconnectChatUrl)
     openLink.href = reconnectChatUrl;
@@ -1092,7 +1094,10 @@ $("#connect-completion").onclick = () => {
   // The request goes on the clipboard rather than in the chat URL: ChatGPT
   // sends a ?q= request at once, before the player can pick a model and
   // thinking level. Copy first, while this page still has focus.
-  if (relayListening() !== true) copyTerminalRequest();
+  if (relayListening() !== true) {
+    terminalRequestShown = true;
+    void copyTerminalRequest();
+  }
   const tab =
     relayListening() === true ? null : window.open("", CHATGPT_TAB_NAME);
   void reconnectChatGpt(tab, tab ? blankTab(tab) : false);
@@ -1598,16 +1603,33 @@ const CHATGPT_NEW_CHAT_URL = "https://chatgpt.com/";
 const CHATGPT_TERMINAL_REQUEST =
   "Open my zombie-escape-study-game study terminal so it can serve my game's terminal turns.";
 /** Whether the last Connect press put the request on the clipboard. */
-let terminalRequestCopied = false;
-function copyTerminalRequest() {
+let terminalRequestCopied = false,
+  terminalRequestShown = false;
+async function copyTerminalRequest() {
   terminalRequestCopied = false;
-  void navigator.clipboard
-    ?.writeText(CHATGPT_TERMINAL_REQUEST)
-    .then(() => {
-      terminalRequestCopied = true;
-    })
-    .catch(() => {});
+  $<HTMLTextAreaElement>("#chatgpt-prompt-text").value =
+    CHATGPT_TERMINAL_REQUEST;
+  setText("#chatgpt-copy-status", "Copying prompt…");
+  try {
+    await navigator.clipboard.writeText(CHATGPT_TERMINAL_REQUEST);
+    terminalRequestCopied = true;
+    setText(
+      "#chatgpt-copy-status",
+      "Prompt copied. Paste it into ChatGPT, then press Enter.",
+    );
+  } catch {
+    setText(
+      "#chatgpt-copy-status",
+      "Clipboard unavailable. Select and copy the prompt above, then paste it into ChatGPT.",
+    );
+  }
 }
+$("#copy-chatgpt-prompt").onclick = () => {
+  void copyTerminalRequest();
+};
+$("#open-chatgpt").onclick = () => {
+  void copyTerminalRequest();
+};
 const pasteRequestStep = () =>
   terminalRequestCopied
     ? "The request is on your clipboard: choose your model and thinking level, paste it, then press Enter."

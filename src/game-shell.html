@@ -223,6 +223,15 @@
           <div id="tutor-request-status" hidden></div>
           <p id="completion-connection" class="muted" role="status" hidden></p>
           <button id="connect-completion" hidden>Connect ChatGPT</button>
+          <div id="chatgpt-prompt" hidden>
+            <label for="chatgpt-prompt-text"
+              >Paste this prompt into ChatGPT after choosing your model and
+              thinking level:</label
+            >
+            <textarea id="chatgpt-prompt-text" rows="3" readonly></textarea>
+            <button id="copy-chatgpt-prompt" class="quiet">Copy prompt</button>
+            <p id="chatgpt-copy-status" class="muted" role="status"></p>
+          </div>
           <a
             id="open-chatgpt"
             class="quiet"

@@ -77,8 +77,27 @@ export function taskSkill(a: Actor, e: Encounter) {
 export function npcThinkingRate(a: Actor, e: Encounter) {
   if (e.questionRoom && !e.problem) return 0;
   const base = 0.65 + taskSkill(a, e) * 0.7;
-  if (!e.questionRoom || !e.problem) return base;
-  return base / questionEffort(e);
+  const effort = e.questionRoom && e.problem ? questionEffort(e) : 1;
+  return (base * workRhythm(a, e)) / effort;
+}
+/** Reading, productive thought and final checking take different amounts of
+ * time. Derive the rhythm from saved work, so pausing/reloading cannot reroll
+ * a difficult step and frame rate never consumes additional world RNG. */
+function workRhythm(a: Actor, e: Encounter) {
+  const stage = reasoningStages[a.milestone % reasoningStages.length],
+    focus = workFocus(e, a, stage),
+    strength = npcProfile(a).strengths[focus],
+    personal =
+      hash(`${a.id}/${e.questionRoom ?? e.id}/${a.milestone}/pace`) /
+      0xffffffff,
+    // Some steps click immediately; others need more reflection.
+    stepPace = 0.85 + personal * 0.3,
+    // Slower while getting oriented and checking; quicker in the middle.
+    fraction = Math.max(0, Math.min(1, (a.thought - a.milestone * 24) / 24)),
+    burst = 0.72 + 0.55 * Math.sin(Math.PI * fraction) ** 2,
+    // A small within-task familiarity benefit, never academic mastery.
+    familiarity = 0.9 + Math.min(3, a.milestone) * 0.05;
+  return stepPace * burst * familiarity * (0.8 + strength * 0.4);
 }
 /** Room question difficulty controls study pacing. */
 function questionEffort(e: Encounter) {
