@@ -56,6 +56,8 @@ test("practice questions show the player only the question, never scheduling int
   const product = devProblem({ ...g, rng: 3 }, r, contracts[3]);
   assert.match(
     product.prompt,
-    /Using this scenario, show how you would handle this: Frame the user problem and an MVP scope\./,
+    /\n\nYour task: Frame the user problem and an MVP scope\.\n\n/,
   );
+  // The scenario carries a concrete proposal to critique, not just a feature.
+  assert.match(product.prompt, /proposes: "/);
 });

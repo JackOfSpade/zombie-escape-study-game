@@ -7,13 +7,19 @@ import {
   type Problem,
   rand,
 } from "./model";
-/** Local practice also targets gaps the learner declared on this track. */
-function gapLine(g: Game, track: string) {
+/** Gaps the learner declared on this question's own objective, so the extra line is never off-topic. */
+function gapLine(g: Game, contract: Contract) {
   const gaps = openGaps(g)
-    .filter((r) => r.track === track)
+    .filter(
+      (r) =>
+        r.track === contract.track &&
+        r.objectiveIds.some((id) => contract.objectiveIds.includes(id)),
+    )
     .slice(-5)
     .map((r) => r.facet.description);
-  return gaps.length ? `\n\nRecorded gaps to work on: ${gaps.join("; ")}.` : "";
+  return gaps.length
+    ? `\n\nYou flagged this as a gap earlier, so cover it too: ${gaps.join("; ")}.`
+    : "";
 }
 export function devProblem(
   g: Game,
@@ -31,7 +37,7 @@ export function devProblem(
     return {
       title: "Signal window / prediction",
       // Player-facing text only: the scheduled scope stays in the contract.
-      prompt: `An intake monitor reads ${JSON.stringify(values)}. A window of ${size} consecutive readings slides one position at a time.\n\nPredict the largest window total. Explain what changes and what stays the same each time the window slides, and name one edge case worth checking. No code is needed.${gapLine(g, contract.track)}`,
+      prompt: `An intake monitor reads ${JSON.stringify(values)}. A window of ${size} consecutive readings slides one position at a time.\n\nPredict the largest window total. Explain what changes and what stays the same each time the window slides, and name one edge case worth checking. No code is needed.${gapLine(g, contract)}`,
       rubric: [
         "Correct predicted total",
         "Explain update/state and a relevant boundary",
@@ -49,10 +55,10 @@ export function devProblem(
         : "Product decision / critique",
     prompt:
       contract.objectiveIds[0] === "PE:X09.1"
-        ? `Use a real project you worked on. Briefly state the user problem, your personal role, and one actual decision. Separate your own work from the team’s work. Do not invent metrics.\n\nWhat to cover: ${contract.scopes[0]}${gapLine(g, contract.track)}`
+        ? `Use a real project you worked on. Briefly state the user problem, your personal role, and one actual decision. Separate your own work from the team’s work. Do not invent metrics.\n\nWhat to cover: ${contract.scopes[0]}${gapLine(g, contract)}`
         : contract.track === "PY"
-          ? `Read this small Python trace:\n\nvalues = ${JSON.stringify(values)}\ncount = 0\nfor value in values:\n    if value > ${threshold}:\n        count += 1\n\nPredict the final value of count. Explain what count means partway through, after the loop has seen only the first few values, and name one edge case worth checking. No code is needed.${gapLine(g, contract.track)}`
-          : `A customer-facing creative tool lets a signed-in owner share a project with a read-only collaborator. Shared links can be revoked immediately. The service has ${n * 100} daily users.\n\nUsing this scenario, show how you would handle this: ${contract.scopes[0]} Identify one assumption and one failure or edge case. Several answers can be right. No code is needed.${gapLine(g, contract.track)}`,
+          ? `Read this small Python trace:\n\nvalues = ${JSON.stringify(values)}\ncount = 0\nfor value in values:\n    if value > ${threshold}:\n        count += 1\n\nPredict the final value of count. Explain what count means partway through, after the loop has seen only the first few values, and name one edge case worth checking. No code is needed.${gapLine(g, contract)}`
+          : `A creative tool lets a signed-in owner share a project with a read-only collaborator through a link the owner can revoke at any time. About ${n * 100} people use it each day. Support reports that collaborators are confused when a link suddenly stops working, and a product manager proposes: "Email the collaborator every time a link is revoked."\n\nYour task: ${contract.scopes[0]}\n\nName one assumption you are making and one failure or edge case. No code is needed, and several answers can be right.${gapLine(g, contract)}`,
     rubric: [
       "Address the supplied contract",
       "Explain assumptions and a boundary",

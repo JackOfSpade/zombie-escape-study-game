@@ -1151,15 +1151,20 @@ test("live question generation sends the track's probe records and a policy that
   }
 });
 
-test("development practice lists open gaps for the scheduled track in its prompt, never closed or other-track ones", () => {
+test("development practice lists open gaps on its own objective, never closed, other-objective or other-track ones", () => {
   const g = createPlayableGame(12, r);
-  const track = eligible(r, g.study).track;
-  const gap = (id: string, t: string, resolved = false) => ({
+  const { track, objectiveIds } = eligible(r, g.study);
+  const gap = (
+    id: string,
+    t: string,
+    resolved = false,
+    objectives = objectiveIds,
+  ) => ({
     id,
     encounter: "run/e",
     runId: "run",
     track: t,
-    objectiveIds: ["X:1"],
+    objectiveIds: objectives,
     depth: 1,
     facet: { id, description: `Facet ${id}` },
     statement: "no",
@@ -1178,17 +1183,24 @@ test("development practice lists open gaps for the scheduled track in its prompt
       : {}),
   });
   const before = devProblem({ ...g, rng: 7 }, r).prompt;
-  assert.doesNotMatch(before, /Recorded gaps to work on/);
+  assert.doesNotMatch(before, /flagged this as a gap/);
   g.study.knowledgeGaps = [
     gap("open-a", track),
     gap("closed-b", track, true),
     gap("other-c", track === "PY" ? "PE" : "PY"),
+    gap("unrelated-d", track, false, ["X:1"]),
   ];
   const after = devProblem({ ...g, rng: 7 }, r).prompt;
-  assert.match(after, /Recorded gaps to work on: Facet open-a\.$/);
-  assert.doesNotMatch(after, /closed-b|other-c/);
+  assert.match(
+    after,
+    /You flagged this as a gap earlier, so cover it too: Facet open-a\.$/,
+  );
+  assert.doesNotMatch(after, /closed-b|other-c|unrelated-d/);
   assert.equal(
-    after.replace(/\n\nRecorded gaps to work on: Facet open-a\./, ""),
+    after.replace(
+      /\n\nYou flagged this as a gap earlier, so cover it too: Facet open-a\./,
+      "",
+    ),
     before,
   );
 });
