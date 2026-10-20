@@ -1,5 +1,5 @@
 import { openGameMenu, openPlayerMenu } from "./helpers/game-menu";
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test, type Page } from "./helpers/offline-test";
 import { enterLegacyBuilding } from "./helpers/legacy-world";
 
 async function safeRun(page: Page) {

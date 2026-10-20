@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, test } from "./helpers/offline-test";
 import { PRESETS } from "../../src/gametest/presets";
 test("Test Lab runs real fixtures without touching game saves or contacting the study bridge", async ({
   page,
