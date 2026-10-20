@@ -3,6 +3,7 @@ import { expect, test, type Page } from "@playwright/test";
 import { readFile, writeFile } from "node:fs/promises";
 import { tier4RoadmapFixture } from "../fixtures/tier4-roadmap";
 import { enterLegacyBuilding, useLegacyWorld } from "./helpers/legacy-world";
+import { isolateRunnerBridge } from "./helpers/runner-bridge";
 async function expectHumanDrawn(page: Page) {
   await expect
     .poll(() =>
@@ -1239,8 +1240,8 @@ test("container workspace: real code execution preserves a captured revision whi
     process.env.RUN_CONTAINER_BROWSER !== "1",
     "Opt-in real Docker/images dependency; npm run test:browser:runner",
   );
-  await page.goto("/");
-  await page.waitForFunction(() => !!(window as any).__deadAir);
+  await isolateRunnerBridge(page);
+  await enterLegacyBuilding(page);
   await page.evaluate(async () => {
     const d = (window as any).__deadAir,
       g = d.game,

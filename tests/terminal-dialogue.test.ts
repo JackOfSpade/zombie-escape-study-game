@@ -161,6 +161,22 @@ test("pending turns coalesce, newer turns supersede interrupted checks, and a di
     assert.equal(g.survivors[0].keys ?? 0, 0);
   }));
 
+for (const changed of ["profile", "study"] as const)
+  test(`a pending tutor answer cannot reward a replaced ${changed}`, async () =>
+    fixture(async (g, e, _calls, reply) => {
+      const keys = g.survivors[0].keys ?? 0;
+      reply(async () => {
+        if (changed === "profile") g.study.profile = "live";
+        else g.study = structuredClone(g.study);
+        return Response.json({ text: "Synthetic completion", complete: true });
+      });
+      await send(g, e, "tutor", "Synthetic saved answer", r);
+      assert.equal(e.tutorRequests[0].state, "interrupted");
+      assert.equal(e.tutor.filter((m: any) => m.kind === "tutor").length, 0);
+      assert.equal(g.survivors[0].keys ?? 0, keys);
+      assert.equal(e.submissions.length, 0);
+    }));
+
 test("dialogue clients reject missing completion decisions and changed captured work without silently applying a reply", async () =>
   fixture(async (g, e, calls, reply) => {
     reply(async () =>

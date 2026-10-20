@@ -125,20 +125,20 @@ Checks have `name`, `mode`, `query`, `op` and `expected`. Operators are `eq`, `g
 
 Queries:
 
-| Type | Parameters | Result |
-| --- | --- | --- |
-| `property` | `id`, `field` | `x`, `y`, `hp`, `maxHp` (furniture), `floor`, `alive`, `latched`, or `absAngle` (radians) |
-| `count` | `kind`: `npc` or `zombie` | Living, active population |
-| `region` | `kind`, `floor`, `x1`, `y1`, `x2`, `y2` | Living population inside the rectangle |
-| `separation` | At least two distinct entity `ids` | Smallest same-floor center-to-center distance |
-| `event` | `event` type | Number of matching game events |
-| `soundConnected` | `floor`, points `a` and `b` | Whether an open acoustic path exists |
+| Type             | Parameters                              | Result                                                                                    |
+| ---------------- | --------------------------------------- | ----------------------------------------------------------------------------------------- |
+| `property`       | `id`, `field`                           | `x`, `y`, `hp`, `maxHp` (furniture), `floor`, `alive`, `latched`, or `absAngle` (radians) |
+| `count`          | `kind`: `npc` or `zombie`               | Living, active population                                                                 |
+| `region`         | `kind`, `floor`, `x1`, `y1`, `x2`, `y2` | Living population inside the rectangle                                                    |
+| `separation`     | At least two distinct entity `ids`      | Smallest same-floor center-to-center distance                                             |
+| `event`          | `event` type                            | Number of matching game events                                                            |
+| `soundConnected` | `floor`, points `a` and `b`             | Whether an open acoustic path exists                                                      |
 
 Fixtures are validated data, not executable scripts. Extend the typed schema and runner for new supported actions or queries, with a failing-case regression, rather than evaluating imported code. Custom TypeScript tests can also instantiate `TestRunner` directly and inspect the resulting synthetic world.
 
 ## Force field scenarios
 
-Set optional scenario `rules: "force-fields"` to use the new swarm rules; building templates also receive the fresh-run redesign. Legacy scenarios are unchanged. Door spawns accept `forceField: "green" | "red" | "exit"` and optional `freeLimit` (1–100, inward direction +X in arenas). Survivor spawns accept `keys` (0–100). Exit fields also allow a survivor with `credential: true`. The `door` action spends a key through the real interaction checks. Checkpoints preserve personal authorization and quota state. Physics scenarios update the same entrance-crossing bookkeeping and use the new zombie motor speed when these rules are selected.
+Set optional scenario `rules: "force-fields"` to use the new swarm rules; building templates also receive the fresh-run redesign. Legacy scenarios are unchanged. Door and gate spawns accept `forceField: "green" | "red" | "exit"` and optional `freeLimit` (1–100). Quota fields accept `freeDirection: -1 | 1` for the inward direction along their crossing axis (default +1). Survivor spawns accept `keys` (0–100). Exit fields also allow a survivor with `credential: true`. The `door` action spends a key through the real interaction checks. Layout capture preserves field kinds, initial directional quotas, keys and stair credentials; admission history resets for the fresh setup. Checkpoints preserve personal authorization and quota state. Physics scenarios update the same entrance-crossing bookkeeping and use the new zombie motor speed when these rules are selected.
 
 `force-field-green.json`, `force-field-personal.json` and `force-field-entrance-quota.json` verify actual native contacts and save/checkpoint behavior. `tests/force-fields.test.ts` additionally covers normal zombie AI breaking both colors, personal rewards, navigation, exit independence and continuous replacement at the 600-zombie cap. `npx tsx scripts/benchmark-swarm.ts --dense` measures a synthetic crowd on one floor without accessing real saves or any provider.
 
@@ -166,13 +166,11 @@ Friendly local steering forecasts closest approach over 0.65 seconds, tests at m
 
 `stationary-traffic-island.json` verifies a moving bot goes around a group of stationary bodies within four seconds, with solid separation across a checkpoint. `tests/browser/npc-traffic.spec.ts` runs both fixtures in the browser Test Lab. `npx tsx scripts/benchmark-traffic.ts` measures 20 local steering decisions per static congested sample and writes `.artifacts/traffic-performance.json`; it excludes the rest of the engine, physics and rendering and is not an FPS guarantee.
 
-
 ## Close-contact survivor traffic
 
 `contact-traffic-release.json` starts opposing NPCs at actual body contact and checks that both pass within three seconds, keep physical separation and continue across a checkpoint. It reproduced a velocity-planner deadlock: the initial gap was penalized for every candidate, including sideways and separating motion, making stopping the cheapest permanent choice. The planner now treats a separating/tangent contact as escapable, samples a bounded set of reverse directions and remembers its passing side for 0.8 seconds to reduce left/right reversals. Native collision, walls and personal force-field permissions still apply. This is local steering over at most eight nearby survivors, with no extra global route searches.
 
 `tests/npc-traffic.test.ts` also tests eight contact orientations in both controller orders, the reported 78191111 opening with all nineteen bots physically working, and three restored waiting bots replacing a solo destination another actor owns. Station waiting and collision stalls are separate failures; saved stale paths alone do not prove a bot is attempting movement. The browser traffic suite replays the crowd, stationary-cluster and touching-opponents cases.
-
 
 ## Doorway flow
 

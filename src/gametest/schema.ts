@@ -30,6 +30,7 @@ export interface Spawn extends Point {
   keys?: number;
   forceField?: "green" | "red" | "exit";
   freeLimit?: number;
+  freeDirection?: -1 | 1;
 }
 export type Action = { tick: number } & (
   | { type: "move"; id: string; x: number; y: number }
@@ -137,6 +138,7 @@ function spawn(v: unknown): asserts v is Spawn {
     "keys",
     "forceField",
     "freeLimit",
+    "freeDirection",
   ]);
   requireThat(
     (v.kind === "player") === (v.id === "human"),
@@ -181,9 +183,16 @@ function spawn(v: unknown): asserts v is Spawn {
   );
   requireThat(
     v.forceField === undefined ||
-      (v.kind === "door" &&
+      ((v.kind === "door" || v.kind === "gate") &&
         ["green", "red", "exit"].includes(String(v.forceField))),
     "Invalid force field.",
+  );
+  requireThat(
+    v.freeDirection === undefined ||
+      ((v.freeDirection === -1 || v.freeDirection === 1) &&
+        v.forceField !== undefined &&
+        v.freeLimit !== undefined),
+    "A free-entry direction must be -1 or 1 on a field with a quota.",
   );
   for (const key of ["released", "credential"])
     requireThat(

@@ -1,7 +1,7 @@
 // Diagnostic orchestration only: answers must come from the real ChatGPT client.
 // Run start only after approval for these four packets and code transmission.
 import { randomUUID, createHash } from "node:crypto";
-import { readFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { createDiagnosticState } from "./lib/diagnostic-state.mjs";
 import { fileURLToPath } from "node:url";
 import { validateGroupReply } from "../src/group-grounding.ts";

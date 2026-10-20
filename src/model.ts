@@ -116,6 +116,8 @@ export interface Finding {
   rationale: string;
 }
 export interface Assessment {
+  /** Immutable provider request retained until an explicit retry succeeds. */
+  request?: { provider: Provider; payloadJson: string };
   historicalMappings?: import("./learning-model").HistoricalFacetMapping[];
   id: string;
   encounter: string;
@@ -462,7 +464,12 @@ export interface Encounter {
   executions?: import("./execution").WorkspaceExecution[];
   runId?: string;
   problemPresentedSequence?: number;
-  pendingGeneration?: { requestId: string; payload: Record<string, unknown> };
+  pendingGeneration?: {
+    /** Legacy saved generation requests were always ChatGPT handoffs. */
+    provider?: Provider;
+    requestId: string;
+    payload: Record<string, unknown>;
+  };
   id: string;
   floor: number;
   mode: "solo" | "shared";

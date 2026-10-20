@@ -1,4 +1,35 @@
-import { expect, test } from "@playwright/test";
+import { expect, test, type Page } from "@playwright/test";
+
+async function walkIntoWell(page: Page) {
+  await page.keyboard.down("w");
+  const observed = await page.waitForFunction(
+    () => {
+      const g = (window as any).__deadAir.game,
+        a = g.survivors[0];
+      if (!a.stairTravel) return false;
+      // Stop inside the browser on the observing frame; an RPC round trip
+      // must not keep the movement key held while the flight is inspected.
+      window.dispatchEvent(new KeyboardEvent("keyup", { code: "KeyW" }));
+      return {
+        floor: a.floor,
+        until: a.stairTravel.until,
+        time: g.time,
+        start: g.events
+          .filter(
+            (e: any) => e.type === "survivor-stairs" && e.actor === "human",
+          )
+          .at(-1).at,
+      };
+    },
+    undefined,
+    { polling: "raf" },
+  );
+  await page.keyboard.up("w");
+  const snapshot = await observed.jsonValue();
+  if (!snapshot) throw Error("Stair flight was not captured");
+  return snapshot;
+}
+
 test("walking into the personal staircase starts a saved flight; leaving the well cancels it", async ({
   page,
 }) => {
@@ -21,38 +52,31 @@ test("walking into the personal staircase starts a saved flight; leaving the wel
       ["human"],
       "World reward fixture; no learning claim",
     );
-    // Fresh floors carve the staircase into the north wall; start in its lobby.
-    Object.assign(a, { x: g.floors[0].stairs.x, y: g.floors[0].stairs.y + 3 });
+    // The pursuit well's center intentionally completes a flight immediately.
+    // Enter its outer edge to exercise the saved two-second deadline instead.
+    Object.assign(a, {
+      x: g.floors[0].stairs.x + 0.75,
+      y: g.floors[0].stairs.y + 3,
+    });
     return { study: JSON.stringify(g.study), stairs: g.floors[0].stairs };
   });
   expect(baseline.stairs).toEqual({ x: 22, y: 1 });
   await page.locator("#world").focus();
   // No E: walking north into the well starts the flight by itself.
-  await page.keyboard.down("w");
-  await expect
-    .poll(() =>
-      page.evaluate(
-        () => (window as any).__deadAir.game.survivors[0].stairTravel?.until,
-      ),
-    )
-    .toBeGreaterThan(0);
-  await page.keyboard.up("w");
-  const started = await page.evaluate(() => {
-    const g = (window as any).__deadAir.game,
-      a = g.survivors[0];
-    return { floor: a.floor, until: a.stairTravel.until, time: g.time };
-  });
+  const started = await walkIntoWell(page);
   expect(started.floor).toBe(0);
   expect(started.until).toBeGreaterThan(started.time);
   // Walking back out of the well cancels; the survivor stays on this floor.
   await page.keyboard.down("s");
-  await expect
-    .poll(() =>
-      page.evaluate(
-        () => (window as any).__deadAir.game.survivors[0].stairTravel,
-      ),
-    )
-    .toBeUndefined();
+  await page.waitForFunction(
+    () => {
+      if ((window as any).__deadAir.game.survivors[0].stairTravel) return false;
+      window.dispatchEvent(new KeyboardEvent("keyup", { code: "KeyS" }));
+      return true;
+    },
+    undefined,
+    { polling: "raf" },
+  );
   await page.keyboard.up("s");
   expect(
     await page.evaluate(
@@ -63,24 +87,7 @@ test("walking into the personal staircase starts a saved flight; leaving the wel
     await page.evaluate(() => (window as any).__deadAir.game.notice),
   ).toMatch(/left the staircase/);
   // Walk back in: a new flight with its own saved deadline.
-  await page.keyboard.down("w");
-  await expect
-    .poll(() =>
-      page.evaluate(
-        () => (window as any).__deadAir.game.survivors[0].stairTravel?.until,
-      ),
-    )
-    .toBeGreaterThan(0);
-  await page.keyboard.up("w");
-  const saved = await page.evaluate(() => {
-    const g = (window as any).__deadAir.game;
-    return {
-      until: g.survivors[0].stairTravel.until,
-      start: g.events
-        .filter((e: any) => e.type === "survivor-stairs" && e.actor === "human")
-        .at(-1).at,
-    };
-  });
+  const saved = await walkIntoWell(page);
   await page.reload();
   await expect(page.locator("#world")).toBeVisible();
   expect(

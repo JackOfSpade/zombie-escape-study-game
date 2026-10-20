@@ -12,6 +12,7 @@ import {
 } from "./imported-proof";
 import { eligibleLearning, localDate } from "./learner";
 import type { LearnerLedger, LearningAttempt } from "./learning-model";
+import { learningAttemptRoot, servedLearningAttempts } from "./learning-model";
 import type { Roadmap, Track } from "./model";
 import {
   baselineCheckpointValid,
@@ -139,27 +140,10 @@ function upsert(raw: string, rows: string[][]) {
 const short = (id: string) => id.split(":").at(-1)!;
 const topic = (id: string) => short(id).split(".")[0];
 function root(l: LearnerLedger, a: LearningAttempt) {
-  const seen = new Set<string>();
-  while (a.parentAttempt) {
-    if (seen.has(a.id)) throw Error("Cyclic learning continuation");
-    seen.add(a.id);
-    const parent = l.attempts.find((v) => v.id === a.parentAttempt);
-    if (!parent) throw Error("Missing learning continuation parent");
-    a = parent;
-  }
-  return a.id;
+  return learningAttemptRoot(l, a);
 }
 function visits(l: LearnerLedger) {
-  const seen = new Set<string>();
-  return l.attempts
-    .filter((a) => a.status === "served")
-    .sort((a, b) => (a.endedAt ?? "").localeCompare(b.endedAt ?? ""))
-    .filter((a) => {
-      const id = root(l, a);
-      if (seen.has(id)) return false;
-      seen.add(id);
-      return true;
-    });
+  return servedLearningAttempts(l);
 }
 function count(
   r: Roadmap,

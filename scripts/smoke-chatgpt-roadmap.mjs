@@ -1,6 +1,6 @@
 // One fictional live-client probe. Preparation never releases a request or code.
 import { randomUUID } from "node:crypto";
-import { readFileSync, existsSync } from "node:fs";
+import { readFileSync, writeFileSync, existsSync } from "node:fs";
 import { createDiagnosticState } from "./lib/diagnostic-state.mjs";
 import { fileURLToPath } from "node:url";
 import { sha256 as hash } from "./lib/digest.mjs";

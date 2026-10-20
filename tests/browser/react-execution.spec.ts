@@ -1,5 +1,7 @@
 import { expect, test } from "@playwright/test";
 import { writeFile } from "node:fs/promises";
+import { enterLegacyBuilding } from "./helpers/legacy-world";
+import { isolateRunnerBridge } from "./helpers/runner-bridge";
 test("container workspace React: captured checks, safe preview and edits survive leaving and reload without academic credit", async ({
   page,
 }) => {
@@ -8,8 +10,8 @@ test("container workspace React: captured checks, safe preview and edits survive
     "Requires isolated Docker React runtime",
   );
   test.setTimeout(45000);
-  await page.goto("/");
-  await page.waitForFunction(() => !!(window as any).__deadAir);
+  await isolateRunnerBridge(page);
+  await enterLegacyBuilding(page);
   await page.evaluate(async () => {
     const d = (window as any).__deadAir,
       g = d.game,

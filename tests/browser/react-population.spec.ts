@@ -1,5 +1,7 @@
 import { expect, test } from "@playwright/test";
 import { writeFile } from "node:fs/promises";
+import { enterLegacyBuilding } from "./helpers/legacy-world";
+import { isolateRunnerBridge } from "./helpers/runner-bridge";
 
 test("container workspace React: ordinary cohort and outside arrivals keep advancing during real execution", async ({
   page,
@@ -10,9 +12,9 @@ test("container workspace React: ordinary cohort and outside arrivals keep advan
   );
   test.setTimeout(45000);
   const info = test.info();
-  await page.goto("/");
-  await page.getByRole("button", { name: "Enter the building" }).click();
-  const before = await page.evaluate(async () => {
+  await isolateRunnerBridge(page);
+  await enterLegacyBuilding(page);
+  await page.evaluate(async () => {
     const d = (window as any).__deadAir,
       g = d.game,
       r = d.roadmap,
@@ -51,6 +53,20 @@ test("container workspace React: ordinary cohort and outside arrivals keep advan
     };
     Object.assign(g.survivors[0], { x: station.x, y: station.y, floor: 0 });
     await d.interact();
+  });
+  // Let the real engine reach a naturally scheduled arrival. A fast execution
+  // can otherwise finish inside the opening grace or between legacy waves.
+  const grace = await page.evaluate(async () => {
+    const root = "/src/",
+      { CONFIG } = await import(root + "model.ts");
+    return CONFIG.spawnGraceSeconds;
+  });
+  await page.waitForFunction((grace) => {
+    const g = (window as any).__deadAir.game;
+    return g.time >= grace && g.nextSpawn - g.time <= 1;
+  }, grace);
+  const before = await page.evaluate(() => {
+    const g = (window as any).__deadAir.game;
     return {
       seed: g.seed,
       time: g.time,

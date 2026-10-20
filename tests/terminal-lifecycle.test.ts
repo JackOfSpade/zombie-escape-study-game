@@ -175,6 +175,7 @@ test("an older generation response cannot replace or clear a newer request", asy
     const first = ensureProblem(g, e, r);
     while (queued.length < 1) await tick();
     delete e.generation;
+    delete e.pendingGeneration;
     const second = ensureProblem(g, e, r);
     while (queued.length < 2) await tick();
     assert.notEqual(queued[0].payload.requestId, queued[1].payload.requestId);
@@ -190,6 +191,48 @@ test("an older generation response cannot replace or clear a newer request", asy
       "Synthetic delayed question",
     );
     assert.equal(e.generation, undefined);
+  } finally {
+    await restore();
+  }
+});
+test("native generation retries its exact saved packet after an outage and reload", async () => {
+  const { g, e } = fixture();
+  g.study.profile = "live";
+  const packets: any[] = [];
+  const restore = await bridge(async (body) => {
+    packets.push(body);
+    return packets.length === 1
+      ? Response.json({ error: "Synthetic outage" }, { status: 503 })
+      : Response.json(problem(body.payload.contract));
+  });
+  try {
+    await ensureProblem(g, e, r);
+    assert.equal(e.problem, undefined);
+    assert.ok(e.pendingGeneration);
+    const restored = recover(decode(encode(g)));
+    const transport = globalThis.fetch;
+    globalThis.fetch = async () =>
+      Response.json({
+        mode: "chatgpt-handoff",
+        label: "Different synthetic provider",
+        detail: "Fixture only",
+        capabilities: [],
+      });
+    await checkBridge();
+    await ensureProblem(restored, restored.encounters[e.id], r);
+    assert.equal(packets.length, 1);
+    assert.match(
+      restored.encounters[e.id].error!,
+      /original generation provider/,
+    );
+    globalThis.fetch = transport;
+    await checkBridge();
+    await ensureProblem(restored, restored.encounters[e.id], r);
+    assert.deepEqual(packets[1], packets[0]);
+    assert.equal(
+      restored.encounters[e.id].problem?.title,
+      "Synthetic delayed question",
+    );
   } finally {
     await restore();
   }

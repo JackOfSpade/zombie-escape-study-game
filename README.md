@@ -14,7 +14,11 @@ npm run import:curriculum
 npm run dev
 ```
 
-Open http://127.0.0.1:5173. While playing there is no side panel: health, keys, access and the helicopter pickup are drawn in a small HUD inside the game frame, and the learning-continuity inspector is behind the Inspect button in the header. The HTTP bridge relay binds only to 127.0.0.1:4318. No API key is needed for development mode. `npm run build` creates `dist`; `npm run preview` serves the client without a live bridge relay. Offline practice lets you read and draft; completing a human puzzle requires the connected AI reviewer.
+Open http://127.0.0.1:5173. While playing there is no side panel: health, keys, access and the helicopter pickup are drawn in a small HUD inside the game frame, and the learning-continuity inspector is behind the Inspect button in the header. The HTTP bridge relay binds only to 127.0.0.1:4318. No API key is needed for development mode. Offline practice lets you read and draft; completing a human puzzle requires the connected AI reviewer.
+
+For a production deployment, run `npm run build` and then `npm start` (stop the dev server first). This serves only `dist`, reconnects the persistent bridge and proxies its API at the same `127.0.0.1:5173` origin, preserving browser saves. HTML and curriculum bypass caches; hashed assets can be cached. `GET /_app-health` reports the running build fingerprint. `npm run preview` is available for temporary bundle previews and does not launch the bridge. Keep the app on port 5173 for the connector's existing consent boundary.
+
+The configured macOS workstation runs production through the `com.jack.zombie-study-escape` LaunchAgent. Before development or browser tests, stop that app service with `launchctl bootout gui/$(id -u)/com.jack.zombie-study-escape`, then run `npm run dev`. After stopping development and rebuilding, restore it with `launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.jack.zombie-study-escape.plist`. The separately managed bridge retains its queued requests across app-server changes.
 
 ## ChatGPT connector
 

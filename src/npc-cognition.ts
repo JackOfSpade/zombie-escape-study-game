@@ -159,27 +159,26 @@ export function npcWorkContext(e: Encounter) {
     cached = contextCache.get(e);
   if (cached?.problem === e.problem && cached.stamp === stamp)
     return cached.key;
-  const publicTurn = Math.max(
+  const publicTurn = e.group.reduce(
+    (latest, m) =>
+      m.kind === "human" && m.author === "human"
+        ? Math.max(latest, m.seq)
+        : latest,
     0,
-    ...e.group
-      .filter((m) => m.kind === "human" && m.author === "human")
-      .map((m) => m.seq),
   );
-  const execution = Math.max(
-    0,
-    ...e.history
-      .filter(
-        (h) =>
-          h.kind === "execution" &&
-          h.author === "runner" &&
-          e.executions?.some(
-            (j) =>
-              j.id === h.executionId &&
-              j.status === "finished" &&
-              j.receipt?.executed,
-          ),
+  const execution = e.history.reduce(
+    (latest, h) =>
+      h.kind === "execution" &&
+      h.author === "runner" &&
+      e.executions?.some(
+        (j) =>
+          j.id === h.executionId &&
+          j.status === "finished" &&
+          j.receipt?.executed,
       )
-      .map((h) => h.seq),
+        ? Math.max(latest, h.seq)
+        : latest,
+    0,
   );
   const feedback = e.submissions
     .filter((s) => s.status === "needs-work")

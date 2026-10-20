@@ -1,6 +1,8 @@
 import { readPacket } from "./packet.mjs";
+import { createSandboxedExercise } from "./sandbox.mjs";
+import { compileAndRelease } from "./compile.mjs";
 // Trusted controller inside the isolated container. Learner code runs only in Chromium.
-import { writeFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { browserSpec } from "./spec.mjs";
 const require = createRequire(import.meta.url),
@@ -51,6 +53,28 @@ const deadline = setTimeout(async () => {
   process.exit(124);
 }, 12000);
 let browser;
+let bootstrapResources;
+const kernelSnapshot = () =>
+  Object.fromEntries(
+    [
+      "cpu.stat",
+      "memory.events",
+      "memory.current",
+      "memory.stat",
+      "pids.current",
+    ].map((file) => {
+      try {
+        return [
+          file,
+          readFileSync("/sys/fs/cgroup/" + file, "utf8")
+            .trim()
+            .slice(0, 8000),
+        ];
+      } catch {
+        return [file, "unavailable"];
+      }
+    }),
+  );
 try {
   phase("reading-packet");
   input = JSON.parse(await readPacket(process.stdin));
@@ -61,7 +85,7 @@ try {
   )
     throw Error("Missing execution marker");
   phase("loading-runtime");
-  const [{ chromium }, { build }] = await Promise.all([
+  const [{ chromium }, compiler] = await Promise.all([
     import("playwright"),
     import("esbuild"),
   ]);
@@ -76,42 +100,47 @@ try {
     "react/jsx-dev-runtime",
   ]);
   phase("compiling");
-  const bundled = await build({
-    stdin: {
-      contents: `import React from 'react';import {createRoot} from 'react-dom/client';import {flushSync} from 'react-dom';import App from '/work/Component.tsx';flushSync(()=>createRoot(document.getElementById('root')).render(<App/>));`,
-      loader: "tsx",
-      resolveDir: "/opt/zombie-browser",
-    },
-    bundle: true,
-    write: false,
-    platform: "browser",
-    format: "iife",
-    jsx: "automatic",
-    logLevel: "silent",
-    plugins: [
-      {
-        name: "single-react-module",
-        setup(build) {
-          build.onResolve({ filter: /.*/ }, (args) => {
-            if (args.importer === "/work/Component.tsx") {
-              if (!allowed.has(args.path))
-                return {
-                  errors: [
-                    {
-                      text: "Only installed React imports are available; this runtime accepts a single TSX module.",
-                    },
-                  ],
-                };
-              return { path: require.resolve(args.path) };
-            }
-            return undefined;
-          });
+  const bundled = await compileAndRelease(
+    () =>
+      compiler.build({
+        stdin: {
+          contents: `import React from 'react';import {createRoot} from 'react-dom/client';import {flushSync} from 'react-dom';import App from '/work/Component.tsx';flushSync(()=>createRoot(document.getElementById('root')).render(<App/>));`,
+          loader: "tsx",
+          resolveDir: "/opt/zombie-browser",
         },
-      },
-    ],
-  });
+        bundle: true,
+        write: false,
+        platform: "browser",
+        format: "iife",
+        jsx: "automatic",
+        logLevel: "silent",
+        plugins: [
+          {
+            name: "single-react-module",
+            setup(build) {
+              build.onResolve({ filter: /.*/ }, (args) => {
+                if (args.importer === "/work/Component.tsx") {
+                  if (!allowed.has(args.path))
+                    return {
+                      errors: [
+                        {
+                          text: "Only installed React imports are available; this runtime accepts a single TSX module.",
+                        },
+                      ],
+                    };
+                  return { path: require.resolve(args.path) };
+                }
+                return undefined;
+              });
+            },
+          },
+        ],
+      }),
+    () => compiler.stop(),
+  );
   result.compiled = true;
   phase("launching-browser");
+  bootstrapResources = kernelSnapshot();
   browser = await chromium.launch({
     headless: true,
     channel: "chromium",
@@ -119,41 +148,8 @@ try {
     timeout: 7000,
   });
   result.browserVersion = browser.version();
-  // Never give learner code the origin/context used to inspect Chrome's own page.
-  // Empty contexts can initialize independently. No learner script or virtual
-  // exercise is loaded until the separate private sandbox check succeeds.
-  phase("opening-isolated-contexts");
-  const [checkContext, context] = await Promise.all([
-    browser.newContext(),
-    browser.newContext({
-      viewport: { width: 640, height: 400 },
-      serviceWorkers: "block",
-      acceptDownloads: false,
-      permissions: [],
-    }),
-  ]);
-  context.setDefaultTimeout(800);
-  context.setDefaultNavigationTimeout(2500);
-  phase("opening-isolated-pages");
-  const [securityPage, page] = await Promise.all([
-    checkContext.newPage(),
-    context.newPage(),
-  ]);
-  phase("loading-sandbox-page");
-  await securityPage.goto("chrome://sandbox/");
-  phase("reading-sandbox-status");
-  const security = await securityPage.locator("body").innerText();
-  if (
-    !/Layer 1 Sandbox\s+Namespace/i.test(security) ||
-    !/PID namespaces\s+Yes/i.test(security) ||
-    !/Network namespaces\s+Yes/i.test(security) ||
-    !/Seccomp-BPF sandbox\s+Yes/i.test(security)
-  )
-    throw Error("Required Chromium sandbox is unavailable");
+  const { context, page } = await createSandboxedExercise(browser, phase);
   result.sandboxVerified = true;
-  phase("sandbox-verified");
-  phase("closing-sandbox-context");
-  await checkContext.close();
   context.on("page", (popup) => {
     if (popup !== page) void popup.close();
   });
@@ -271,6 +267,11 @@ try {
     result.errors.length || result.steps.some((s) => !s.passed) ? 1 : 0,
   );
 } catch (error) {
+  if (result.compiled && !executed)
+    result.bootstrapResources = {
+      before: bootstrapResources,
+      after: kernelSnapshot(),
+    };
   if (error.name === "TimeoutError") result.timedOut = true;
   result.errors.push(short(error.message, 2000));
   result.kind =

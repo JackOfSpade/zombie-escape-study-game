@@ -170,6 +170,35 @@ export interface LearnerLedger {
   }[];
 }
 
+/** A continuation family consumes one visit, while retaining every attempt. */
+export function learningAttemptRoot(
+  l: LearnerLedger,
+  attempt: LearningAttempt,
+) {
+  const seen = new Set<string>();
+  while (attempt.parentAttempt) {
+    if (seen.has(attempt.id)) throw Error("Cyclic learning continuation");
+    seen.add(attempt.id);
+    const parent = l.attempts.find((a) => a.id === attempt.parentAttempt);
+    if (!parent) throw Error("Missing learning continuation parent");
+    attempt = parent;
+  }
+  return attempt.id;
+}
+
+export function servedLearningAttempts(l: LearnerLedger) {
+  const seen = new Set<string>();
+  return l.attempts
+    .filter((a) => a.status === "served")
+    .sort((a, b) => (a.endedAt ?? "").localeCompare(b.endedAt ?? ""))
+    .filter((a) => {
+      const root = learningAttemptRoot(l, a);
+      if (seen.has(root)) return false;
+      seen.add(root);
+      return true;
+    });
+}
+
 export const studyRatioPosition = (s: {
   cycle: number;
   cycleOffset?: number;

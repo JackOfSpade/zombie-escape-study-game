@@ -1,4 +1,6 @@
 import { ensureDoor } from "./doors";
+import { createCheckpointQueue } from "./checkpoint-queue";
+import { reconcileKnowledgeGaps } from "./knowledge-probe";
 import { type Game } from "./model";
 import { checkpointPhysics } from "./physics";
 import { releaseSettledRequests } from "./run-learning";
@@ -63,8 +65,33 @@ export function decode(text: string): Game {
       if (o.id === "main-gate" && o.kind === "gate") ensureDoor(o, floor);
   return g;
 }
-let writes = Promise.resolve(),
-  serial = 0;
+let serial = 0;
+const checkpoints = createCheckpointQueue<{
+  payload: string;
+  checkpoint: boolean;
+  serial: number;
+}>(async ({ payload, checkpoint, serial: checkpointSerial }) => {
+  try {
+    await writeDurable(KEY, payload);
+  } catch (error) {
+    if (checkpoint) return;
+    // A newer compact checkpoint may have reached local storage while this
+    // older durable transaction was pending. Never roll that fallback back.
+    let local: string | null = null;
+    try {
+      local = localStorage.getItem(KEY);
+    } catch {}
+    if (local)
+      try {
+        if (unpack(local).serial >= checkpointSerial) return;
+      } catch {}
+    try {
+      localStorage.setItem(KEY, payload);
+    } catch {
+      throw error;
+    }
+  }
+});
 interface StoredSave {
   format: 2;
   serial: number;
@@ -96,22 +123,7 @@ export function save(g: Game) {
       localStorage.setItem(KEY, payload);
       checkpoint = true;
     } catch {}
-  const operation = writes
-    .catch(() => {})
-    .then(async () => {
-      try {
-        await writeDurable(KEY, payload);
-      } catch (error) {
-        if (checkpoint) return;
-        try {
-          localStorage.setItem(KEY, payload);
-        } catch {
-          throw error;
-        }
-      }
-    });
-  writes = operation;
-  return operation;
+  return checkpoints.enqueue({ payload, checkpoint, serial });
 }
 export async function load() {
   let durable: string | null = null;
@@ -140,7 +152,7 @@ export async function load() {
   return valid[0].game;
 }
 export function flushSaves() {
-  return writes;
+  return checkpoints.flush();
 }
 export function download(
   name: string,
@@ -174,7 +186,10 @@ export function recover(g: Game) {
     g.study.pending.encounter = `${g.id}/${g.study.pending.encounter}`;
   for (const e of Object.values(g.encounters)) e.runId ??= g.id;
   delete g.survivors[0].station;
-  for (const e of Object.values(g.encounters)) {
+  for (const e of new Set([
+    ...Object.values(g.encounters),
+    ...g.study.archives,
+  ])) {
     e.chatOpen = false;
     delete e.groupRequest;
     for (const job of e.groupRequests ?? [])
@@ -209,16 +224,6 @@ export function recover(g: Game) {
           : "Application restarted during evaluation. Captured revision retained; resubmit to retry.";
         if (e.state !== "consumed") e.state = "in-progress";
       }
-  }
-  for (const e of Object.values(g.encounters)) releaseSettledRequests(e);
-  for (const e of g.study.archives) releaseSettledRequests(e, true);
-  for (const e of [...Object.values(g.encounters), ...g.study.archives]) {
-    for (const job of e.groupRequests ?? [])
-      if (job.state === "pending") {
-        job.state = "interrupted";
-        job.error =
-          "Application restarted; the exact saved group question is retained.";
-      }
     if (e.outcomeInspection?.state === "pending") {
       e.outcomeInspection.state = "interrupted";
       e.outcomeInspection.error =
@@ -231,11 +236,14 @@ export function recover(g: Game) {
           "Application restarted during execution. Captured code retained; run again to retry.";
       }
   }
+  for (const e of Object.values(g.encounters)) releaseSettledRequests(e);
+  for (const e of g.study.archives) releaseSettledRequests(e, true);
   for (const a of g.study.assessments)
     if (a.status === "pending") {
       a.status = "review-required";
       a.provenance =
         "Application restarted during assessment. Evidence cutoff and request identity retained for retry.";
     }
+  reconcileKnowledgeGaps(g);
   return g;
 }

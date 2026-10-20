@@ -528,6 +528,49 @@ test("queued requests nobody served within a day expire like answered ones, whil
   );
 });
 
+test("expiry preserves a queued learner turn that is still awaited and frees it after polling stops", () => {
+  let now = 0;
+  const q = createHandoffQueue({ now: () => now });
+  q.enable(true);
+  const receipt = q.enqueue("tutor", payload("still-awaited-after-a-day"));
+  now = 25 * 3600_000;
+  assert.equal(q.result(receipt.id, receipt.hash).status, "pending");
+  now += 61_000; // A hidden game tab may wake only once a minute.
+  q.enqueue("tutor", payload("unrelated-new-turn"));
+  assert.equal(q.result(receipt.id, receipt.hash).status, "pending");
+  const job = q.get(worker);
+  assert.equal(job.jobId, receipt.id);
+  q.releaseWorker(worker);
+  now += 76_000;
+  q.enqueue("tutor", payload("after-requester-left"));
+  assert.throws(
+    () => q.result(receipt.id, receipt.hash),
+    /Unknown exact handoff request/,
+  );
+});
+
+test("worker pulls roll back a claim change when its durable write fails", () => {
+  const dir = mkdtempSync(join(tmpdir(), "dead-air-handoff-pull-"));
+  const file = join(dir, "jobs.json");
+  try {
+    const q = createHandoffQueue({ file });
+    q.enable(true);
+    const receipt = q.enqueue("tutor", payload("durable-claim"));
+    const before = q.snapshot();
+    renameSync(dir, dir + "-moved");
+    assert.throws(() => q.get(worker));
+    assert.deepEqual(q.snapshot(), before);
+    renameSync(dir + "-moved", dir);
+    const job = q.get(other);
+    assert.equal(job.jobId, receipt.id);
+    assert.deepEqual(q.get(other), job);
+    assert.equal(q.get(worker).status, "waiting");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+    rmSync(dir + "-moved", { recursive: true, force: true });
+  }
+});
+
 test("generation rejects rubric objects before accepting a reply and retains the same claim for a corrected string rubric", () => {
   const q = createHandoffQueue();
   q.enable(true);

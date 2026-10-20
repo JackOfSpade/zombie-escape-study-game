@@ -74,7 +74,13 @@ export function environmentExecutions(g: Game) {
       )
       .filter((job) => {
         try {
-          const source = workspaceAt(e, Math.max(...job.artifactSequences));
+          const source = workspaceAt(
+            e,
+            job.artifactSequences.reduce(
+              (latest, seq) => Math.max(latest, seq),
+              0,
+            ),
+          );
           return (
             source.revision === job.revision && source.content === job.code
           );

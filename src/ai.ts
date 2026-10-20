@@ -21,28 +21,16 @@ import {
   unseenWork,
   workKinds,
 } from "./chat-catchup";
-import {
-  beginVisit,
-  eligible,
-  evidencePacket,
-  finishVisit,
-  syncLearningView,
-} from "./curriculum";
+import { beginVisit, eligible, finishVisit } from "./curriculum";
 import { complete } from "./engine";
 import { recordSpawn, spawnContract } from "./topic-spawn";
 import { reviewEnvironment } from "./environment-review";
 import { executionEvidence, runWorkspace } from "./execution";
 import { groupSnapshot, validateGroupReply } from "./group-grounding";
 import { adoptedSourceText } from "./imported-proof";
-import {
-  applyLearningAssessment,
-  encounterKey,
-  initialLearner,
-  registerScopes,
-} from "./learner";
+import { encounterKey, initialLearner, registerScopes } from "./learner";
 import {
   type Provider,
-  type Assessment,
   type Contract,
   type Encounter,
   type Game,
@@ -64,6 +52,8 @@ import { inspectNpcOutcome, outcomeIsVisible } from "./npc-outcome";
 import { humanUsingWorkspace, npcAtWorkstation } from "./npc-work-access";
 import { reconcileRoadmap } from "./roadmap-adoption";
 import { settleTutorRequest } from "./run-learning";
+import { assess } from "./learning-assessment";
+export { assess } from "./learning-assessment";
 import { canSee } from "./visibility";
 import { applyAutonomousProposal, proposalText } from "./workspace-proposals";
 const live = (g: Game) =>
@@ -270,6 +260,14 @@ async function ensureIndividualProblem(g: Game, e: Encounter, r: Roadmap) {
   e.generation = generation;
   try {
     let p: Problem;
+    if (
+      e.pendingGeneration &&
+      (!native ||
+        status().mode !== (e.pendingGeneration.provider ?? "chatgpt-handoff"))
+    )
+      throw Error(
+        "Reconnect the original generation provider to retry this saved question",
+      );
     // The spawn policy keeps the formal visit reachable and rotates other
     // terminals across cooled topics; a saved generation keeps its contract.
     const contract =
@@ -296,12 +294,13 @@ async function ensureIndividualProblem(g: Game, e: Encounter, r: Roadmap) {
           r.tracks[contract.track].progress,
         curriculum: r.tracks[contract.track].curriculum,
       };
-      if (status().mode === "chatgpt-handoff")
-        e.pendingGeneration = {
-          requestId: generation,
-          payload: structuredClone(payload),
-        };
-      const provider = status().mode;
+      const provider =
+        status().mode === "chatgpt-handoff" ? "chatgpt-handoff" : "study-mode";
+      e.pendingGeneration = {
+        provider,
+        requestId: generation,
+        payload: structuredClone(payload),
+      };
       p = await request("generate", payload);
       p.provenance =
         provider === "chatgpt-handoff" ? "chatgpt-handoff" : "study-mode";
@@ -675,6 +674,8 @@ export function retryTutorRequest(
     return Promise.resolve();
   const pending = tutorInFlight.get(job);
   if (pending) return pending;
+  const study = g.study,
+    profile = study.profile;
   job.state = "pending";
   delete job.error;
   delete job.transportPhase;
@@ -703,6 +704,9 @@ export function retryTutorRequest(
           .at(-1);
         const current = e.tutor.filter((m) => m.kind === "human").at(-1);
         if (
+          g.study !== study ||
+          study.profile !== profile ||
+          job.state !== "pending" ||
           !interactiveConnected(g) ||
           status().mode !== job.provider ||
           g.encounters[e.id] !== e ||
@@ -837,6 +841,7 @@ export function retryTutorRequest(
       }
       settleTutorRequest(job, "applied");
     } catch (error) {
+      if ((job.state as string) === "superseded") return;
       job.state = "interrupted";
       job.error = String(error);
     }
@@ -856,16 +861,27 @@ export function retryGroupRequest(
     return Promise.resolve();
   const pending = groupInFlight.get(job);
   if (pending) return pending;
+  const study = g.study,
+    profile = study.profile;
   e.groupRequest = job.id;
   if (job.error && e.error === job.error) delete e.error;
   job.state = "pending";
   delete job.error;
   const operation = (async () => {
     try {
-      if (!interactiveConnected(g) || status().mode !== job.provider)
-        throw Error(
-          "Reconnect the original group connection to retry this saved question",
-        );
+      const checkConnection = () => {
+        if (
+          g.study !== study ||
+          study.profile !== profile ||
+          g.encounters[e.id] !== e ||
+          !interactiveConnected(g) ||
+          status().mode !== job.provider
+        )
+          throw Error(
+            "Reconnect the original group connection and encounter to retry this saved question",
+          );
+      };
+      checkConnection();
       const payload = JSON.parse(job.payloadJson);
       const snapshot = payload as ReturnType<typeof groupSnapshot>;
       if (
@@ -910,6 +926,7 @@ export function retryGroupRequest(
         job.state = "superseded";
         return;
       }
+      checkConnection();
       if (e.revision !== snapshot.sourceRevision)
         throw Error(
           "Workspace changed during group reply; your question remains saved. Ask again for the current revision.",
@@ -1481,116 +1498,6 @@ function applyCompletion(
         refs: [s.id],
       });
     }
-  }
-}
-
-export async function assess(
-  g: Game,
-  e: Encounter,
-  r: Roadmap,
-  cutoff = e.submissions.find((s) => s.id === e.accepted)?.seq ??
-    Math.max(
-      0,
-      ...e.history
-        .filter(
-          (h) =>
-            h.author === "human" &&
-            ["edit", "reasoning", "test", "defense", "execution"].includes(
-              h.kind,
-            ),
-        )
-        .map((h) => h.seq),
-    ),
-  retry = false,
-) {
-  cutoff = Math.max(
-    0,
-    ...e.history.filter((h) => h.seq <= cutoff).map((h) => h.seq),
-  );
-  if (e.problem?.contract.practice) return;
-  const id = `assessment-${encounterKey(e)}-${cutoff}`;
-  const prior = g.study.assessments.find((a) => a.id === id);
-  if (
-    prior &&
-    (prior.status === "applied" || !retry || prior.status === "pending")
-  )
-    return;
-  const a: Assessment = prior ?? {
-    id,
-    encounter: e.id,
-    sourceVersion:
-      g.study.profile === "live"
-        ? (g.study.learner?.version ?? 0)
-        : g.study.version,
-    evidenceCutoffSequence: cutoff,
-    findings: [],
-    status: "pending",
-    provenance: status().mode,
-  };
-  if (!prior) g.study.assessments.push(a);
-  else a.status = "pending";
-  const external = g.study.learner?.attempts.find(
-    (v) =>
-      v.encounter === encounterKey(e) && v.status === "externally-resolved",
-  );
-  if (
-    external &&
-    !e.history.some(
-      (h) =>
-        h.author === "human" &&
-        ["edit", "reasoning", "test", "execution"].includes(h.kind) &&
-        !external.externalResolution!.assessedHumanSequences.includes(h.seq) &&
-        h.seq <= cutoff,
-    ) &&
-    !e.executions?.some(
-      (j) =>
-        j.author === "human" && j.status === "finished" && j.receipt?.executed,
-    )
-  ) {
-    a.status = "review-required";
-    a.provenance =
-      "Attempt resolved in the imported roadmap. Local work is retained; world completion adds no duplicate academic assessment or visit.";
-    return;
-  }
-  if (!e.problem) {
-    a.status = "review-required";
-    a.provenance =
-      "Physical contribution retained; no persisted human learning task was issued. No academic credit.";
-    return;
-  }
-  if (
-    !["study-mode", "chatgpt-handoff"].includes(e.problem.provenance) ||
-    g.study.profile !== "live"
-  ) {
-    a.status = "review-required";
-    a.provenance = "Development simulation cannot award academic credit.";
-    return;
-  }
-  if (!live(g)) {
-    a.status = "review-required";
-    a.provenance =
-      "Live assessment connection unavailable; work and request identity retained for retry.";
-    return;
-  }
-  try {
-    const provider =
-      status().mode === "chatgpt-handoff" ? "chatgpt-handoff" : "study-mode";
-    const response = await request("assess", {
-      requestId: id,
-      packet: evidencePacket(e, r, cutoff, g.study.learner),
-    });
-    a.findings = response.findings;
-    a.historicalMappings = response.historicalMappings;
-    a.visitOutcome = response.visitOutcome;
-    a.scopeReviews = response.scopeReviews;
-    a.helpAttributions = response.helpAttributions;
-    a.provenance = provider;
-    g.study.learner ??= initialLearner(r);
-    applyLearningAssessment(r, g.study.learner, e, a, undefined, provider);
-    syncLearningView(g.study);
-  } catch (err) {
-    a.status = "review-required";
-    a.provenance = `Assessment unresolved: ${String(err)}`;
   }
 }
 

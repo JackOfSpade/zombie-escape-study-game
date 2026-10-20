@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
+import { HANDOFF_REQUESTER_LIVE_MS } from "./chatgpt-handoff-queue.mjs";
 
 /**
  * Live terminal relay as an MCP App. The game keeps its own private
@@ -35,6 +36,19 @@ export {
 } from "./lib/probe-reply.mjs";
 export const PROMPT_LIMIT = 40_000;
 const MESSAGE_LIMIT = 80;
+const CONTEXT_PARTS = [
+  "curriculum",
+  "progressContext",
+  "workspace",
+  "submissions",
+  "executions",
+  "question",
+  "probe",
+  "learning",
+  "messages",
+  "instruction",
+  "responseFormat",
+];
 export const terminalRelayTools = () =>
   withHandoffAuth([
     {
@@ -83,11 +97,11 @@ export const terminalRelayTools = () =>
       name: "read_study_terminal_context",
       title: "Read omitted terminal context",
       description:
-        "Read the curriculum or progress-context part that the current @study terminal turn omitted for size. Use the exact relayId and turnId from that turn and the part name it lists.",
+        "Read a captured context part that the current @study terminal turn omitted for size. Use the exact relayId and turnId from that turn and the part name it lists.",
       inputSchema: schema({
         relayId: id,
         turnId: id,
-        part: { type: "string", enum: ["curriculum", "progressContext"] },
+        part: { type: "string", enum: CONTEXT_PARTS },
       }),
       annotations: { readOnlyHint: true },
     },
@@ -132,7 +146,7 @@ export const ACTIVE_WINDOW_MS = 20_000;
  * minutes (the player is over in the ChatGPT tab) gets one timer wake a
  * minute, so the window must outlast that cadence; it still frees a turn left
  * behind by a reload or an earlier run within about a minute. */
-export const REQUESTER_LIVE_MS = 75_000;
+export const REQUESTER_LIVE_MS = HANDOFF_REQUESTER_LIVE_MS;
 export function createTerminalRelayApp({
   queue,
   now = Date.now,
@@ -232,26 +246,25 @@ export function createTerminalRelayApp({
     let messages = allMessages.slice(-MESSAGE_LIMIT);
     const turnId = randomUUID();
     const omitted = [];
+    const excluded = new Set();
+    const context = {
+      ...Object.fromEntries(CONTEXT_PARTS.map((part) => [part, p[part]])),
+      question,
+      messages: allMessages,
+    };
     const packet = (messageList) => ({
       relayId: s.id,
       turnId,
       requestId: p.requestId,
-      instruction: p.instruction,
-      responseFormat: p.responseFormat,
-      ...(p.probe !== undefined ? { probe: p.probe } : {}),
-      question,
-      learning: p.learning,
-      workspace: p.workspace,
       draftRevision: p.draftRevision,
-      submissions: p.submissions,
-      executions: p.executions,
       ...(served.correction ? { correction: served.correction } : {}),
       messagesOmitted: allMessages.length - messageList.length,
-      messages: messageList,
-      ...(omitted.includes("curriculum") ? {} : { curriculum: p.curriculum }),
-      ...(omitted.includes("progressContext")
-        ? {}
-        : { progressContext: p.progressContext }),
+      ...Object.fromEntries(
+        CONTEXT_PARTS.filter((part) => !excluded.has(part)).map((part) => [
+          part,
+          part === "messages" ? messageList : context[part],
+        ]),
+      ),
       ...(omitted.length
         ? {
             omitted,
@@ -264,12 +277,33 @@ export function createTerminalRelayApp({
     for (const part of ["progressContext", "curriculum"])
       if (body.length > promptLimit && p[part] !== undefined) {
         omitted.push(part);
+        excluded.add(part);
         body = JSON.stringify(packet(messages));
       }
     while (body.length > promptLimit && messages.length > 4) {
       messages = messages.slice(-Math.floor(messages.length / 2));
       body = JSON.stringify(packet(messages));
     }
+    // Earlier learner answers can establish a facet that a later turn depends
+    // on. Keep that exact history available instead of silently losing it when
+    // the host message has to show only the latest turns.
+    if (messages.length < allMessages.length) {
+      omitted.push("messages");
+      body = JSON.stringify(packet(messages));
+    }
+    // A bounded transcript alone does not bound a saved workspace, problem or
+    // runner output. Move any remaining large fields behind the same exact-turn
+    // context reader; never truncate code or evidence into a different artifact.
+    for (const part of CONTEXT_PARTS) {
+      if (body.length <= promptLimit) break;
+      if (excluded.has(part) || context[part] === undefined) continue;
+      excluded.add(part);
+      if (!omitted.includes(part)) omitted.push(part);
+      if (part === "messages") messages = [];
+      body = JSON.stringify(packet(messages));
+    }
+    if (body.length > promptLimit)
+      throw Error("Terminal packet metadata exceeds the conversation limit");
     const prompt = TURN_INSTRUCTION + body;
     return {
       turnId,
@@ -285,10 +319,7 @@ export function createTerminalRelayApp({
       })),
       draftRevision: p.draftRevision,
       omitted,
-      context: {
-        curriculum: p.curriculum,
-        progressContext: p.progressContext,
-      },
+      context,
       ...(served.correction ? { correction: served.correction } : {}),
     };
   };

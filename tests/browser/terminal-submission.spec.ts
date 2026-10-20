@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import { writeFile } from "node:fs/promises";
 async function openFixture(page: Page, mode: "solo" | "shared") {
   await page.goto("/");
   await page.getByRole("button", { name: "Enter the building" }).click();
@@ -197,10 +198,14 @@ test("shared terminal presents only group chat and supplies its current draft wi
   await expect(page.locator("#conversation-title")).toHaveText("Group chat");
   await expect(page.locator("[data-tab]")).toHaveCount(0);
   await page.locator("#workspace").fill("Shared synthetic draft");
-  await page.evaluate(() => {
-    const g = (window as any).__deadAir.game,
+  await page.evaluate(async () => {
+    const root = "/src/",
+      { claimStation } = await import(root + "engine.ts"),
+      { npcCanRespond } = await import(root + "ai.ts"),
+      g = (window as any).__deadAir.game,
       e = g.encounters["f0-room0"],
-      a = g.survivors[1];
+      a = g.survivors[1],
+      station = g.floors[0].stations[1];
     e.tutor.push({
       id: "private",
       author: "Terminal AI",
@@ -210,22 +215,100 @@ test("shared terminal presents only group chat and supplies its current draft wi
       worldTime: g.time,
       provenance: "chatgpt-handoff",
     });
+    // openFixture can mark an NPC escaped during a crossing. Exercise that
+    // retained motion explicitly, then seat this controlled chat participant.
+    a.vault = {
+      from: { x: a.x, y: a.y },
+      to: { x: a.x + 0.5, y: a.y },
+      left: 1.5,
+      duration: 1.5,
+    };
     Object.assign(a, {
       escaped: false,
       floor: 0,
       intent: e.id,
       thought: 100,
-      x: g.survivors[0].x + 1,
-      y: g.survivors[0].y,
-      activity: "working",
-      station: g.floors[0].stations[1].id,
+      x: station.x,
+      y: station.y,
+      activity: "studying",
+      path: [],
+      repath: 0,
+      fleeUntil: 0,
     });
+    for (const field of [
+      "vault",
+      "stairTravel",
+      "stairwell",
+      "target",
+      "navTarget",
+      "routeProgress",
+      "studyLoop",
+      "fleeTarget",
+      "fleeFloor",
+    ])
+      delete a[field];
+    g.nextSpawn = Number.MAX_SAFE_INTEGER;
+    if (!claimStation(g, a, station.id) || !npcCanRespond(g, e, a))
+      throw Error("Synthetic group speaker must occupy its shared station");
   });
   await page.locator("#chat-input").fill("What assumption should we check?");
   await page.locator("#chat-form button").click();
-  await expect(page.locator("#messages")).toContainText(
-    "What changes in the current draft?",
-  );
+  try {
+    await expect(page.locator("#messages")).toContainText(
+      "What changes in the current draft?",
+    );
+  } catch (error) {
+    const observed = await page.evaluate(async () => {
+      const root = "/src/",
+        { npcCanRespond, status } = await import(root + "ai.ts"),
+        g = (window as any).__deadAir.game,
+        e = g.encounters["f0-room0"],
+        a = g.survivors[1];
+      return {
+        runId: g.id,
+        time: g.time,
+        profile: g.study.profile,
+        bridge: status().mode,
+        encounter: {
+          id: e.id,
+          runId: e.runId,
+          state: e.state,
+          revision: e.revision,
+          error: e.error,
+          request: e.groupRequest,
+          jobs: e.groupRequests?.map((j: any) => ({
+            id: j.id,
+            state: j.state,
+            error: j.error,
+          })),
+        },
+        actor: {
+          id: a.id,
+          x: a.x,
+          y: a.y,
+          floor: a.floor,
+          alive: a.alive,
+          escaped: a.escaped,
+          intent: a.intent,
+          activity: a.activity,
+          station: a.station,
+          thought: a.thought,
+          vault: a.vault,
+          stairTravel: a.stairTravel,
+          canRespond: npcCanRespond(g, e, a),
+        },
+      };
+    });
+    const diagnosticPath = test
+      .info()
+      .outputPath("shared-group-request-diagnostic.json");
+    await writeFile(diagnosticPath, JSON.stringify(observed, null, 2));
+    await test.info().attach("shared-group-request-diagnostic", {
+      path: diagnosticPath,
+      contentType: "application/json",
+    });
+    throw error;
+  }
   await expect(page.locator("#messages")).not.toContainText("PRIVATE_SENTINEL");
   expect(group.workspace).toBe("Shared synthetic draft");
   expect(JSON.stringify(group)).not.toContain("PRIVATE_SENTINEL");

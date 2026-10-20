@@ -399,6 +399,40 @@ test("superseded or stale group replies cannot append a candidate to a newer con
   }
 });
 
+for (const changed of ["provider", "profile", "encounter"] as const)
+  test(`a pending group reply cannot apply after its ${changed} changes`, async () => {
+    let finish!: (response: Response) => void, packet: any;
+    const f = await liveFixture(async (payload) => {
+      packet = payload;
+      return new Promise<Response>((resolve) => (finish = resolve));
+    });
+    try {
+      const pending = send(f.g, f.e, "group", "Synthetic group question", r);
+      if (changed === "provider") {
+        const transport = globalThis.fetch;
+        globalThis.fetch = async () =>
+          response({
+            mode: "development",
+            label: "Synthetic disconnect",
+            detail: "Fixture only",
+            capabilities: [],
+          });
+        await checkBridge();
+        globalThis.fetch = transport;
+      } else if (changed === "profile") f.g.study.profile = "development";
+      else f.g.encounters[f.e.id] = structuredClone(f.e);
+      finish(response(reply(packet, "STALE_CONNECTION_REPLY")));
+      await pending;
+      assert.equal(f.e.groupRequests![0].state, "interrupted");
+      assert.ok(
+        !f.e.group.some((m) => m.text.includes("STALE_CONNECTION_REPLY")),
+      );
+      assert.ok(!f.e.history.some((h) => h.kind === "npc-proposal"));
+    } finally {
+      await f.restore();
+    }
+  });
+
 test("E12 identical replies from different selected survivors are rejected atomically; distinct complementary replies remain allowed", () => {
   const snapshot: GroupSnapshot = {
     requestId: "complementary-reply",

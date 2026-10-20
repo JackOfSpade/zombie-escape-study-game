@@ -19,6 +19,8 @@ import {
   scopeKey,
   setProgressStatus,
   studyRatioPosition,
+  learningAttemptRoot,
+  servedLearningAttempts,
   type CellState,
   type LearnerLedger,
   type LearningAttempt,
@@ -348,8 +350,8 @@ export function eligibleLearning(
     preferred === "PY" ? "PE" : "PY",
   ] as Track[]) {
     const s = l.tracks[track];
-    const last = l.attempts
-      .filter((a) => a.status === "served" && a.contract.track === track)
+    const last = servedLearningAttempts(l)
+      .filter((a) => a.contract.track === track)
       .at(-1);
     const due =
       last?.contract.review && s.phase !== "COMPLETE"
@@ -488,15 +490,7 @@ export function practiceContract(
   };
 }
 function attemptRoot(l: LearnerLedger, a: LearningAttempt) {
-  let current = a;
-  const seen = new Set<string>();
-  while (current.parentAttempt && !seen.has(current.id)) {
-    seen.add(current.id);
-    const parent = l.attempts.find((p) => p.id === current.parentAttempt);
-    if (!parent) break;
-    current = parent;
-  }
-  return current.id;
+  return learningAttemptRoot(l, a);
 }
 export function beginLearningAttempt(
   r: Roadmap,
@@ -559,7 +553,13 @@ export function openContinuation(
       k.objectiveIds.some((id) => c.objectiveIds.includes(id)) &&
       k.depth === c.depth &&
       !l.attempts.some(
-        (a) => a.status === "served" && attemptRoot(l, a) === k.attemptId,
+        (a) =>
+          a.status === "served" &&
+          attemptRoot(l, a) ===
+            attemptRoot(
+              l,
+              l.attempts.find((p) => p.id === k.attemptId)!,
+            ),
       ),
   );
 }
@@ -703,7 +703,8 @@ function validateProposal(
     validateHistoricalMapping(r, l, m);
   }
   const cutoff =
-    a.evidenceCutoffSequence ?? Math.max(0, ...e.history.map((h) => h.seq));
+    a.evidenceCutoffSequence ??
+    e.history.reduce((latest, h) => Math.max(latest, h.seq), 0);
   const scopes = e.problem!.scopeDefinitions ?? [];
   for (const f of a.findings) {
     const d = f.depth ?? c.depth,
@@ -782,7 +783,7 @@ function validateProposal(
         throw Error(
           "An unchanged or unattributed supplied artifact is not independently authored code",
         );
-      const latest = Math.max(...evidence.map((h) => h.seq));
+      const latest = evidence.reduce((latest, h) => Math.max(latest, h.seq), 0);
       for (const m of assistanceSources(e).filter(
         (m) =>
           m.kind !== "human" &&
@@ -846,6 +847,33 @@ function validateProposal(
   for (const help of a.helpAttributions ?? [])
     if (!assistanceSources(e).some((m) => m.id === help.messageId))
       throw Error("Unknown assistance reference");
+}
+
+/** Response arrival order cannot overwrite a judgment of newer human work. */
+function supersededEvidence(
+  l: LearnerLedger,
+  previousIds: string[],
+  incoming: LearningEvidence,
+) {
+  const latestSequence = (ev: LearningEvidence) =>
+    ev.artifactSequences.reduce((latest, seq) => Math.max(latest, seq), 0);
+  return l.evidence.some((previous) => {
+    if (
+      !previousIds.includes(previous.id) ||
+      !["independent", "contradicted"].includes(previous.outcome)
+    )
+      return false;
+    if (previous.encounter === incoming.encounter)
+      return latestSequence(previous) > latestSequence(incoming);
+    // Sequence numbers restart per encounter. Without wall times, the new
+    // response cannot establish that its work happened after the stored work.
+    return (
+      !previous.observedAt ||
+      !incoming.observedAt ||
+      new Date(previous.observedAt).getTime() >
+        new Date(incoming.observedAt).getTime()
+    );
+  });
 }
 export function applyLearningAssessment(
   r: Roadmap,
@@ -1032,6 +1060,11 @@ export function applyLearningAssessment(
     work.evidence.push(record);
     newEvidence.push(record.id);
     const old = cell.facets[key];
+    if (old && supersededEvidence(work, old.evidenceIds, record)) {
+      // Preserve the raw receipt without allowing an older result to reopen a
+      // repaired checkpoint or recertify a later contradiction.
+      continue;
+    }
     // Preserve a previously independent facet unless actual contradictory work is identified.
     if (
       !old ||
@@ -1248,9 +1281,23 @@ export function applyLearningAssessment(
       work.cycle++;
       const root = attemptRoot(work, attempt);
       work.continuations = work.continuations.filter(
-        (c) => c.attemptId !== root,
+        (c) =>
+          attemptRoot(
+            work,
+            work.attempts.find((a) => a.id === c.attemptId)!,
+          ) !== root,
       );
     }
+    // A late ancestor can serve the family before its replacement is answered.
+    // Retain the replacement's work, but release the already consumed visit.
+    const root = attemptRoot(work, attempt);
+    for (const sibling of work.attempts)
+      if (
+        sibling !== attempt &&
+        ["in-progress", "suspended"].includes(sibling.status) &&
+        attemptRoot(work, sibling) === root
+      )
+        sibling.status = "interrupted";
   }
   work.version++;
   reconcileGates(r, work);

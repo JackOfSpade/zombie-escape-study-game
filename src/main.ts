@@ -271,8 +271,9 @@ function begin() {
   persist();
 }
 function preserveRunLearning(g: Game, archive = false) {
-  for (const e of retainRunLearning(g, archive))
-    void assess(g, e, roadmap).then(persist);
+  const retained = retainRunLearning(g, archive);
+  for (const e of retained) void assess(g, e, roadmap).then(persist);
+  if (retained.length) void persist();
 }
 /** How long a restart waits for this run's assessments before it moves on;
  * later results still land in the shared study state and are saved then. */
@@ -302,6 +303,9 @@ async function fresh(statusLine?: HTMLElement) {
       assess(previous, e, roadmap).then(persist),
     ),
   );
+  // Requests are captured synchronously. Save them before waiting on a model,
+  // including when a page closes during the restart's assessment grace period.
+  void persist();
   const assessed = await Promise.race([
     assessing.then(() => true),
     new Promise<false>((done) =>
@@ -388,10 +392,7 @@ async function saveAndQuit() {
   card.hidden = false;
   card.innerHTML = `<span class="eyebrow">A REAL-TIME STUDY ESCAPE</span><h2>The dead are<br>on your heels.</h2><p id="quit-save" class="save-result${saved ? "" : " failed"}" role="status">${saved ? "✓ Run and learning progress saved." : escape(saveError)}</p><button id="continue-run">Continue run ↗</button><button id="new-run" class="quiet">New run · keep learning progress</button>`;
   $("#continue-run").addEventListener("click", continueRun);
-  $("#new-run").addEventListener(
-    "click",
-    () => void fresh($("#quit-save")),
-  );
+  $("#new-run").addEventListener("click", () => void fresh($("#quit-save")));
   $("#continue-run").focus();
 }
 function continueRun() {
@@ -1385,17 +1386,22 @@ $("#curriculum-button").onclick = () => {
         ...Object.values(game.encounters),
         ...game.study.archives,
       ].find((e) => a.id.startsWith(`assessment-${encounterKey(e)}-`));
-      if (e)
-        void assess(game, e, roadmap, a.evidenceCutoffSequence, true).then(
-          () => {
-            persist();
-            setNodeText(
-              button,
-              game.study.assessments.find((item) => item.id === a.id)?.status ??
-                "Saved",
-            );
-          },
+      if (!e || button.disabled) return;
+      button.disabled = true;
+      const requestGame = game,
+        pending = assess(game, e, roadmap, a.evidenceCutoffSequence, true);
+      // Persist the captured request before its response, so closing/reloading
+      // during a retry retains the same evidence and provider.
+      void persist();
+      void pending.finally(() => {
+        void persist();
+        button.disabled = false;
+        setNodeText(
+          button,
+          requestGame.study.assessments.find((item) => item.id === a.id)
+            ?.status ?? "Saved",
         );
+      });
     };
   $("#progress-export").onclick = async () => {
     const button = $<HTMLButtonElement>("#progress-export"),
@@ -1818,6 +1824,7 @@ $("#import").onchange = async () => {
     const next = recover(decode(await file.text()));
     closeTerminal();
     game = next;
+    completionCursor = 0;
     persist();
     startCard();
     closePanel("settings");
@@ -1917,17 +1924,33 @@ window.addEventListener("blur", () => {
 window.addEventListener("pagehide", persist);
 let completionCursor = 0;
 function completionAssessments() {
-  for (const ev of game.events.filter(
-    (ev) => ev.seq > completionCursor && ev.type === "completion",
-  )) {
+  // Events are ordered and capped. Only inspect the newly appended suffix.
+  let start = game.events.length;
+  while (start > 0 && game.events[start - 1].seq > completionCursor) start--;
+  let dispatched = false;
+  for (const ev of game.events.slice(start)) {
+    if (ev.type !== "completion") continue;
     const e = ev.encounter ? game.encounters[ev.encounter] : undefined;
-    if (e?.contributors.includes("human"))
+    if (e?.contributors.includes("human")) {
       void assess(game, e, roadmap).then(persist);
+      dispatched = true;
+    }
   }
   completionCursor = game.seq;
+  if (dispatched) void persist();
 }
 let inventorySignature = "";
 let materializing: Promise<void> | undefined;
+const FEED_EVENTS = new Set([
+  "death",
+  "completion",
+  "climb",
+  "breach",
+  "field-key",
+  "field-sealed",
+  "helicopter",
+  "board",
+]);
 /** The last seen key count per game, so a gain is announced once wherever
  * the player is looking, and a restored or new run is not. */
 let rewardWatch: { game: string; keys: number } | undefined;
@@ -2081,27 +2104,18 @@ function ui() {
   $("#schedule").textContent = c
     ? `1 PY : 2 PE · Next: ${c.track}${c.review ? " retention review" : ""} · D${c.depth}`
     : "Curriculum gate awaiting verified evidence";
-  $("#event-feed").innerHTML =
-    game.events
-      .filter((e) =>
-        [
-          "death",
-          "completion",
-          "climb",
-          "breach",
-          "field-key",
-          "field-sealed",
-          "helicopter",
-          "board",
-        ].includes(e.type),
-      )
-      .slice(-5)
-      .reverse()
-      .map(
-        (e) =>
-          `<p><span>${Math.floor(e.at / 60)}:${String(Math.floor(e.at % 60)).padStart(2, "0")}</span> ${escape(e.text.slice(0, 110))}</p>`,
-      )
-      .join("") || '<p class="muted">The stairwell radio is quiet.</p>';
+  const feed: string[] = [];
+  for (let i = game.events.length - 1; i >= 0 && feed.length < 5; i--) {
+    const e = game.events[i];
+    if (!FEED_EVENTS.has(e.type)) continue;
+    feed.push(
+      `<p><span>${Math.floor(e.at / 60)}:${String(Math.floor(e.at % 60)).padStart(2, "0")}</span> ${escape(e.text.slice(0, 110))}</p>`,
+    );
+  }
+  setHtml(
+    $("#event-feed"),
+    feed.join("") || '<p class="muted">The stairwell radio is quiet.</p>',
+  );
   const caption = game.settings.captions ? audio.caption : "";
   if ($("#world-caption").textContent !== caption)
     $("#world-caption").textContent = caption;

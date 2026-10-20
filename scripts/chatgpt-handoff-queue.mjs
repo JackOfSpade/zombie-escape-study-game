@@ -21,6 +21,9 @@ export const HANDOFF_OPERATIONS = Object.freeze([
   "materialize-work",
   "materialize-outcome",
 ]);
+// Hidden game tabs may poll only once a minute. Both the relay's claim filter
+// and queue retention must outlast that cadence to preserve an awaited turn.
+export const HANDOFF_REQUESTER_LIVE_MS = 75_000;
 const object = (value) =>
   value !== null && typeof value === "object" && !Array.isArray(value);
 // Only these public NPC jobs are covered by the separate unattended-work opt-in.
@@ -593,16 +596,16 @@ export function createHandoffQueue({
           throw Error("Conflicting reuse of a handoff request ID");
         return { id: previous.id, hash: previous.hash };
       }
-      // Answered jobs expire after a day. So does a queued job nobody served in
-      // a day: a reloaded or abandoned run leaves its terminal turn behind, and
-      // such turns would otherwise accumulate until the transport is full. A
-      // player who retries that exact saved request simply re-creates it.
+      // Answered and abandoned queued jobs expire after a day. An old request
+      // that its game still awaits must remain addressable by the same receipt:
+      // deleting it here makes an unrelated enqueue break that learner's turn.
       const keep = state.jobs.filter(
         (j) =>
           j.status === "working" ||
           (j.status === "done"
             ? now() - j.completedAt < 24 * 3600_000
-            : now() - j.createdAt < 24 * 3600_000),
+            : now() - j.createdAt < 24 * 3600_000 ||
+              requesterLive(j, HANDOFF_REQUESTER_LIVE_MS)),
       );
       if (
         keep.filter((j) => j.status !== "done").length >= maxJobs ||
@@ -624,6 +627,8 @@ export function createHandoffQueue({
       };
       state.jobs = [...keep, job];
       save();
+      const retained = new Set(state.jobs.map((j) => j.id));
+      for (const id of polled.keys()) if (!retained.has(id)) polled.delete(id);
       return { id: job.id, hash: job.hash };
     },
     result(id, digest) {
@@ -661,25 +666,19 @@ export function createHandoffQueue({
         (select === undefined || select(job) === true);
       const live = (job) =>
         liveWithinMs === undefined || requesterLive(job, liveWithinMs);
-      let released = false;
-      for (const j of state.jobs)
-        if (
+      const released = state.jobs.filter(
+        (j) =>
           j.status === "working" &&
           j.worker === worker &&
           inScope(j) &&
-          !live(j)
-        ) {
-          j.status = "queued";
-          delete j.worker;
-          delete j.claim;
-          delete j.readParts;
-          released = true;
-        }
+          !live(j),
+      );
       const own = state.jobs.find(
         (j) =>
           j.status === "working" &&
           j.worker === worker &&
           inScope(j) &&
+          live(j) &&
           (state.autonomousWork || !autonomousHandoff(j.operation, j.payload)),
       );
       const job =
@@ -701,19 +700,34 @@ export function createHandoffQueue({
                   Math.floor((now() - b.createdAt) / 30_000)) ||
               a.createdAt - b.createdAt,
           )[0];
-      if (!job) {
-        if (released) save();
+      // Idle long polls and repeated reads of an existing claim do not mutate
+      // state. Avoid cloning the entire private queue on each 250 ms poll; take
+      // a rollback checkpoint only when a claim actually changes.
+      if (released.length || (job && !own)) {
+        const before = structuredClone(state);
+        try {
+          for (const prior of released) {
+            prior.status = "queued";
+            delete prior.worker;
+            delete prior.claim;
+            delete prior.readParts;
+          }
+          if (job && !own) {
+            job.status = "working";
+            job.worker = worker;
+            job.claim = randomUUID();
+          }
+          save();
+        } catch (error) {
+          state = before;
+          throw error;
+        }
+      }
+      if (!job)
         return {
           status: "waiting",
           note: "No released work. Wait for the player's next request; do not invent a task or answer.",
         };
-      }
-      if (!own) {
-        job.status = "working";
-        job.worker = worker;
-        job.claim = randomUUID();
-        save();
-      } else if (released) save();
       const text = JSON.stringify(job.payload),
         chunks = chunkPayload(job.payload);
       return {
@@ -865,7 +879,6 @@ export function createHandoffQueue({
     "enable",
     "setAutonomous",
     "enqueue",
-    "get",
     "submit",
     "part",
     "reopen",

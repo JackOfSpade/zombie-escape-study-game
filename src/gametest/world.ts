@@ -118,7 +118,7 @@ export function spawn(g: Game, s: Spawn, replace = false) {
       ...(s.forceField === "red"
         ? { limit: 0 }
         : s.freeLimit
-          ? { limit: s.freeLimit, direction: 1 }
+          ? { limit: s.freeLimit, direction: s.freeDirection ?? 1 }
           : {}),
     };
   if (o.kind === "door" && !o.field) {
@@ -195,6 +195,7 @@ export function captureLayout(g: Game, s: Scenario): Scenario {
         hp: a.hp,
         heading: a.heading,
         credential: a.access.includes(a.floor),
+        ...(a.keys !== undefined ? { keys: a.keys } : {}),
       })),
     ...g.zombies
       .filter((z) => z.hp > 0)
@@ -223,6 +224,24 @@ export function captureLayout(g: Game, s: Scenario): Scenario {
             h: frame.h,
             angle: layoutAngle(o),
             released: o.door ? !o.door.latched : undefined,
+            ...(o.field
+              ? {
+                  forceField: o.field.exit
+                    ? ("exit" as const)
+                    : o.field.limit === 0
+                      ? ("red" as const)
+                      : ("green" as const),
+                  ...(o.field.limit
+                    ? {
+                        freeLimit: o.field.limit,
+                        freeDirection:
+                          o.field.direction === -1
+                            ? (-1 as const)
+                            : (1 as const),
+                      }
+                    : {}),
+                }
+              : {}),
           };
         }),
     ),

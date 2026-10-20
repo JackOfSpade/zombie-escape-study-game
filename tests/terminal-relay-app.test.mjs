@@ -507,7 +507,11 @@ test("owners are isolated, sessions are bounded and oversized packets omit conte
     }),
   );
   const claimed = claim(s.relayId, s.revision);
-  assert.deepEqual(claimed.turn.omitted, ["progressContext", "curriculum"]);
+  assert.deepEqual(claimed.turn.omitted, [
+    "progressContext",
+    "curriculum",
+    "messages",
+  ]);
   const packet = JSON.parse(
     claimed.turn.prompt.split("\n").slice(2).join("\n"),
   );
@@ -533,6 +537,14 @@ test("owners are isolated, sessions are bounded and oversized packets omit conte
     ).content[0].text,
   );
   assert.equal(read.text, "C".repeat(3000));
+  const history = JSON.parse(
+    app.call(
+      "read_study_terminal_context",
+      { relayId: s.relayId, turnId: claimed.turn.turnId, part: "messages" },
+      owner,
+    ).content[0].text,
+  );
+  assert.deepEqual(JSON.parse(history.text), messages);
   assert.throws(
     () =>
       app.call(
@@ -556,6 +568,41 @@ test("owners are isolated, sessions are bounded and oversized packets omit conte
       ),
     /not pending/,
   );
+});
+
+test("large saved work and learner answers stay exact and retrievable within the host turn limit", () => {
+  const promptLimit = 4000;
+  const { queue, app, open, claim, reply } = setup({ promptLimit });
+  queue.enable(true);
+  const s = open();
+  const messages = [human("🧟".repeat(12_000), 1)];
+  const captured = {
+    workspace: "const draft = '🧟';\n".repeat(4000),
+    executions: [{ stdout: "runner output\n".repeat(6000), executed: true }],
+    submissions: [{ solution: "saved solution\n".repeat(4000) }],
+  };
+  const receipt = queue.enqueue(
+    "tutor",
+    dialoguePayload("synthetic-large-artifacts", messages, captured),
+  );
+  const turn = claim(s.relayId, s.revision).turn;
+  assert.ok(turn.prompt.length <= promptLimit + TURN_INSTRUCTION.length);
+  for (const [part, value] of Object.entries({ ...captured, messages })) {
+    assert.ok(turn.omitted.includes(part), `${part} must remain retrievable`);
+    const read = JSON.parse(
+      app.call(
+        "read_study_terminal_context",
+        { relayId: s.relayId, turnId: turn.turnId, part },
+        owner,
+      ).content[0].text,
+    );
+    assert.deepEqual(
+      typeof value === "string" ? read.text : JSON.parse(read.text),
+      value,
+    );
+  }
+  reply(s.relayId, turn.turnId, "Captured work reviewed.", true);
+  assert.equal(queue.result(receipt.id, receipt.hash).answer.complete, true);
 });
 
 test("status counts only app sessions that are still calling in as active", () => {

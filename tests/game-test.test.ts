@@ -136,6 +136,82 @@ test("layout capture keeps door frames and poses, omits study data and remains r
   assert.equal(door.h, 3);
   assert.ok(Math.abs(door.angle!) <= 70);
 });
+test("captured force-field layouts retain keys, field kinds and directional entrance quotas", () => {
+  const s = emptyScenario();
+  s.rules = "force-fields";
+  s.entities = [
+    { id: "human", kind: "player", x: 5.5, y: 12.5, keys: 3, credential: true },
+    {
+      id: "quota",
+      kind: "door",
+      x: 10,
+      y: 12.5,
+      forceField: "green",
+      freeLimit: 4,
+    },
+    { id: "locked", kind: "door", x: 15, y: 12.5, forceField: "red" },
+    { id: "exit", kind: "door", x: 20, y: 12.5, forceField: "exit" },
+    { id: "public-gate", kind: "gate", x: 25, y: 12.5, forceField: "green" },
+  ];
+  const original = new TestRunner(s, roadmap);
+  original.game.floors[0].furniture.find(
+    (o) => o.id === "quota",
+  )!.field!.direction = -1;
+  const captured = captureLayout(original.game, s);
+  const replay = new TestRunner(
+    parseScenario(JSON.stringify(captured)),
+    roadmap,
+  );
+  const player = replay.game.survivors[0];
+  assert.equal(player.keys, 3);
+  assert.ok(player.access.includes(0));
+  for (const name of ["quota", "locked", "exit", "public-gate"]) {
+    const before = original.game.floors[0].furniture.find(
+      (o) => o.id === name,
+    )!;
+    const after = replay.game.floors[0].furniture.find((o) => o.id === name)!;
+    assert.ok(after.field, `${name} must remain a force field`);
+    assert.equal(
+      after.door,
+      undefined,
+      `${name} must not become a hinged door`,
+    );
+    assert.equal(after.field.limit, before.field!.limit);
+    assert.equal(after.field.direction, before.field!.direction);
+    assert.equal(after.field.exit, before.field!.exit);
+  }
+});
+test("directional quota fields reject invalid direction values and unrelated entity flags", () => {
+  const s = emptyScenario();
+  for (const freeDirection of [-2, 0, 2, "-1"]) {
+    assert.throws(
+      () =>
+        parseScenario({
+          ...s,
+          entities: [
+            {
+              id: "quota",
+              kind: "door",
+              x: 10,
+              y: 10,
+              forceField: "green",
+              freeLimit: 3,
+              freeDirection,
+            },
+          ],
+        }),
+      /free-entry direction/,
+    );
+  }
+  assert.throws(
+    () =>
+      parseScenario({
+        ...s,
+        entities: [{ id: "box", kind: "box", x: 10, y: 10, freeDirection: 1 }],
+      }),
+    /free-entry direction/,
+  );
+});
 test("headless CLI exposes a filter and emits failing exit status for unknown selections", () => {
   const ok = spawnSync(
     process.execPath,

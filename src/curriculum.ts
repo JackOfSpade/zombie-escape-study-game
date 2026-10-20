@@ -8,7 +8,7 @@ import {
   localDate,
 } from "./learner";
 import type { LearnerLedger } from "./learning-model";
-import { studyRatioPosition } from "./learning-model";
+import { servedLearningAttempts, studyRatioPosition } from "./learning-model";
 import {
   type Assessment,
   type Contract,
@@ -27,14 +27,12 @@ export function syncLearningView(s: StudyState) {
   s.queues = { PY: [...l.tracks.PY.queue], PE: [...l.tracks.PE.queue] };
   s.phases = { PY: l.tracks.PY.phase, PE: l.tracks.PE.phase };
   s.session = l.currentSession;
-  s.visits = l.attempts
-    .filter((a) => a.status === "served")
-    .map((a) => ({
-      id: a.id,
-      contract: a.contract,
-      encounter: a.encounter,
-      at: a.endedAt ?? a.startedAt,
-    }));
+  s.visits = servedLearningAttempts(l).map((a) => ({
+    id: a.id,
+    contract: a.contract,
+    encounter: a.encounter,
+    at: a.endedAt ?? a.startedAt,
+  }));
 }
 export function initialStudy(
   r: Roadmap,
@@ -171,7 +169,11 @@ export function validateAssessment(r: Roadmap, e: Encounter, a: Assessment) {
       !f.rationale
     )
       throw Error("Malformed facet");
-    const evidence = e.history.filter((h) => f.evidence.includes(h.seq));
+    const evidence = e.history.filter((h) => f.evidence.includes(h.seq)),
+      latestEvidence = evidence.reduce(
+        (latest, h) => Math.max(latest, h.seq),
+        -Infinity,
+      );
     if (
       f.outcome === "independent" &&
       (!evidence.length ||
@@ -192,7 +194,7 @@ export function validateAssessment(r: Roadmap, e: Encounter, a: Assessment) {
           m.kind !== "human" &&
           m.kind !== "system" &&
           m.presented !== undefined &&
-          m.presented < Math.max(...evidence.map((h) => h.seq)),
+          m.presented < latestEvidence,
       )
     )
       throw Error("Prior help requires explicit dependency review");
@@ -215,7 +217,7 @@ export function evidencePacket(
     workspaceBase: e.workspaceBase ?? e.problem?.starter ?? "",
     evidenceCutoffSequence:
       cutoff === Infinity
-        ? Math.max(0, ...e.history.map((h) => h.seq))
+        ? e.history.reduce((latest, h) => Math.max(latest, h.seq), 0)
         : cutoff,
     history: e.history.filter(
       (h) =>

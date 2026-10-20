@@ -7,6 +7,7 @@ import {
   eligible,
   finishVisit,
   initialStudy,
+  syncLearningView,
 } from "../src/curriculum";
 import {
   applyLearningAssessment,
@@ -593,6 +594,102 @@ test("late results for an interrupted visit and its continuation merge without d
   assert.equal(l.cycle, 1);
   assert.equal(l.evidence.length, 2);
   assert.equal(l.cells["PY:T11.1"].states[0], "P");
+});
+test("repeated interruptions retire the whole continuation family and project one served visit", () => {
+  const { l, e, proposal } = fixture();
+  const encounters = [e];
+  for (let run = 1; run <= 2; run++) {
+    interruptLearningAttempt(l, encounters.at(-1)!, when);
+    const next = structuredClone(e);
+    next.runId = `interrupted-run-${run}`;
+    next.problem!.contract = eligibleLearning(r, l, when);
+    beginLearningAttempt(r, l, next, when);
+    encounters.push(next);
+  }
+  const completed = proposal("third-run-served", ["purpose", "boundary"]);
+  completed.visitOutcome = "usable";
+  applyLearningAssessment(r, l, encounters[2], completed, when, "test-fixture");
+  assert.deepEqual(l.continuations, [], "all interrupted ancestors retire");
+  for (let i = 1; i >= 0; i--) {
+    const late = proposal(`ancestor-${i}-late`, ["purpose"]);
+    late.visitOutcome = "usable";
+    applyLearningAssessment(r, l, encounters[i], late, when, "test-fixture");
+  }
+  assert.equal(l.cycle, 1);
+  const study = initialStudy(r, "live");
+  study.learner = l;
+  syncLearningView(study);
+  assert.equal(study.visits.length, 1, "one family consumes one formal visit");
+});
+test("an interrupted ancestor served by a late result releases its active continuation", () => {
+  const { l, e, proposal } = fixture();
+  interruptLearningAttempt(l, e, when);
+  const next = structuredClone(e);
+  next.runId = "active-continuation";
+  next.problem!.contract = eligibleLearning(r, l, when);
+  beginLearningAttempt(r, l, next, when);
+  const late = proposal("ancestor-served-first", ["purpose", "boundary"]);
+  late.visitOutcome = "usable";
+  applyLearningAssessment(r, l, e, late, when, "test-fixture");
+  assert.equal(
+    l.attempts[1].status,
+    "interrupted",
+    "the replacement task no longer blocks the scheduler",
+  );
+  assert.deepEqual(l.continuations, []);
+  assert.equal(l.cycle, 1);
+  assert.equal(eligibleLearning(r, l, when).track, "PE");
+});
+test("a late assessment of older same-facet work cannot undo a later contradiction or repair", () => {
+  for (const latestOutcome of ["independent", "contradicted"] as const) {
+    const { l, e, c, proposal } = fixture();
+    const fresh = proposal(`fresh-${latestOutcome}`, ["purpose"]);
+    fresh.findings[0].evidence = [2];
+    fresh.findings[0].outcome = latestOutcome;
+    applyLearningAssessment(r, l, e, fresh, when, "test-fixture");
+    const late = proposal(`stale-${latestOutcome}`, ["purpose"]);
+    late.findings[0].outcome =
+      latestOutcome === "independent" ? "contradicted" : "independent";
+    applyLearningAssessment(r, l, e, late, when, "test-fixture");
+    assert.equal(
+      l.cells[c.objectiveIds[0]].facets["D1:purpose"].outcome,
+      latestOutcome,
+    );
+    assert.equal(l.evidence.length, 2, "both assessments remain auditable");
+  }
+});
+test("assessment ordering across runs uses actual observation times rather than encounter-local sequence numbers", () => {
+  const { l, e, c, proposal } = fixture();
+  interruptLearningAttempt(l, e, when);
+  const next = structuredClone(e);
+  next.runId = "later-observation-run";
+  next.problem!.contract = eligibleLearning(r, l, when);
+  const later = "2026-10-15T16:10:00.000Z";
+  next.history[0].wallTime = later;
+  beginLearningAttempt(r, l, next, later);
+  applyLearningAssessment(
+    r,
+    l,
+    next,
+    proposal("newer-observed-purpose", ["purpose"]),
+    later,
+    "test-fixture",
+  );
+  const stateBeforeLate = l.cells[c.objectiveIds[0]].states[0];
+  const stale = proposal("old-run-contradiction", ["purpose"]);
+  stale.findings[0].outcome = "contradicted";
+  stale.findings[0].evidence = [2];
+  applyLearningAssessment(r, l, e, stale, later, "test-fixture");
+  assert.equal(
+    l.cells[c.objectiveIds[0]].facets["D1:purpose"].outcome,
+    "independent",
+  );
+  assert.equal(
+    l.cells[c.objectiveIds[0]].states[0],
+    stateBeforeLate,
+    "stale contradiction does not reopen the cell",
+  );
+  assert.equal(l.evidence.length, 2);
 });
 test("controlled bridge fixture: live snapshot completion awards access before separate validated learning assessment", async () => {
   const originalFetch = globalThis.fetch;

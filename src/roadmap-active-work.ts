@@ -60,7 +60,10 @@ export async function captureActiveAttempts(
         attemptId: a.id,
         encounter: a.encounter,
         workHash: await workHash(e),
-        humanCutoff: Math.max(g.seq, 0, ...e.history.map((h) => h.seq)),
+        humanCutoff: e.history.reduce(
+          (latest, h) => Math.max(latest, h.seq),
+          Math.max(g.seq, 0),
+        ),
         humanSequences: e.history
           .filter(
             (h) =>

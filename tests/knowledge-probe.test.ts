@@ -59,6 +59,403 @@ const scopedProblem = {
   ],
 };
 
+test("generic facet ids cannot resolve unrelated gaps, and withdrawn judgments reopen their own resolutions", () => {
+  const g = createPlayableGame(2026, r);
+  const [source, unrelated, resolver] = Object.values(g.encounters).filter(
+    (e) => e.mode === "solo",
+  );
+  const setup = (e: typeof source, objective: string, description: string) => {
+    e.problem = {
+      title: "Synthetic probe identity",
+      prompt: "Synthetic only",
+      rubric: [],
+      starter: "",
+      provenance: "study-mode",
+      contract: {
+        ...eligible(r, g.study),
+        track: "PY",
+        objectiveIds: [objective],
+        depth: 1,
+      },
+      scopeDefinitions: [
+        {
+          id: `${objective}/D1`,
+          objectiveId: objective,
+          depth: 1,
+          sourceScope: "synthetic",
+          facets: [{ id: "boundary", description }],
+        },
+      ],
+    };
+  };
+  const turn = (
+    e: typeof source,
+    status: "demonstrated" | "gap",
+    requestId: string,
+  ) =>
+    recordProbeTurn(
+      g,
+      e,
+      parseProbeReply(
+        {
+          complete: status === "gap",
+          ...(status === "gap" ? { outcome: "gap" } : {}),
+          knowledge: { facets: [{ id: "boundary", status }] },
+        },
+        probeFacets(e.problem!),
+      ),
+      {
+        requestId,
+        questionSequence: 1,
+        provider: "study-mode",
+        statement: "Synthetic answer",
+        at: "2026-10-20T12:00:00.000Z",
+      },
+    );
+  setup(source, "PY:T05.2", "Window boundary");
+  turn(source, "gap", "original-gap");
+  setup(unrelated, "PY:T11.1", "Object lifetime boundary");
+  turn(unrelated, "demonstrated", "unrelated-boundary");
+  assert.equal(
+    openGaps(g).length,
+    1,
+    "facet ids belong to their objective scope",
+  );
+  setup(resolver, "PY:T05.2", "Window boundary");
+  turn(resolver, "demonstrated", "resolved-boundary");
+  assert.equal(openGaps(g).length, 0);
+  // A re-judgment before consumption withdraws the observation used to close the gap.
+  recordProbeTurn(
+    g,
+    resolver,
+    parseProbeReply(
+      {
+        complete: false,
+        knowledge: { facets: [{ id: "boundary", status: "gap" }] },
+      },
+      probeFacets(resolver.problem!),
+    ),
+    {
+      requestId: "withdraw-resolution",
+      questionSequence: 2,
+      provider: "study-mode",
+      statement: "I guessed",
+    },
+  );
+  assert.equal(openGaps(g).length, 1);
+  assert.doesNotMatch(knowledgeGapContext(g, "PY"), /Gaps since closed/);
+});
+
+test("gap matching uses the complete normalized description and keeps an independent resolver after withdrawal", () => {
+  const g = createPlayableGame(2027, r);
+  const [source, different, first, second] = Object.values(g.encounters).filter(
+    (e) => e.mode === "solo",
+  );
+  const prefix =
+    "Explain each boundary while preserving the complete captured input and checking ";
+  const description = prefix + "the left endpoint";
+  const turn = (
+    e: typeof source,
+    id: string,
+    text: string,
+    finding: "gap" | "demonstrated",
+    requestId: string,
+    at: string,
+  ) => {
+    if (!e.probe)
+      e.problem = {
+        title: "Synthetic full-description identity",
+        prompt: "Synthetic only",
+        rubric: [],
+        starter: "",
+        provenance: "study-mode",
+        contract: {
+          ...eligible(r, g.study),
+          track: "PY",
+          objectiveIds: ["PY:T05.2"],
+          depth: 1,
+        },
+        scopeDefinitions: [
+          {
+            id: "PY:T05.2/D1",
+            objectiveId: "PY:T05.2",
+            depth: 1,
+            sourceScope: "synthetic",
+            facets: [{ id, description: text }],
+          },
+        ],
+      };
+    recordProbeTurn(
+      g,
+      e,
+      parseProbeReply(
+        {
+          complete: e === source,
+          ...(e === source ? { outcome: "gap" } : {}),
+          knowledge: { facets: [{ id, status: finding }] },
+        },
+        probeFacets(e.problem!),
+      ),
+      {
+        requestId,
+        questionSequence: 1,
+        provider: "study-mode",
+        statement: "Synthetic answer",
+        at,
+      },
+    );
+  };
+  turn(
+    source,
+    "left",
+    description,
+    "gap",
+    "record-left",
+    "2026-10-20T12:00:00.000Z",
+  );
+  turn(
+    different,
+    "right",
+    prefix + "the right endpoint",
+    "demonstrated",
+    "prove-right",
+    "2026-10-20T12:01:00.000Z",
+  );
+  assert.equal(
+    openGaps(g).length,
+    1,
+    "a shared 48-character prefix is not the same facet",
+  );
+  turn(
+    first,
+    "renamed-left",
+    description.toUpperCase(),
+    "demonstrated",
+    "prove-left",
+    "2026-10-20T12:02:00.000Z",
+  );
+  assert.equal(
+    openGaps(g).length,
+    0,
+    "complete equivalent descriptions can use different ids",
+  );
+  turn(
+    second,
+    "another-left",
+    description,
+    "demonstrated",
+    "independent-left",
+    "2026-10-20T12:03:00.000Z",
+  );
+  turn(
+    first,
+    "renamed-left",
+    description,
+    "gap",
+    "withdraw-first-left",
+    "2026-10-20T12:04:00.000Z",
+  );
+  assert.equal(
+    openGaps(g).length,
+    0,
+    "the second independent observation still supports resolution",
+  );
+  assert.equal(
+    g.study.knowledgeGaps![0].resolved!.encounter,
+    `${second.runId}/${second.id}`,
+  );
+  turn(
+    second,
+    "another-left",
+    description,
+    "gap",
+    "withdraw-second-left",
+    "2026-10-20T12:05:00.000Z",
+  );
+  assert.equal(
+    openGaps(g).length,
+    1,
+    "withdrawing every resolver reopens the original gap",
+  );
+});
+
+test("facet descriptions preserve symbolic predicates when matching a gap", () => {
+  const g = createPlayableGame(2028, r);
+  const [source, different] = Object.values(g.encounters).filter(
+    (e) => e.mode === "solo",
+  );
+  for (const [e, id, description] of [
+    [source, "less", "Explain why x < y"],
+    [different, "greater", "Explain why x > y"],
+  ] as const) {
+    e.problem = {
+      title: "Synthetic symbolic boundary",
+      prompt: "Synthetic only",
+      rubric: [description],
+      starter: "",
+      provenance: "study-mode",
+      contract: {
+        ...eligible(r, g.study),
+        track: "PY",
+        objectiveIds: ["PY:T05.2"],
+        depth: 1,
+      },
+      scopeDefinitions: [
+        {
+          id: "PY:T05.2/D1",
+          objectiveId: "PY:T05.2",
+          depth: 1,
+          sourceScope: "synthetic",
+          facets: [{ id, description }],
+        },
+      ],
+    };
+    recordProbeTurn(
+      g,
+      e,
+      parseProbeReply(
+        {
+          complete: e === source,
+          ...(e === source ? { outcome: "gap" } : {}),
+          knowledge: {
+            facets: [{ id, status: e === source ? "gap" : "demonstrated" }],
+          },
+        },
+        probeFacets(e.problem),
+      ),
+      {
+        requestId: `symbol-${id}`,
+        questionSequence: 1,
+        provider: "study-mode",
+        statement: "Synthetic answer",
+      },
+    );
+  }
+  assert.equal(
+    openGaps(g).length,
+    1,
+    "opposite predicates must not close each other's gap",
+  );
+});
+
+test("reload repairs stale gap resolutions while preserving supported resolvers and raw observations", () => {
+  const g = createPlayableGame(2029, r);
+  const gap = (
+    id: string,
+    facetId: string,
+    description: string,
+    resolver: string,
+  ) => ({
+    id,
+    encounter: `synthetic/source-${id}`,
+    runId: "synthetic",
+    track: "PY",
+    objectiveIds: ["PY:T05.2"],
+    depth: 1,
+    facet: { id: facetId, description },
+    statement: "Synthetic learner-declared gap",
+    requestId: `gap-${id}`,
+    provider: "study-mode",
+    at: "2026-10-20T12:00:00.000Z",
+    resolved: {
+      at: "2026-10-20T12:02:00.000Z",
+      encounter: resolver,
+      requestId: `proof-${resolver}`,
+      status: "demonstrated" as const,
+    },
+  });
+  const known = (
+    encounter: string,
+    facetId: string,
+    description: string,
+    objectiveId = "PY:T05.2",
+    at = "2026-10-20T12:01:00.000Z",
+  ) => ({
+    id: `known-${encounter}`,
+    encounter,
+    runId: "synthetic",
+    track: "PY",
+    objectiveIds: [objectiveId],
+    depth: 1,
+    facet: { id: facetId, description },
+    requestId: `proof-${encounter}`,
+    provider: "study-mode",
+    status: "demonstrated" as const,
+    at,
+  });
+  g.study.knowledgeGaps = [
+    gap("wrong-scope", "boundary", "Window boundary", "synthetic/unrelated"),
+    gap("valid", "ordering", "Ordering result", "synthetic/valid"),
+    gap("replacement", "index", "Index bounds", "synthetic/missing"),
+    gap(
+      "older-proof",
+      "prerequisite",
+      "Prerequisite boundary",
+      "synthetic/earlier",
+    ),
+  ];
+  g.study.knowledgeEstablished = [
+    known(
+      "synthetic/unrelated",
+      "boundary",
+      "Object lifetime boundary",
+      "PY:T11.1",
+    ),
+    known("synthetic/valid", "ordering", "Ordering result"),
+    known("synthetic/replacement", "index", "Index bounds"),
+    known(
+      "synthetic/earlier",
+      "prerequisite",
+      "Prerequisite boundary",
+      "PY:T05.2",
+      "2026-10-20T11:00:00.000Z",
+    ),
+  ];
+  const encounter = Object.values(g.encounters)[0];
+  encounter.probe = {
+    facets: [{ id: "boundary", description: "Window boundary" }],
+    turns: [
+      {
+        complete: false,
+        outcome: "continue",
+        findings: [{ id: "boundary", status: "gap" }],
+        requestId: "raw-observation",
+        questionSequence: 1,
+        at: "2026-10-20T12:00:00.000Z",
+      },
+    ],
+  };
+  const observations = JSON.stringify(g.study.knowledgeEstablished);
+  const turns = JSON.stringify(encounter.probe);
+  const valid = structuredClone(g.study.knowledgeGaps[1].resolved);
+  const restored = recover(decode(encode(g)));
+  assert.deepEqual(
+    openGaps(restored).map((record) => record.id),
+    ["wrong-scope", "older-proof"],
+  );
+  assert.deepEqual(
+    restored.study.knowledgeGaps![1].resolved,
+    valid,
+    "supported saved resolver metadata remains intact",
+  );
+  assert.equal(
+    restored.study.knowledgeGaps![2].resolved!.encounter,
+    "synthetic/replacement",
+  );
+  assert.equal(
+    JSON.stringify(restored.study.knowledgeEstablished),
+    observations,
+  );
+  assert.equal(JSON.stringify(restored.encounters[encounter.id].probe), turns);
+  const repaired = JSON.stringify(restored.study.knowledgeGaps);
+  recover(restored);
+  assert.equal(
+    JSON.stringify(restored.study.knowledgeGaps),
+    repaired,
+    "reconciliation is idempotent",
+  );
+});
+
 test("the probe contract assumes knowledge, asks the apex question first, and concedes declared gaps", () => {
   for (const text of [PROBE_STANCE, TERMINAL_DIALOGUE_INSTRUCTION]) {
     assert.match(text, /Assume the learner already has this knowledge/);

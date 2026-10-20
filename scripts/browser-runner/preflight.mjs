@@ -3,6 +3,7 @@ import { chromium } from "playwright";
 import { build } from "esbuild";
 import { readFileSync, existsSync } from "node:fs";
 import { networkInterfaces as interfaces } from "node:os";
+import { verifyBrowserSandbox } from "./sandbox.mjs";
 
 const status = readFileSync("/proc/self/status", "utf8");
 if (
@@ -49,8 +50,7 @@ try {
     viewport: { width: 640, height: 480 },
   });
   const page = await context.newPage();
-  await page.goto("chrome://sandbox/");
-  const sandbox = await page.locator("body").innerText();
+  const sandbox = await verifyBrowserSandbox(page);
   console.log(
     JSON.stringify({
       phase: "sandbox",
@@ -69,13 +69,6 @@ try {
       },
     }),
   );
-  if (
-    !/Layer 1 Sandbox\s+Namespace/i.test(sandbox) ||
-    !/PID namespaces\s+Yes/i.test(sandbox) ||
-    !/Network namespaces\s+Yes/i.test(sandbox) ||
-    !/Seccomp-BPF sandbox\s+Yes/i.test(sandbox)
-  )
-    throw Error("Chromium namespace/seccomp sandbox must be active");
   const result = await build({
     stdin: {
       contents: `import {useState} from 'react';import {createRoot} from 'react-dom/client';function Counter(){const [n,setN]=useState(0);return <button onClick={()=>setN(n+1)}>Count {n}</button>}createRoot(document.getElementById('root')).render(<Counter/>);`,

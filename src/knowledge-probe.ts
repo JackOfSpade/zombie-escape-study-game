@@ -566,27 +566,56 @@ function syncEstablished(
     });
   }
   if (!records.length) delete g.study.knowledgeEstablished;
-  // A facet recorded as a gap earlier, now established at this terminal (same
-  // stable id, or the same facet text under a question with its own ids), is
-  // closed: the next question is told the blocked apex can be asked again.
+  reconcileKnowledgeGaps(g);
+}
+const normalizedFacetText = (value: string) =>
+  value.normalize("NFKC").toLowerCase().replace(/\s+/gu, " ").trim();
+
+/** Repair derived gap resolutions using retained observations, including saves
+ * written before facet IDs were scoped. Raw probe turns and observations stay
+ * unchanged; an unsupported resolution never hides an outstanding study gap. */
+export function reconcileKnowledgeGaps(g: Pick<Game, "study">): void {
+  const known = (g.study.knowledgeEstablished ?? []).map((record) => ({
+    record,
+    at: Date.parse(record.at),
+    text: normalizedFacetText(record.facet.description),
+  }));
   for (const gap of g.study.knowledgeGaps ?? []) {
-    if (gap.resolved || gap.track !== problem.contract.track) continue;
-    const match = established.find(
-      (f) =>
-        f.id === gap.facet.id ||
-        sameFacetText(f.description, gap.facet.description),
+    const at = Date.parse(gap.at),
+      text = normalizedFacetText(gap.facet.description);
+    const candidates = known.filter(
+      ({ record, at: establishedAt, text: knownText }) =>
+        record.track === gap.track &&
+        establishedAt >= at &&
+        ((text !== "" && knownText === text) ||
+          (record.facet.id === gap.facet.id &&
+            record.depth === gap.depth &&
+            gap.objectiveIds.length > 0 &&
+            gap.objectiveIds.every((id) => record.objectiveIds.includes(id)))),
     );
-    if (match)
+    const supported = candidates.find(
+      ({ record }) =>
+        record.encounter === gap.resolved?.encounter &&
+        record.status === gap.resolved?.status,
+    );
+    if (supported) continue;
+    const replacement = candidates.reduce<
+      (typeof candidates)[number] | undefined
+    >(
+      (latest, candidate) =>
+        !latest || candidate.at > latest.at ? candidate : latest,
+      undefined,
+    )?.record;
+    if (replacement)
       gap.resolved = {
-        at,
-        encounter: encounterRef,
-        requestId: context.requestId,
-        status: match.status as "demonstrated" | "implied",
+        at: replacement.at,
+        encounter: replacement.encounter,
+        requestId: replacement.requestId,
+        status: replacement.status,
       };
+    else delete gap.resolved;
   }
 }
-const sameFacetText = (a: string, b: string) =>
-  facetId(a) !== "" && facetId(a) === facetId(b);
 
 /** Established records for an encounter. */
 export function encounterEstablished(
