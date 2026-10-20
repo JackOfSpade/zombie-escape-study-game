@@ -1,4 +1,4 @@
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test, type Page } from "./helpers/offline-test";
 import { enterLegacyBuilding } from "./helpers/legacy-world";
 async function setup(page: Page) {
   await enterLegacyBuilding(page);
