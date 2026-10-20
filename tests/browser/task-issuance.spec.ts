@@ -124,6 +124,8 @@ test("unanswered native task keeps its ID through leave/reload/death and gets a 
     page.getByRole("button", { name: "Begin another run" }),
   ).toBeVisible({ timeout: 10000 });
   await page.getByRole("button", { name: "Begin another run" }).click();
+  // A new run starts once the last run's learning is saved.
+  await expect(page.locator("#start-card")).toBeHidden();
   const after = await page.evaluate(() => {
     const g = (window as any).__deadAir.game,
       a = g.survivors[0],

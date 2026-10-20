@@ -67,9 +67,11 @@
         aria-atomic="true"
         hidden
       >
-        <span class="eyebrow">Key granted</span>
-        <strong id="reward-title"></strong>
-        <span id="reward-detail"></span>
+        <svg class="reward-icon" viewBox="0 0 24 24" aria-hidden="true">
+          <circle cx="8" cy="12" r="4" />
+          <path d="M12 12h9M18 12v3M21 12v2" />
+        </svg>
+        Key granted
       </div>
       <div id="inventory" class="inventory" aria-label="Equipment"></div>
     </div>
@@ -201,7 +203,9 @@
             class="dialogue-reward"
             role="status"
             hidden
-          ></p>
+          >
+            Key granted
+          </p>
           <div id="workspace-proposals" hidden></div>
           <div id="messages" aria-live="polite"></div>
           <p id="catchup-status" class="muted" hidden></p>
@@ -327,7 +331,7 @@
   ><label class="file-label"
     >Import run save
     <input id="import" type="file" accept="application/json" /></label
-  ><button id="download-logs" class="quiet">Download last 3 game logs</button>
+  >
   <p><a href="/lab.html" target="_blank" rel="noopener">Open Test Lab ↗</a></p>
   <p id="log-status" class="muted"></p>
   <button id="settings-close">Done</button>
@@ -339,6 +343,6 @@
   <button id="resume-game">Resume · Esc</button
   ><button id="restart-game" class="quiet">
     Restart run · keep learning progress</button
-  ><button id="pause-logs" class="quiet">Download last 3 game logs</button>
+  ><button id="save-quit" class="quiet">Save and quit</button>
   <p id="pause-save-status" role="status"></p>
 </dialog>

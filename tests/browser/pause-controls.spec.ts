@@ -174,21 +174,20 @@ test("E toggles a pivoting grip; old G/R/digit shortcuts do not act; Space vault
     await page.evaluate(() => (window as any).__deadAir.game.survivors[0].y),
   ).toBeGreaterThan(12.6);
 });
-test("downloadable diagnostics retain only newest three runs, including pause/restart and no drafts", async ({
+test("diagnostics retain only newest three runs, including pause/restart and no drafts, with no download button", async ({
   page,
 }) => {
   await setup(page);
   for (let i = 0; i < 3; i++) {
     await page.keyboard.press("Escape");
     await page.locator("#restart-game").click();
+    await expect(page.locator("#pause-menu")).not.toBeVisible();
   }
   await page.keyboard.press("Escape");
-  const downloaded = page.waitForEvent("download");
-  await page.locator("#pause-logs").click();
-  const file = await downloaded;
-  const path = await file.path();
-  const { readFile } = await import("node:fs/promises");
-  const log = JSON.parse(await readFile(path!, "utf8"));
+  await expect(page.getByText(/download last 3 game logs/i)).toHaveCount(0);
+  const log = JSON.parse(
+    await page.evaluate(() => (window as any).__deadAir.logs()),
+  );
   expect(log.runs).toHaveLength(3);
   expect(log.runs.at(-1).entries.some((e: any) => e.type === "pause")).toBe(
     true,
@@ -202,6 +201,49 @@ test("downloadable diagnostics retain only newest three runs, including pause/re
     path: "test-results/pause-menu.png",
     fullPage: true,
   });
+});
+test("restart saves learning before the new run; save and quit shows the saved run behind the main menu", async ({
+  page,
+}) => {
+  await setup(page);
+  const first = await page.evaluate(() => (window as any).__deadAir.game.id);
+  await page.keyboard.press("Escape");
+  await page.locator("#restart-game").click();
+  await expect(page.locator("#pause-menu")).not.toBeVisible();
+  const restarted = await page.evaluate(() => {
+    const g = (window as any).__deadAir.game;
+    return { id: g.id, notice: g.notice };
+  });
+  expect(restarted.id).not.toBe(first);
+  expect(restarted.notice).toBe("Learning progress saved. New run started.");
+
+  await page.keyboard.press("Escape");
+  await page.locator("#save-quit").click();
+  await expect(page.locator("#pause-menu")).not.toBeVisible();
+  await expect(page.locator("#start-card")).toBeVisible();
+  await expect(page.locator("#quit-save")).toHaveText(
+    "✓ Run and learning progress saved.",
+  );
+  await page.screenshot({ path: "test-results/save-and-quit.png" });
+  const time = await page.evaluate(() => (window as any).__deadAir.game.time);
+  await page.waitForTimeout(300);
+  expect(await page.evaluate(() => (window as any).__deadAir.game.time)).toBe(
+    time,
+  );
+  // The saved run is the one the menu continues.
+  await page.reload();
+  await page.waitForFunction(() => !!(window as any).__deadAir);
+  expect(await page.evaluate(() => (window as any).__deadAir.game.id)).toBe(
+    restarted.id,
+  );
+  await page.keyboard.press("Escape");
+  await page.keyboard.press("Escape");
+  await page.locator("#save-quit").click();
+  await page.keyboard.press("Escape");
+  await expect(page.locator("#start-card")).toBeHidden();
+  await expect
+    .poll(() => page.evaluate(() => (window as any).__deadAir.game.paused))
+    .toBe(false);
 });
 
 test("Space uses the current movement direction and vaults the faced long barricade, not a nearer chair behind", async ({

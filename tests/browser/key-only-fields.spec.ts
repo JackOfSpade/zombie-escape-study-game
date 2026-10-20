@@ -59,3 +59,50 @@ test("E at a red field with zero keys denies entry without a timed unlock", asyn
   );
   expect(state.labels.some((s: string) => /hack/i.test(s))).toBe(false);
 });
+test("E at a red field spends a key even beside another survivor's solo terminal", async ({
+  page,
+}) => {
+  await page.goto("/");
+  await page.getByRole("button", { name: "Enter the building" }).click();
+  await page.evaluate(async () => {
+    const root = "/src/";
+    const { TestRunner } = await import(
+      /* @vite-ignore */ root + "gametest/runner.ts"
+    );
+    const s = await (
+      await fetch("/tests/fixtures/gametest/force-field-no-key.json")
+    ).json();
+    s.actions = [];
+    s.checks = [];
+    s.simulation = "game";
+    s.entities = s.entities.filter((e: any) => e.kind !== "npc");
+    const roadmap = await (await fetch("/curriculum.json")).json();
+    const live = (window as any).__deadAir.game;
+    const solo = structuredClone(
+      Object.values(live.encounters).find((e: any) => e.mode === "solo"),
+    ) as any;
+    Object.assign(live, new TestRunner(s, roadmap).game);
+    // A neighbour's terminal in reach and nearer than the field's frame used
+    // to take E, so a player holding a key could never open the field.
+    solo.owner = "npc-1";
+    live.encounters = { [solo.id]: solo };
+    live.floors[0].stations = [
+      { id: "neighbour-station", encounter: solo.id, x: 10.2, y: 11.2 },
+    ];
+    live.survivors[0].keys = 1;
+  });
+  await page.locator("#world").focus();
+  await page.keyboard.press("e");
+  await expect
+    .poll(() => page.evaluate(() => (window as any).__deadAir.game.notice))
+    .toMatch(/key consumed/i);
+  const state = await page.evaluate(() => {
+    const g = (window as any).__deadAir.game;
+    return {
+      keys: g.survivors[0].keys,
+      authorized: g.floors[0].furniture[0].field.authorized,
+    };
+  });
+  expect(state.keys).toBe(0);
+  expect(state.authorized).toEqual(["human"]);
+});

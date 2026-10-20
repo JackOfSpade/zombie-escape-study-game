@@ -125,19 +125,14 @@ test("solo terminal uses one @study conversation, exact retry and one key reward
     "Solved: your reasoning",
   );
   // The granted key is announced where the player is looking, not only as a
-  // changed HUD number: a toast over the world, a pulse on the count and a
-  // line in the conversation panel.
+  // changed HUD number: a "Key granted" pill over the world, a pulse on the
+  // count and a line in the conversation panel. Totals and stairs are not
+  // repeated; the HUD and the map already show them.
   await expect(page.locator("#reward-toast")).toBeVisible();
-  await expect(page.locator("#reward-toast")).toContainText("Key granted");
-  await expect(page.locator("#reward-title")).toHaveText("+1 key · 1 total");
-  await expect(page.locator("#reward-detail")).toContainText(
-    "stair access on this floor is open",
-  );
+  await expect(page.locator("#reward-toast")).toHaveText("Key granted");
   await expect(page.locator("#hud-keys")).toHaveText("1 key");
   await expect(page.locator("#hud-keys")).toHaveClass(/gained/);
-  await expect(page.locator("#dialogue-reward")).toHaveText(
-    "Key granted · 1 total · stair access unlocked",
-  );
+  await expect(page.locator("#dialogue-reward")).toHaveText("Key granted");
   await page.screenshot({ path: "test-results/key-granted.png" });
   expect(calls).toBe(2);
   for (const request of requests) {

@@ -215,7 +215,9 @@ function ejectFromField(g: Game, o: Furniture, a: Actor, side: number) {
   delete a.vault;
   if (a.id === "human")
     g.notice =
-      "Red force field: entry denied. One key is required; solve a terminal or find a green entrance.";
+      (a.keys ?? 0) > 0
+        ? "Red force field. Press E to spend a key."
+        : "Red force field: entry denied. One key is required; solve a terminal or find a green entrance.";
   const ev = event(
     g,
     "field-denied",

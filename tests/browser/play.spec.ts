@@ -415,6 +415,8 @@ test("development partial work survives actual outside combat death and a fresh 
     () => (window as any).__deadAir.game.id,
   );
   await page.getByRole("button", { name: "Begin another run" }).click();
+  // A new run starts once the last run's learning is saved.
+  await expect(page.locator("#start-card")).toBeHidden();
   const state = await page.evaluate(() => {
     const g = (window as any).__deadAir.game;
     return {
@@ -592,6 +594,10 @@ for (const fixtureKind of ["checkpoint", "transfer", "historical"] as const) {
       .getByRole("button", { name: "Start a live study run", exact: true })
       .click();
     // A new live run is a fresh force-field world; keep the legacy fixture.
+    // The live run starts once the last run's learning is saved.
+    await page.waitForFunction(
+      () => (window as any).__deadAir.game.study.profile === "live",
+    );
     await useLegacyWorld(page);
     await page.evaluate(
       (flags) => {
@@ -825,6 +831,10 @@ test("group proposal fixture: private tutor context stays private and replies be
     .getByRole("button", { name: "Start a live study run", exact: true })
     .click();
   // A new live run is a fresh force-field world; keep the legacy fixture.
+  // The live run starts once the last run's learning is saved.
+  await page.waitForFunction(
+    () => (window as any).__deadAir.game.study.profile === "live",
+  );
   await useLegacyWorld(page);
   await page.evaluate(() => {
     const g = (window as any).__deadAir.game,
@@ -1090,6 +1100,10 @@ for (const provider of ["study-mode", "chatgpt-handoff"])
       .getByRole("button", { name: "Start a live study run", exact: true })
       .click();
     // A new live run is a fresh force-field world; keep the legacy fixture.
+    // The live run starts once the last run's learning is saved.
+    await page.waitForFunction(
+      () => (window as any).__deadAir.game.study.profile === "live",
+    );
     await useLegacyWorld(page);
     await page.evaluate(() => {
       const g = (window as any).__deadAir.game,

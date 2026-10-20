@@ -55,7 +55,7 @@ Terminals follow the curriculum but no longer walk one branch for a whole run (`
 
 For legacy shared saves, reading or privately discussing a shared question also preserves it: abstract NPC progress cannot consume a human-engaged encounter. Observed work completes through the captured-submission evaluator. Delayed question/evaluation responses cannot reopen a consumed terminal, and acceptance freezes the captured workspace revision. Unobserved NPC academic simulation can still reward a qualified physical defender without a separate exam. With the optional `autonomous-work` capability, NPCs can apply and submit explicitly prepared candidates for a previously human-engaged shared question while the human editor is detached. Native generation and semantic assessment remain unverified; the coordinator is verified with controlled bridge fixtures and real restricted execution.
 
-Game diagnostics are stored locally in this browser, separately from learning saves. Only the newest three games are retained, each capped at 400 entries and 256 KB. Pause or Settings → Download last 3 game logs exports position, furniture, navigation and event diagnostics without drafts, chats, curriculum or connector codes.
+Game diagnostics are stored locally in this browser, separately from learning saves. Only the newest three games are retained, each capped at 400 entries and 256 KB. They are for agents to diagnose, not for download: read them from IndexedDB (`dead-air-durable-state` → `saves` → `recent-game-diagnostics-v1`) or `window.__deadAir.logs()` on the game page. They hold position, furniture, navigation and event diagnostics without drafts, chats, curriculum or connector codes.
 
 ## Visibility
 

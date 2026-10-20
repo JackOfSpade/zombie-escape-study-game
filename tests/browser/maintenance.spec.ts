@@ -66,6 +66,8 @@ test("a delayed roadmap export cannot commit its old snapshot to a restarted run
   await page.waitForFunction(() => (window as any).__exportWaiting === true);
   await page.keyboard.press("Escape");
   await page.locator("#restart-game").click();
+  // Restart saves learning first; release the export once the new run exists.
+  await expect(page.locator("#pause-menu")).not.toBeVisible();
   await page.evaluate(() => (window as any).__releaseExport());
   await expect(page.locator("#progress-export-status")).toContainText(
     "Run changed during export",

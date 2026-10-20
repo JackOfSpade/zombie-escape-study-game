@@ -241,17 +241,12 @@ function setPaused(paused: boolean) {
 }
 $("#pause-toggle").onclick = () => setPaused(!game.paused);
 $("#resume-game").onclick = () => setPaused(false);
-$("#restart-game").onclick = fresh;
+$("#restart-game").onclick = () => void fresh($("#pause-save-status"));
+$("#save-quit").onclick = () => void saveAndQuit();
 $("#pause-menu").addEventListener("cancel", (event) => {
   event.preventDefault();
-  setPaused(false);
+  if (!restarting) setPaused(false);
 });
-function downloadLogs() {
-  runLogs.capture(game, true);
-  download("zombie-escape-study-game-last-3-games.json", runLogs.export());
-}
-$("#pause-logs").onclick = downloadLogs;
-$("#download-logs").onclick = downloadLogs;
 window.addEventListener("error", (event) => {
   runLogs.record(game, "browser-error", {
     file: event.filename.split("/").pop(),
@@ -267,6 +262,7 @@ function begin() {
   game.status = "playing";
   game.paused = false;
   running = true;
+  quitMenu = false;
   leaveSpectator();
   audio.start();
   audio.update(game);
@@ -278,12 +274,51 @@ function preserveRunLearning(g: Game, archive = false) {
   for (const e of retainRunLearning(g, archive))
     void assess(g, e, roadmap).then(persist);
 }
-function fresh() {
+/** How long a restart waits for this run's assessments before it moves on;
+ * later results still land in the shared study state and are saved then. */
+const RESTART_ASSESSMENT_WAIT_MS = 12_000;
+let restarting = false,
+  unsavedRestartConfirmed = false;
+/** A restart first archives this run's learning and writes it durably; a new
+ * run starts only once that save succeeded, or on a second press after a
+ * failed save. */
+async function fresh(statusLine?: HTMLElement) {
+  if (restarting) return false;
+  restarting = true;
   const previous = game;
+  const say = (text: string) => {
+    if (statusLine) statusLine.textContent = text;
+  };
+  const controls = [
+    ...document.querySelectorAll<HTMLButtonElement>(
+      "#pause-menu button, #start-card button",
+    ),
+  ];
+  for (const b of controls) b.disabled = true;
   closeTerminal();
+  say("Saving learning progress…");
+  const assessing = Promise.allSettled(
+    retainRunLearning(previous, true).map((e) =>
+      assess(previous, e, roadmap).then(persist),
+    ),
+  );
+  const assessed = await Promise.race([
+    assessing.then(() => true),
+    new Promise<false>((done) =>
+      setTimeout(() => done(false), RESTART_ASSESSMENT_WAIT_MS),
+    ),
+  ]);
+  const saved = await persist();
+  for (const b of controls) b.disabled = false;
+  restarting = false;
+  if (!saved && !unsavedRestartConfirmed) {
+    unsavedRestartConfirmed = true;
+    say(`${saveError} Press again to restart without saving.`);
+    return false;
+  }
+  unsavedRestartConfirmed = false;
   runLogs.capture(previous, true);
   runLogs.record(previous, "restart");
-  preserveRunLearning(previous, true);
   // Encounter drafts are archived; a new run never inherits a nearly completed lock.
   delete previous.study.pending;
   game = createGame(
@@ -292,12 +327,19 @@ function fresh() {
     previous.study,
   );
   game.settings = previous.settings;
+  game.notice = !saved
+    ? "New run started. The last run's learning could not be saved."
+    : assessed
+      ? "Learning progress saved. New run started."
+      : "Learning progress saved; assessments finish in the background.";
+  say("");
   $<HTMLDialogElement>("#pause-menu").close();
   active = undefined;
   completionCursor = 0;
   keys.clear();
   closeTerminal();
   begin();
+  return true;
 }
 function startCard() {
   const card = $("#start-card");
@@ -316,7 +358,9 @@ function startCard() {
   else
     card.innerHTML = `<span class="eyebrow">${game.status === "escaped" ? "TRANSMISSION RECEIVED" : "SIGNAL LOST"}</span><h2>${game.status === "escaped" ? "You made it." : "Your work survives."}</h2><p>${escape(game.notice)}<br>${game.stats.rescued} extracted · ${game.stats.deaths} lost · ${Math.floor(game.time)} seconds</p><button id="again">Begin another run ↗</button><button id="backup" class="quiet">Export work & evidence</button><button id="spectate" class="quiet">Watch the building ↗</button>`;
   document.getElementById("start")?.addEventListener("click", begin);
-  document.getElementById("again")?.addEventListener("click", fresh);
+  document
+    .getElementById("again")
+    ?.addEventListener("click", () => void fresh(card.querySelector("p")!));
   document.getElementById("spectate")?.addEventListener("click", () => {
     card.hidden = true;
     syncSpectatorBar();
@@ -328,6 +372,32 @@ function startCard() {
     ?.addEventListener("click", () =>
       download("zombie-escape-study-game-run.json", encode(game)),
     );
+}
+/** Save and quit leaves the run paused behind the main menu. */
+let quitMenu = false;
+async function saveAndQuit() {
+  closeTerminal();
+  runLogs.capture(game, true);
+  $("#pause-save-status").textContent = "Saving…";
+  const saved = await persist();
+  $("#pause-save-status").textContent = "";
+  $<HTMLDialogElement>("#pause-menu").close();
+  quitMenu = true;
+  const card = $("#start-card");
+  card.classList.remove("finished");
+  card.hidden = false;
+  card.innerHTML = `<span class="eyebrow">A REAL-TIME STUDY ESCAPE</span><h2>The dead are<br>on your heels.</h2><p id="quit-save" class="save-result${saved ? "" : " failed"}" role="status">${saved ? "✓ Run and learning progress saved." : escape(saveError)}</p><button id="continue-run">Continue run ↗</button><button id="new-run" class="quiet">New run · keep learning progress</button>`;
+  $("#continue-run").addEventListener("click", continueRun);
+  $("#new-run").addEventListener(
+    "click",
+    () => void fresh($("#quit-save")),
+  );
+  $("#continue-run").focus();
+}
+function continueRun() {
+  quitMenu = false;
+  $("#start-card").hidden = true;
+  setPaused(false);
 }
 /** The run is over: the whole building can be watched, floor by floor. */
 function enterSpectator() {
@@ -469,9 +539,19 @@ async function interact() {
     }
     return;
   }
-  const st = nearestStation(game, a);
+  // A station wins only when it is nearer than the door in reach, or the
+  // player can use it; a neighbour's terminal never hides a red field.
+  const usable = (s: typeof station) => {
+    const e = s && game.encounters[s.encounter];
+    return !!e && !(e.mode === "solo" && e.owner && e.owner !== "human");
+  };
+  const st =
+    station &&
+    (!door ||
+      (distance(a, station) < distance(a, doorFrame(door)) && usable(station)))
+      ? station
+      : undefined;
   if (!st) {
-    const door = nearbyDoor(game, a);
     if (door?.field) {
       const before = a.keys ?? 0;
       const allowed = toggleDoor(game, a, door.id);
@@ -1660,14 +1740,14 @@ $("#reconnect").onclick = () => {
     $("#bridge-detail").textContent = status().detail;
   });
 };
-$("#live-profile").onclick = () => {
+$("#live-profile").onclick = async () => {
   if (status().mode === "development") {
     game.notice =
       "Enable the ChatGPT handoff or connect a verified study bridge before starting a live profile.";
     return;
   }
   const learner = game.study.learner;
-  fresh();
+  if (!(await fresh($("#log-status")))) return;
   const next = initialStudy(roadmap, "live");
   if (learner) next.learner = learner;
   next.archives = game.study.archives;
@@ -1720,7 +1800,11 @@ const PAN_KEYS = [
 window.addEventListener("keydown", (ev) => {
   if (ev.code === "Escape") {
     ev.preventDefault();
-    if (ev.repeat) return;
+    if (ev.repeat || restarting) return;
+    if (quitMenu) {
+      if (!restarting) continueRun();
+      return;
+    }
     if (spectating(game) && view) {
       // Esc toggles the run summary over the watched building.
       const card = $("#start-card");
@@ -1805,17 +1889,12 @@ function completionAssessments() {
 }
 let inventorySignature = "";
 let materializing: Promise<void> | undefined;
-/** The last seen key count and stair access per game, so a gain is announced
- * once wherever the player is looking, and a restored or new run is not. */
-let rewardWatch: { game: string; keys: number; access: number } | undefined;
+/** The last seen key count per game, so a gain is announced once wherever
+ * the player is looking, and a restored or new run is not. */
+let rewardWatch: { game: string; keys: number } | undefined;
 let rewardToastTimer: ReturnType<typeof setTimeout> | undefined;
 let hudPulseTimer: ReturnType<typeof setTimeout> | undefined;
-function announceReward(keys: number, gained: number, stairs: boolean) {
-  const detail = stairs
-    ? "Personal stair access on this floor is open. Keys also open red force fields."
-    : "Spend it on a red force field.";
-  setText("#reward-title", `+${gained} key · ${keys} total`);
-  setText("#reward-detail", detail);
+function announceReward() {
   const toast = $("#reward-toast");
   // Restart the entrance animation when a second key follows quickly.
   toast.hidden = true;
@@ -1824,31 +1903,23 @@ function announceReward(keys: number, gained: number, stairs: boolean) {
   clearTimeout(rewardToastTimer);
   rewardToastTimer = setTimeout(() => {
     toast.hidden = true;
-  }, 7000);
+  }, 2400);
   const count = $("#hud-keys");
   count.classList.remove("gained");
   void count.offsetWidth;
   count.classList.add("gained");
   clearTimeout(hudPulseTimer);
-  hudPulseTimer = setTimeout(() => count.classList.remove("gained"), 2200);
-  setText(
-    "#dialogue-reward",
-    `Key granted · ${keys} total${stairs ? " · stair access unlocked" : ""}`,
-  );
+  hudPulseTimer = setTimeout(() => count.classList.remove("gained"), 700);
   $("#dialogue-reward").hidden = false;
-  game.notice = `Key granted: ${keys} total. ${detail}`;
 }
 function watchReward(a: ReturnType<typeof human>) {
-  const keys = a.keys ?? 0,
-    access = a.access.length;
+  const keys = a.keys ?? 0;
   if (!rewardWatch || rewardWatch.game !== game.id) {
-    rewardWatch = { game: game.id, keys, access };
+    rewardWatch = { game: game.id, keys };
     return;
   }
-  if (keys > rewardWatch.keys)
-    announceReward(keys, keys - rewardWatch.keys, access > rewardWatch.access);
+  if (keys > rewardWatch.keys) announceReward();
   rewardWatch.keys = keys;
-  rewardWatch.access = access;
 }
 function ui() {
   $("#log-status").textContent =
@@ -2120,6 +2191,11 @@ Object.assign(window, {
     },
     roadmap,
     interact,
+    /** The newest three games' diagnostics, read by agents, never a download. */
+    logs() {
+      runLogs.capture(game, true);
+      return runLogs.export();
+    },
   },
 });
 startCard();
