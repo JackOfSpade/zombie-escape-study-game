@@ -130,7 +130,12 @@ export function createGame(
     helicopter: { trip: 0, next: 240, until: 0, passengers: [] },
     effects: [],
     study: study ?? initialStudy(r),
-    settings: { volume: 0.45, captions: false, reducedFlash: false },
+    settings: {
+      displayScale: 1,
+      volume: 0.45,
+      captions: false,
+      reducedFlash: false,
+    },
     stats: { breaches: 0, rescued: 0, deaths: 0 },
     notice:
       "10 seconds before zombies spawn. E releases the entrance latch; push to enter.",

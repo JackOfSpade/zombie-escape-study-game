@@ -1,6 +1,7 @@
 import { fieldAllows } from "./force-fields";
 import { drawBlood } from "./blood";
 import { camera } from "./camera";
+import { displayScale } from "./display-scale";
 import { human, nearestGrip } from "./engine";
 import { CONFIG, distance, type Game, H, type Point, W } from "./model";
 import { BODY_RADIUS } from "./physics";
@@ -70,7 +71,7 @@ export function render(
       rect.width,
       rect.height,
       view ? view.focus : a,
-      view?.zoom ?? 1,
+      (view?.zoom ?? 1) * displayScale(g.settings.displayScale),
     );
   ctx.translate(ox, oy);
   ctx.scale(scale, scale);

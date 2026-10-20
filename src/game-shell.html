@@ -1,254 +1,273 @@
-<header>
-  <a class="brand" href="#" aria-label="zombie-escape-study-game home"
-    ><span class="brand-mark">◈</span>
-    <span class="brand-title">zombie-escape-study-game</span>
-    <small>STUDY / ESCAPE</small></a
-  >
-  <div class="header-right">
-    <span class="live-dot"></span><span id="bridge-label"></span
-    ><button
-      id="curriculum-button"
-      class="quiet"
-      aria-controls="inspector"
-      aria-expanded="false"
+<div class="game-layout">
+  <header>
+    <a class="brand" href="#" aria-label="zombie-escape-study-game home"
+      ><span class="brand-mark">◈</span>
+      <span class="brand-title">zombie-escape-study-game</span>
+      <small>STUDY / ESCAPE</small></a
     >
-      Inspect ↗</button
-    ><button id="pause-toggle" class="quiet">Pause · Esc</button
-    ><button
-      id="settings-toggle"
-      class="quiet"
-      aria-controls="settings"
-      aria-expanded="false"
-    >
-      Settings</button
-    ><button id="save-button" class="quiet">Save run</button>
-  </div>
-</header>
-<main>
-  <section class="world">
-    <div class="world-top">
-      <div>
-        <span class="eyebrow" id="floor-label"></span>
-        <h1 id="floor-name"></h1>
-      </div>
-    </div>
-    <div class="viewport">
-      <canvas
-        id="world"
-        aria-label="Top-down survival game. Use WASD or arrow keys to move."
-        tabindex="0"
-      ></canvas>
-      <div id="start-card" class="overlay"></div>
-      <div id="spectator" class="spectator" hidden>
-        <span class="eyebrow">SPECTATING</span>
-        <div id="spectator-floors" role="group" aria-label="Floor"></div>
-        <button id="spectator-summary" class="quiet">Run summary</button>
-        <span class="spectator-hint">WASD / drag to pan · scroll to zoom</span>
-      </div>
-      <div
-        id="world-caption"
-        role="status"
-        aria-live="polite"
-        aria-atomic="true"
-      ></div>
-      <div id="hud" class="hud" aria-label="Survivor status">
-        <div class="hud-health">
-          <div class="hud-track"><div id="hud-health-fill"></div></div>
-          <strong id="hud-health">100</strong>
-        </div>
-        <span id="hud-keys" class="hud-item">0 keys</span
-        ><span id="hud-pickup" class="hud-item" hidden></span>
-      </div>
-      <div
-        id="reward-toast"
-        class="reward-toast"
-        role="status"
-        aria-live="assertive"
-        aria-atomic="true"
-        hidden
+    <div class="header-right">
+      <span class="live-dot"></span><span id="bridge-label"></span
+      ><button
+        id="curriculum-button"
+        class="quiet"
+        aria-controls="inspector"
+        aria-expanded="false"
       >
-        <svg class="reward-icon" viewBox="0 0 24 24" aria-hidden="true">
-          <circle cx="8" cy="12" r="4" />
-          <path d="M12 12h9M18 12v3M21 12v2" />
-        </svg>
-        Key granted
-      </div>
-      <div id="inventory" class="inventory" aria-label="Equipment"></div>
+        Inspect ↗</button
+      ><button id="pause-toggle" class="quiet">Pause · Esc</button
+      ><button
+        id="settings-toggle"
+        class="quiet"
+        aria-controls="settings"
+        aria-expanded="false"
+      >
+        Settings</button
+      ><button id="save-button" class="quiet">Save run</button>
     </div>
-    <div class="controls">
-      <span><kbd>WASD</kbd> move</span><span><kbd>E</kbd> interact</span
-      ><span><kbd>Space</kbd> jump barricade</span
-      ><span><kbd>Esc</kbd> pause / restart</span>
-    </div>
-    <p id="notice" role="status"></p>
-  </section>
-  <aside class="dashboard" hidden aria-hidden="true">
-    <section class="vitals">
-      <div class="eyebrow">SURVIVOR / YOU</div>
-      <div class="vital-row">
-        <strong id="health">100</strong><span>HEALTH</span>
-      </div>
-      <div class="health-track"><div id="health-fill"></div></div>
-      <div class="population">
-        <div><strong id="alive"></strong><span>STILL HERE</span></div>
-        <div><strong id="rescued">0</strong><span>EXTRACTED</span></div>
-        <div><strong id="lost">0</strong><span>LOST</span></div>
-      </div>
-    </section>
-    <section class="objective">
-      <span class="eyebrow">NEXT MOVE</span>
-      <h2 id="next-title">Make it inside.</h2>
-      <p id="next-description">
-        Stay ahead of the horde. Prepare a room, earn your stair credential, and
-        keep climbing.
-      </p>
-      <div id="pickup"></div>
-    </section>
-    <section>
-      <div class="section-row">
-        <span class="eyebrow">ACCESS / <span id="weight"></span></span
-        ><span class="muted">personal access</span>
-      </div>
-    </section>
-    <section class="curriculum">
-      <div class="section-row">
-        <span class="eyebrow">LEARNING CONTINUITY</span>
-      </div>
-      <div class="track">
-        <span>PY</span>
+  </header>
+  <main>
+    <section class="world">
+      <div class="world-top">
         <div>
-          <strong id="py-phase">Tier 1 · repair & verify</strong
-          ><small id="py-count">2 / 80 D1 checkpoints verified</small>
+          <span class="eyebrow" id="floor-label"></span>
+          <h1 id="floor-name"></h1>
         </div>
-        <span class="track-count" id="py-total">02</span>
       </div>
-      <div class="track">
-        <span>PE</span>
-        <div>
-          <strong id="pe-phase">Tier 1 · diagnose all</strong
-          ><small id="pe-count">8 / 112 D1 checkpoints verified</small>
-        </div>
-        <span class="track-count" id="pe-total">08</span>
-      </div>
-      <p class="muted" id="schedule"></p>
-      <div class="integrity">◇ Original roadmap preserved · revision 9</div>
-    </section>
-    <section class="feed">
-      <span class="eyebrow">BUILDING FREQUENCY</span>
-      <div id="event-feed"></div>
-    </section>
-  </aside>
-  <section id="terminal" hidden>
-    <div class="terminal-heading">
-      <div>
-        <span class="eyebrow" id="terminal-type"></span>
-        <h2 id="problem-title">Connecting…</h2>
-      </div>
-      <button id="leave" class="quiet">Leave terminal</button>
-    </div>
-    <div id="terminal-provenance" class="provenance"></div>
-    <div id="terminal-body">
-      <div class="terminal-layout">
-        <section class="answer-panel" aria-label="Room question">
-          <article id="problem"></article>
-          <section id="npc-outcome" hidden>
-            <p id="npc-outcome-status" class="muted"></p>
-            <button id="inspect-npc-outcome" class="quiet">
-              Inspect survivor solution
-            </button>
-            <div id="npc-outcome-body"></div>
-          </section>
-          <details id="saved-answer" hidden>
-            <summary>Previously saved work</summary>
-            <pre id="saved-answer-text"></pre>
-          </details>
-          <div id="legacy-answer">
-            <label class="editor-label" for="workspace"
-              >Answer to submit <span id="revision"></span></label
-            ><textarea
-              id="workspace"
-              spellcheck="false"
-              aria-label="Answer to submit"
-              placeholder="Write your answer here. Explain your reasoning where the question asks for it."
-              aria-describedby="answer-context"
-            ></textarea>
-            <p id="answer-context" class="muted"></p>
-            <div class="submit-row">
-              <button id="submit">Submit answer</button
-              ><button id="run-code" class="quiet" hidden>Run code</button
-              ><span
-                id="submission-status"
-                role="status"
-                aria-live="polite"
-              ></span>
-            </div>
-          </div>
-          <p id="submission-help" class="muted"></p>
-          <button id="retry-submission" class="quiet" hidden>
-            Retry answer check
-          </button>
-          <details id="execution-results" hidden>
-            <summary>Saved code runs</summary>
-            <figure id="execution-preview" hidden></figure>
-            <pre id="execution-output"></pre>
-          </details>
-          <div id="loot"></div>
-        </section>
-        <aside class="conversation-panel" aria-labelledby="conversation-title">
-          <h3 id="conversation-title">Terminal AI</h3>
-          <p id="dialogue-status" class="muted" role="status" hidden></p>
-          <p id="conversation-context" class="muted"></p>
-          <p id="dialogue-reward" class="dialogue-reward" role="status" hidden>
-            Key granted
-          </p>
-          <div id="workspace-proposals" hidden></div>
-          <div id="messages" aria-live="polite"></div>
-          <p id="catchup-status" class="muted" hidden></p>
-          <button id="retry-catchup" class="quiet" hidden>
-            Retry group catch-up
-          </button>
-          <p id="team-work-status" class="muted" hidden></p>
-          <button id="retry-team-work" class="quiet" hidden>
-            Retry saved team work
-          </button>
-          <details id="work-log" hidden>
-            <summary>Recorded group work</summary>
-            <div id="work-log-body"></div>
-          </details>
-          <div id="tutor-request-status" hidden></div>
-          <p id="completion-connection" class="muted" role="status" hidden></p>
-          <button id="connect-completion" hidden>Connect ChatGPT</button>
-          <div id="chatgpt-prompt" hidden>
-            <label for="chatgpt-prompt-text"
-              >Paste this prompt into ChatGPT after choosing your model and
-              thinking level:</label
-            >
-            <textarea id="chatgpt-prompt-text" rows="3" readonly></textarea>
-            <button id="copy-chatgpt-prompt" class="quiet">Copy prompt</button>
-            <p id="chatgpt-copy-status" class="muted" role="status"></p>
-          </div>
-          <a
-            id="open-chatgpt"
-            class="quiet"
-            target="zombie-study-chatgpt"
-            hidden
-            >Open ChatGPT</a
+      <div class="viewport">
+        <canvas
+          id="world"
+          aria-label="Top-down survival game. Use WASD or arrow keys to move."
+          tabindex="0"
+        ></canvas>
+        <div id="start-card" class="overlay"></div>
+        <div id="spectator" class="spectator" hidden>
+          <span class="eyebrow">SPECTATING</span>
+          <div id="spectator-floors" role="group" aria-label="Floor"></div>
+          <button id="spectator-summary" class="quiet">Run summary</button>
+          <span class="spectator-hint"
+            >WASD / drag to pan · scroll to zoom</span
           >
-          <form id="chat-form">
-            <textarea
-              rows="3"
-              id="chat-input"
-              autocomplete="off"
-              aria-label="Message"
-              placeholder="Work through the question here… Shift+Enter for a new line"
-            ></textarea
-            ><button type="submit">Send ↑</button>
-          </form>
-        </aside>
+        </div>
+        <div
+          id="world-caption"
+          role="status"
+          aria-live="polite"
+          aria-atomic="true"
+        ></div>
+        <div id="hud" class="hud" aria-label="Survivor status">
+          <div class="hud-health">
+            <div class="hud-track"><div id="hud-health-fill"></div></div>
+            <strong id="hud-health">100</strong>
+          </div>
+          <span id="hud-keys" class="hud-item">0 keys</span
+          ><span id="hud-pickup" class="hud-item" hidden></span>
+        </div>
+        <div
+          id="reward-toast"
+          class="reward-toast"
+          role="status"
+          aria-live="assertive"
+          aria-atomic="true"
+          hidden
+        >
+          <svg class="reward-icon" viewBox="0 0 24 24" aria-hidden="true">
+            <circle cx="8" cy="12" r="4" />
+            <path d="M12 12h9M18 12v3M21 12v2" />
+          </svg>
+          Key granted
+        </div>
+        <div id="inventory" class="inventory" aria-label="Equipment"></div>
       </div>
-    </div>
-  </section>
-</main>
+      <div class="controls">
+        <span><kbd>WASD</kbd> move</span><span><kbd>E</kbd> interact</span
+        ><span><kbd>Space</kbd> jump barricade</span
+        ><span><kbd>Esc</kbd> pause / restart</span>
+      </div>
+      <p id="notice" role="status"></p>
+    </section>
+    <aside class="dashboard" hidden aria-hidden="true">
+      <section class="vitals">
+        <div class="eyebrow">SURVIVOR / YOU</div>
+        <div class="vital-row">
+          <strong id="health">100</strong><span>HEALTH</span>
+        </div>
+        <div class="health-track"><div id="health-fill"></div></div>
+        <div class="population">
+          <div><strong id="alive"></strong><span>STILL HERE</span></div>
+          <div><strong id="rescued">0</strong><span>EXTRACTED</span></div>
+          <div><strong id="lost">0</strong><span>LOST</span></div>
+        </div>
+      </section>
+      <section class="objective">
+        <span class="eyebrow">NEXT MOVE</span>
+        <h2 id="next-title">Make it inside.</h2>
+        <p id="next-description">
+          Stay ahead of the horde. Prepare a room, earn your stair credential,
+          and keep climbing.
+        </p>
+        <div id="pickup"></div>
+      </section>
+      <section>
+        <div class="section-row">
+          <span class="eyebrow">ACCESS / <span id="weight"></span></span
+          ><span class="muted">personal access</span>
+        </div>
+      </section>
+      <section class="curriculum">
+        <div class="section-row">
+          <span class="eyebrow">LEARNING CONTINUITY</span>
+        </div>
+        <div class="track">
+          <span>PY</span>
+          <div>
+            <strong id="py-phase">Tier 1 · repair & verify</strong
+            ><small id="py-count">2 / 80 D1 checkpoints verified</small>
+          </div>
+          <span class="track-count" id="py-total">02</span>
+        </div>
+        <div class="track">
+          <span>PE</span>
+          <div>
+            <strong id="pe-phase">Tier 1 · diagnose all</strong
+            ><small id="pe-count">8 / 112 D1 checkpoints verified</small>
+          </div>
+          <span class="track-count" id="pe-total">08</span>
+        </div>
+        <p class="muted" id="schedule"></p>
+        <div class="integrity">◇ Original roadmap preserved · revision 9</div>
+      </section>
+      <section class="feed">
+        <span class="eyebrow">BUILDING FREQUENCY</span>
+        <div id="event-feed"></div>
+      </section>
+    </aside>
+    <section id="terminal" hidden>
+      <div class="terminal-heading">
+        <div>
+          <span class="eyebrow" id="terminal-type"></span>
+          <h2 id="problem-title">Connecting…</h2>
+        </div>
+        <button id="leave" class="quiet">Leave terminal</button>
+      </div>
+      <div id="terminal-provenance" class="provenance"></div>
+      <div id="terminal-body">
+        <div class="terminal-layout">
+          <section class="answer-panel" aria-label="Room question">
+            <article id="problem"></article>
+            <section id="npc-outcome" hidden>
+              <p id="npc-outcome-status" class="muted"></p>
+              <button id="inspect-npc-outcome" class="quiet">
+                Inspect survivor solution
+              </button>
+              <div id="npc-outcome-body"></div>
+            </section>
+            <details id="saved-answer" hidden>
+              <summary>Previously saved work</summary>
+              <pre id="saved-answer-text"></pre>
+            </details>
+            <div id="legacy-answer">
+              <label class="editor-label" for="workspace"
+                >Answer to submit <span id="revision"></span></label
+              ><textarea
+                id="workspace"
+                spellcheck="false"
+                aria-label="Answer to submit"
+                placeholder="Write your answer here. Explain your reasoning where the question asks for it."
+                aria-describedby="answer-context"
+              ></textarea>
+              <p id="answer-context" class="muted"></p>
+              <div class="submit-row">
+                <button id="submit">Submit answer</button
+                ><button id="run-code" class="quiet" hidden>Run code</button
+                ><span
+                  id="submission-status"
+                  role="status"
+                  aria-live="polite"
+                ></span>
+              </div>
+            </div>
+            <p id="submission-help" class="muted"></p>
+            <button id="retry-submission" class="quiet" hidden>
+              Retry answer check
+            </button>
+            <details id="execution-results" hidden>
+              <summary>Saved code runs</summary>
+              <figure id="execution-preview" hidden></figure>
+              <pre id="execution-output"></pre>
+            </details>
+            <div id="loot"></div>
+          </section>
+          <aside
+            class="conversation-panel"
+            aria-labelledby="conversation-title"
+          >
+            <h3 id="conversation-title">Terminal AI</h3>
+            <p id="dialogue-status" class="muted" role="status" hidden></p>
+            <p id="conversation-context" class="muted"></p>
+            <p
+              id="dialogue-reward"
+              class="dialogue-reward"
+              role="status"
+              hidden
+            >
+              Key granted
+            </p>
+            <div id="workspace-proposals" hidden></div>
+            <div id="messages" aria-live="polite"></div>
+            <p id="catchup-status" class="muted" hidden></p>
+            <button id="retry-catchup" class="quiet" hidden>
+              Retry group catch-up
+            </button>
+            <p id="team-work-status" class="muted" hidden></p>
+            <button id="retry-team-work" class="quiet" hidden>
+              Retry saved team work
+            </button>
+            <details id="work-log" hidden>
+              <summary>Recorded group work</summary>
+              <div id="work-log-body"></div>
+            </details>
+            <div id="tutor-request-status" hidden></div>
+            <p
+              id="completion-connection"
+              class="muted"
+              role="status"
+              hidden
+            ></p>
+            <button id="connect-completion" hidden>Connect ChatGPT</button>
+            <div id="chatgpt-prompt" hidden>
+              <label for="chatgpt-prompt-text"
+                >Paste this prompt into ChatGPT after choosing your model and
+                thinking level:</label
+              >
+              <textarea id="chatgpt-prompt-text" rows="3" readonly></textarea>
+              <button id="copy-chatgpt-prompt" class="quiet">
+                Copy prompt
+              </button>
+              <p id="chatgpt-copy-status" class="muted" role="status"></p>
+            </div>
+            <a
+              id="open-chatgpt"
+              class="quiet"
+              target="zombie-study-chatgpt"
+              hidden
+              >Open ChatGPT</a
+            >
+            <form id="chat-form">
+              <textarea
+                rows="3"
+                id="chat-input"
+                autocomplete="off"
+                aria-label="Message"
+                placeholder="Work through the question here… Shift+Enter for a new line"
+              ></textarea
+              ><button type="submit">Send ↑</button>
+            </form>
+          </aside>
+        </div>
+      </div>
+    </section>
+  </main>
+</div>
 <div id="inspector" role="dialog" aria-labelledby="inspector-title" hidden>
   <div class="inspector-head">
     <h2 id="inspector-title" tabindex="-1">Learning continuity</h2>
@@ -260,6 +279,22 @@
 <div id="settings" role="dialog" aria-labelledby="settings-title" hidden>
   <h2 id="settings-title">Transmission settings</h2>
   <p class="muted">Survival continues. Press Esc to pause the game.</p>
+  <label class="display-size" for="display-scale">
+    <span
+      >Game and text size
+      <output id="display-scale-value" for="display-scale">100%</output></span
+    >
+    <input
+      id="display-scale"
+      type="range"
+      min="75"
+      max="150"
+      step="5"
+      value="100"
+      aria-describedby="display-scale-help"
+    />
+  </label>
+  <p id="display-scale-help">Resize the game, text and controls together.</p>
   <p id="audio-status" class="muted"></p>
   <label
     >Sound level

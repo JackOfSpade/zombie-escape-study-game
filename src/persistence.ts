@@ -1,4 +1,5 @@
 import { ensureDoor } from "./doors";
+import { displayScale } from "./display-scale";
 import { createCheckpointQueue } from "./checkpoint-queue";
 import { reconcileKnowledgeGaps } from "./knowledge-probe";
 import { type Game } from "./model";
@@ -166,6 +167,7 @@ export function download(
   setTimeout(() => URL.revokeObjectURL(a.href), 1000);
 }
 export function recover(g: Game) {
+  g.settings.displayScale = displayScale(g.settings.displayScale);
   for (const job of g.study.roadmapReconciliations ?? [])
     if (job.state === "pending") {
       job.state = "interrupted";

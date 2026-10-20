@@ -1,5 +1,6 @@
 import { eligible } from "./curriculum";
 import { openGaps } from "./knowledge-probe";
+import { productPractice } from "./product-practice";
 import {
   type Contract,
   type Game,
@@ -48,21 +49,23 @@ export function devProblem(
       contract,
     };
   }
+  if (contract.track === "PE") {
+    const question = productPractice(contract, n * 100);
+    return {
+      ...question,
+      prompt: question.prompt + gapLine(g, contract),
+      starter: "",
+      provenance: "development",
+      contract,
+    };
+  }
   return {
-    title:
-      contract.track === "PY"
-        ? "Signal contract / trace"
-        : "Product decision / critique",
-    prompt:
-      contract.objectiveIds[0] === "PE:X09.1"
-        ? `Use a real project you worked on. Briefly state the user problem, your personal role, and one actual decision. Separate your own work from the team’s work. Do not invent metrics.\n\nWhat to cover: ${contract.scopes[0]}${gapLine(g, contract)}`
-        : contract.track === "PY"
-          ? `Read this small Python trace:\n\nvalues = ${JSON.stringify(values)}\ncount = 0\nfor value in values:\n    if value > ${threshold}:\n        count += 1\n\nPredict the final value of count. Explain what count means partway through, after the loop has seen only the first few values, and name one edge case worth checking. No code is needed.${gapLine(g, contract)}`
-          : `A creative tool lets a signed-in owner share a project with a read-only collaborator through a link the owner can revoke at any time. About ${n * 100} people use it each day. Support reports that collaborators are confused when a link suddenly stops working, and a product manager proposes: "Email the collaborator every time a link is revoked."\n\nYour task: ${contract.scopes[0]}\n\nName one assumption you are making and one failure or edge case. No code is needed, and several answers can be right.${gapLine(g, contract)}`,
+    title: "Signal contract / trace",
+    prompt: `Read this small Python trace:\n\nvalues = ${JSON.stringify(values)}\ncount = 0\nfor value in values:\n    if value > ${threshold}:\n        count += 1\n\nPredict the final value of count. Explain what count means partway through, after the loop has seen only the first few values, and name one edge case worth checking. No code is needed.${gapLine(g, contract)}`,
     rubric: [
-      "Address the supplied contract",
-      "Explain assumptions and a boundary",
-      "Use real personal history for narratives",
+      "Predict the correct final count",
+      "Explain what count means partway through the loop",
+      "Name one relevant edge case worth checking",
     ],
     starter: "",
     provenance: "development",

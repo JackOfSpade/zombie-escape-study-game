@@ -1,7 +1,7 @@
 import type { Point } from "./model";
 // A stable scale gives the complete maximum sight circle room on every side.
 // Camera framing does not change sight distance, opacity or world coordinates.
-// Zoom is only used by the spectator view after a run ends.
+// Zoom combines the display-size preference and any spectator magnification.
 export function camera(width: number, height: number, focus: Point, zoom = 1) {
   const scale = (Math.min(width, height) / 24) * zoom;
   return {

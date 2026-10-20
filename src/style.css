@@ -12,6 +12,9 @@
   --terminal: #7bddd5;
   --editor: #101e23;
   --danger: #ec9b82;
+  --display-scale: 1;
+  --view-width: calc(100vw / var(--display-scale));
+  --view-height: calc(100vh / var(--display-scale));
   color-scheme: dark;
 }
 * {
@@ -19,6 +22,12 @@
 }
 body {
   margin: 0;
+  zoom: var(--display-scale);
+}
+/* Reflow at the available scaled width. Fixed panels stay outside this
+   container so they remain attached to the browser viewport while scrolling. */
+.game-layout {
+  container-type: inline-size;
 }
 body.surge {
   --bg: #1a1526;
@@ -168,7 +177,7 @@ p {
   line-height: 1.6;
 }
 .viewport {
-  height: calc(100vh - 250px);
+  height: calc(var(--view-height) - 250px);
   min-height: 440px;
   background: #0b1418;
   border: 1px solid var(--line);
@@ -405,7 +414,7 @@ body.spectating canvas.dragging {
   align-items: flex-start;
   gap: 6px;
 }
-@media (max-width: 600px) {
+@container (max-width: 600px) {
   .hud {
     gap: 8px;
     padding: 6px 8px;
@@ -578,7 +587,7 @@ body.spectating canvas.dragging {
   );
 }
 .overlay h2 {
-  font-size: clamp(32px, 4vw, 68px);
+  font-size: clamp(32px, calc(var(--view-width) * 0.04), 68px);
   line-height: 1.02;
   letter-spacing: -2px;
   margin: 20px 0;
@@ -619,14 +628,14 @@ body.spectating canvas.dragging {
   display: none;
 }
 .terminal-open .viewport {
-  height: calc(100vh - 250px);
+  height: calc(var(--view-height) - 250px);
 }
 #terminal {
   background: var(--panel);
   border: 1px solid var(--line);
   border-radius: 7px;
   min-width: 0;
-  max-height: calc(100vh - 120px);
+  max-height: calc(var(--view-height) - 120px);
   display: flex;
   flex-direction: column;
 }
@@ -758,6 +767,7 @@ body.spectating canvas.dragging {
 }
 #settings,
 #inspector {
+  --panel-top: min(90px, calc(var(--view-height) * 0.12));
   position: fixed;
   z-index: 10;
   background: var(--panel);
@@ -765,10 +775,13 @@ body.spectating canvas.dragging {
   box-shadow: 0 20px 100px #000a;
   border-radius: 8px;
   padding: 26px;
-  right: 30px;
-  top: 90px;
-  width: min(460px, 90vw);
-  max-height: 80vh;
+  right: min(30px, calc(var(--view-width) * 0.05));
+  top: var(--panel-top);
+  width: min(460px, calc(var(--view-width) * 0.9));
+  max-height: min(
+    calc(var(--view-height) * 0.8),
+    calc(var(--view-height) - var(--panel-top) - 12px)
+  );
   overflow: auto;
 }
 #settings label {
@@ -784,8 +797,30 @@ body.spectating canvas.dragging {
   font-size: 11px;
   color: var(--muted);
 }
+#settings .display-size {
+  margin-bottom: 6px;
+}
+.display-size span {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.display-size output {
+  color: var(--accent);
+  font-variant-numeric: tabular-nums;
+}
+.display-size input {
+  display: block;
+  width: 100%;
+  margin: 12px 0 0;
+  accent-color: var(--accent);
+}
+#display-scale-help {
+  margin-top: 0;
+}
 #inspector {
-  width: min(800px, 92vw);
+  width: min(800px, calc(var(--view-width) * 0.92));
 }
 #inspector p {
   font-size: 12px;
@@ -816,7 +851,7 @@ body.reduced * {
   animation: none !important;
   transition: none !important;
 }
-@media (max-width: 1000px) {
+@container (max-width: 1000px) {
   main {
     padding: 18px;
     grid-template-columns: minmax(0, 1fr);
@@ -841,7 +876,7 @@ body.reduced * {
     font-size: 15px;
   }
 }
-@media (max-width: 760px) {
+@container (max-width: 760px) {
   header {
     padding: 10px 15px;
     height: auto;
@@ -859,6 +894,9 @@ body.reduced * {
   .header-right {
     flex-shrink: 0;
     margin-left: auto;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    max-width: 100%;
   }
   .header-right > span {
     display: none;
@@ -871,7 +909,7 @@ body.reduced * {
   }
   .viewport,
   .terminal-open .viewport {
-    height: 55vh;
+    height: calc(var(--view-height) * 0.55);
     min-height: 350px;
   }
 
@@ -1023,7 +1061,7 @@ body.reduced * {
 }
 
 #pause-menu {
-  max-width: min(440px, 90vw);
+  max-width: min(440px, calc(var(--view-width) * 0.9));
   border: 1px solid #7d947b;
   border-radius: 12px;
   padding: 2rem;
@@ -1063,7 +1101,7 @@ body.reduced * {
   top: 0;
   display: flex;
   flex-direction: column;
-  height: min(600px, calc(100vh - 260px));
+  height: min(600px, calc(var(--view-height) - 260px));
   min-height: 300px;
 }
 .conversation-panel h3 {
@@ -1119,16 +1157,16 @@ body.reduced * {
 .conversation-panel #chat-form {
   flex-shrink: 0;
 }
-@media (max-width: 1100px) {
+@container (max-width: 1100px) {
   .terminal-open main {
     grid-template-columns: 1fr;
   }
   .terminal-open .viewport {
-    height: 32vh;
+    height: calc(var(--view-height) * 0.32);
     min-height: 220px;
   }
 }
-@media (max-width: 760px) {
+@container (max-width: 760px) {
   .terminal-layout {
     grid-template-columns: 1fr;
   }
@@ -1142,7 +1180,7 @@ body.reduced * {
 }
 
 /* Solo study workspace: keep the simulation visible while giving work most of the screen. */
-@media (min-width: 1101px) {
+@container (min-width: 1101px) {
   .force-fields.terminal-open main {
     grid-template-columns: minmax(240px, 0.4fr) minmax(760px, 1.6fr);
   }
@@ -1152,7 +1190,7 @@ body.reduced * {
   gap: 24px;
 }
 .force-fields .conversation-panel {
-  height: max(420px, calc(100vh - 255px));
+  height: max(420px, calc(var(--view-height) - 255px));
 }
 .force-fields #workspace {
   min-height: 300px;
@@ -1186,7 +1224,7 @@ body.reduced * {
 .force-fields .controls span:has(kbd):nth-child(3) {
   display: none;
 }
-@media (max-width: 760px) {
+@container (max-width: 760px) {
   .force-fields .terminal-layout {
     grid-template-columns: 1fr;
   }
@@ -1200,7 +1238,7 @@ body.reduced * {
   grid-template-columns: minmax(0, 0.7fr) minmax(0, 1.3fr);
 }
 .dialogue-terminal #problem {
-  max-height: 48vh;
+  max-height: calc(var(--view-height) * 0.48);
   line-height: 1.7;
 }
 .dialogue-terminal .conversation-panel {
@@ -1223,7 +1261,7 @@ body.reduced * {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
-@media (max-width: 760px) {
+@container (max-width: 760px) {
   .dialogue-terminal .terminal-layout {
     grid-template-columns: minmax(0, 1fr);
   }

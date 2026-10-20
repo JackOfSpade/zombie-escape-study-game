@@ -571,6 +571,41 @@ test("worker pulls roll back a claim change when its durable write fails", () =>
   }
 });
 
+test("generation handoffs require enough visible facts and a bounded task without relying on tutor clarification", () => {
+  const q = createHandoffQueue();
+  q.enable(true);
+  const contract = {
+    id: "synthetic-state-categories",
+    objectiveIds: ["SYNTHETIC:STATE"],
+    scopes: ["Distinguish interface, server and cached state."],
+    depth: 1,
+  };
+  const receipt = q.enqueue("generate", {
+    requestId: "synthetic-standalone-question",
+    contract,
+  });
+  const job = q.get(worker);
+  assert.equal(job.jobId, receipt.id);
+  assert.deepEqual(job.payload.contract, contract);
+  for (const requirement of [
+    /prompt must stand on its own/,
+    /essential scenario, interface, data, code, implementation, business rules and timing facts/,
+    /without tutor chat/,
+    /fixed facts explicitly.*intentional design choices/,
+    /concrete, bounded question rather than pasting a curriculum scope/,
+    /classification, list the actual items to classify/,
+    /tracing or critique, supply the relevant code, event trace or evidence/,
+    /every requested requirement visible in the prompt, never only in the rubric or later chat/,
+    /Do not grade unstated assumptions/,
+    /unrelated generic requests for assumptions, edge cases or a product recommendation/,
+    /must not supply the explanation, classification or worked result/,
+    /Copy the exact eligible contract/,
+    /existing stable scope definitions are copied exactly, never rewritten/,
+    /D1 is conceptual diagnosis with an empty workspace starter and no unsolicited key-step hints/,
+  ])
+    assert.match(job.instructions, requirement);
+});
+
 test("generation rejects rubric objects before accepting a reply and retains the same claim for a corrected string rubric", () => {
   const q = createHandoffQueue();
   q.enable(true);

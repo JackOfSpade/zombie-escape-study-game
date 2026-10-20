@@ -38,6 +38,7 @@ import {
 import { AudioDirector } from "./audio";
 import { eligible, initialStudy, syncLearningView } from "./curriculum";
 import { doorFrame } from "./doors";
+import { displayScale } from "./display-scale";
 import {
   board,
   canReachStation,
@@ -133,6 +134,7 @@ await checkBridge();
 app.innerHTML = gameShell;
 const canvas = $<HTMLCanvasElement>("#world"),
   editor = $<HTMLTextAreaElement>("#workspace");
+syncDisplayScale();
 let saveToken = 0;
 async function persist() {
   runLogs.capture(game);
@@ -465,7 +467,12 @@ canvas.addEventListener("pointerdown", (ev) => {
 canvas.addEventListener("pointermove", (ev) => {
   if (dragging !== ev.pointerId || !view) return;
   const rect = canvas.getBoundingClientRect(),
-    { scale } = camera(rect.width, rect.height, view.focus, view.zoom);
+    { scale } = camera(
+      rect.width,
+      rect.height,
+      view.focus,
+      view.zoom * displayScale(game.settings.displayScale),
+    );
   setView({
     ...view,
     focus: {
@@ -1754,8 +1761,24 @@ async function reconnectChatGpt(tab: Window | null = null, fresh = false) {
     if (active) renderTerminal();
   }
 }
+function syncDisplayScale() {
+  const scale = displayScale(game.settings.displayScale),
+    percent = String(Math.round(scale * 100));
+  document.documentElement.style.setProperty("--display-scale", String(scale));
+  $<HTMLInputElement>("#display-scale").value = percent;
+  $("#display-scale-value").textContent = `${percent}%`;
+  $("#display-scale").setAttribute("aria-valuetext", `${percent}%`);
+}
+$("#display-scale").oninput = () => {
+  game.settings.displayScale = displayScale(
+    Number($<HTMLInputElement>("#display-scale").value) / 100,
+  );
+  syncDisplayScale();
+};
+$("#display-scale").onchange = () => void persist();
 $("#settings-toggle").onclick = () => {
   void refreshHandoff();
+  syncDisplayScale();
   if ($("#settings").hidden) openPanel("settings", "#volume");
   else closePanel("settings");
   $<HTMLInputElement>("#volume").value = String(game.settings.volume);
@@ -1824,6 +1847,7 @@ $("#import").onchange = async () => {
     const next = recover(decode(await file.text()));
     closeTerminal();
     game = next;
+    syncDisplayScale();
     completionCursor = 0;
     persist();
     startCard();

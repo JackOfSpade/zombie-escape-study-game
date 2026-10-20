@@ -1534,6 +1534,22 @@ test("live question generation sends the track's probe records and a policy that
     );
     assert.deepEqual(generatePayload.probeRecords.established, []);
     assert.match(generatePayload.generationPolicy, /Use probeRecords/);
+    assert.match(
+      generatePayload.generationPolicy,
+      /prompt alone must supply.*without using the chat/,
+    );
+    assert.match(
+      generatePayload.generationPolicy,
+      /For classification, list the concrete items to classify/,
+    );
+    assert.match(
+      generatePayload.generationPolicy,
+      /Distinguish fixed facts from intentional design choices/,
+    );
+    assert.match(
+      generatePayload.generationPolicy,
+      /Every requirement in the rubric must be visible in the question/,
+    );
     assert.match(generatePayload.generationPolicy, /blocked as the apex/);
   } finally {
     globalThis.fetch = async () =>

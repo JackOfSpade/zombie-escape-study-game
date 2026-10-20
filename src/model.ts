@@ -536,6 +536,8 @@ export interface Surge {
   lastEnd: number;
 }
 export interface Settings {
+  /** Interface and world magnification; omitted by older saves (100%). */
+  displayScale?: number;
   /** Local preference only; server release and capability are also required. */
   handoffAutonomous?: boolean;
   volume: number;
