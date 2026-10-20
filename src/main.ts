@@ -319,6 +319,7 @@ function closeTerminal() {
   }
   active = undefined;
   releaseStation(human(game));
+  $("#dialogue-reward").hidden = true;
   $("#terminal").hidden = true;
   document.body.classList.remove("terminal-open");
   editor.blur();
@@ -447,6 +448,11 @@ function eligibleForUI() {
     return undefined;
   }
 }
+/** ChatGPT holds a connector tool call behind an approval card in its chat
+ * column until the player answers it; an app panel in full view can hide it. */
+const APPROVAL_HINT =
+  "If ChatGPT shows an “Allow ChatGPT to use zombie-escape-study-game?” card in its chat, choose Always allow there; the card can sit behind the study terminal panel in full view.";
+const APPROVAL_HINT_AFTER_MS = 15_000;
 function renderTerminal(force = false) {
   if (!active || game.paused) return;
   const e = game.encounters[active];
@@ -824,7 +830,12 @@ function renderTerminal(force = false) {
                   ? "Queued, but nothing is listening in ChatGPT yet. Press Connect ChatGPT below: it sets everything up and opens ChatGPT with the request ready. Survival continues."
                   : "Queued for ChatGPT. Keep the study terminal app open in a regular ChatGPT chat, or a bridge chat actively serving requests; a connected tunnel cannot generate replies. Survival continues."
                 : j.transportPhase === "working"
-                  ? "Picked up by ChatGPT; waiting for its reply. Survival continues."
+                  ? `Picked up by ChatGPT; waiting for its reply. Survival continues.${
+                      Date.now() - (j.transportPhaseAt ?? Date.now()) >=
+                      APPROVAL_HINT_AFTER_MS
+                        ? ` ${APPROVAL_HINT}`
+                        : ""
+                    }`
                   : "Waiting for a reply. Survival continues."
               : escape(j.error ?? "Saved question interrupted.")
           }${j.state === "interrupted" ? `<button class="quiet" data-question-retry="${escape(j.id)}" data-channel="${tab}">Retry saved ${tab === "tutor" ? "private" : "group"} question</button>` : ""}</p>`,
@@ -890,10 +901,13 @@ $("#run-code").onclick = () => {
 $("#connect-completion").onclick = () => {
   // Browsers only allow a new tab during the click itself, so reserve one now
   // unless a terminal is already listening; setup then points it at ChatGPT.
+  // The tab has a fixed name and keeps its opener, so a later press, even
+  // after this page reloads, gets the same ChatGPT tab back (an empty URL
+  // returns an existing named tab without navigating it) instead of adding
+  // one the player has to close.
   const tab =
-    relayListening() === true ? null : window.open("about:blank", "_blank");
-  if (tab) tab.opener = null;
-  void reconnectChatGpt(tab);
+    relayListening() === true ? null : window.open("", CHATGPT_TAB_NAME);
+  void reconnectChatGpt(tab, tab ? blankTab(tab) : false);
 };
 $("#submit").onclick = () => {
   if (!active) return;
@@ -1379,6 +1393,17 @@ $("#handoff-copy").onclick = () => {
 let reconnectProgress: string | null = null,
   reconnectBusy = false,
   reconnectChatUrl: string | null = null;
+/** The one browser tab this game uses for ChatGPT; see the Connect handler. */
+const CHATGPT_TAB_NAME = "zombie-study-chatgpt";
+/** Whether a reserved tab is still our fresh blank page. A ChatGPT chat opened
+ * earlier is cross-origin, so reading its location throws. */
+const blankTab = (tab: Window) => {
+  try {
+    return tab.location.href === "about:blank";
+  } catch {
+    return false;
+  }
+};
 /** A new ChatGPT chat with the request typed in. ChatGPT may send it on its
  * own; links from other sites are sometimes only prefilled. */
 const CHATGPT_TERMINAL_URL =
@@ -1412,15 +1437,16 @@ const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 /** One click does the whole reconnect: start the public connector if needed,
  * release live study requests, then wait for a study terminal or worker to
  * be ready in ChatGPT. Settings stay closed; progress is reported in place. */
-async function reconnectChatGpt(tab: Window | null = null) {
+async function reconnectChatGpt(tab: Window | null = null, fresh = false) {
   if (reconnectBusy) {
-    tab?.close();
+    if (fresh) tab?.close();
     return;
   }
   let chatOpened = false;
-  // Close the reserved tab only while it is still our blank page.
+  // Close the reserved tab only while it is still our fresh blank page; a
+  // reused ChatGPT tab is the player's and stays open.
   const closeUnusedTab = () => {
-    if (tab && !chatOpened && !tab.closed) tab.close();
+    if (tab && fresh && !chatOpened && !tab.closed) tab.close();
   };
   reconnectBusy = true;
   const requestGame = game;
@@ -1466,11 +1492,16 @@ async function reconnectChatGpt(tab: Window | null = null) {
         if (tab && !tab.closed) {
           tab.location.href = CHATGPT_TERMINAL_URL;
           chatOpened = true;
+          try {
+            tab.focus();
+          } catch {
+            // A browser may refuse to raise the tab; the notice says where it is.
+          }
         } else reconnectChatUrl = CHATGPT_TERMINAL_URL;
       }
       reportReconnect(
         chatOpened
-          ? "Connected and released. ChatGPT opened in a new tab with the request typed in; if it didn't send by itself, press Enter there. This clears when your terminal is ready."
+          ? `Connected and released. ${fresh ? "ChatGPT opened in a new tab" : "Your ChatGPT tab moved to a new chat"} with the request typed in; if it didn't send by itself, press Enter there. This clears when your terminal is ready.`
           : "Connected and released. Open ChatGPT below to start your study terminal; if the request doesn't send by itself, press Enter there. This clears when your terminal is ready.",
       );
       await wait(3000);
@@ -1644,6 +1675,51 @@ function completionAssessments() {
 }
 let inventorySignature = "";
 let materializing: Promise<void> | undefined;
+/** The last seen key count and stair access per game, so a gain is announced
+ * once wherever the player is looking, and a restored or new run is not. */
+let rewardWatch: { game: string; keys: number; access: number } | undefined;
+let rewardToastTimer: ReturnType<typeof setTimeout> | undefined;
+let hudPulseTimer: ReturnType<typeof setTimeout> | undefined;
+function announceReward(keys: number, gained: number, stairs: boolean) {
+  const detail = stairs
+    ? "Personal stair access on this floor is open. Keys also open red force fields."
+    : "Spend it on a red force field.";
+  setText("#reward-title", `+${gained} key · ${keys} total`);
+  setText("#reward-detail", detail);
+  const toast = $("#reward-toast");
+  // Restart the entrance animation when a second key follows quickly.
+  toast.hidden = true;
+  void toast.offsetWidth;
+  toast.hidden = false;
+  clearTimeout(rewardToastTimer);
+  rewardToastTimer = setTimeout(() => {
+    toast.hidden = true;
+  }, 7000);
+  const count = $("#hud-keys");
+  count.classList.remove("gained");
+  void count.offsetWidth;
+  count.classList.add("gained");
+  clearTimeout(hudPulseTimer);
+  hudPulseTimer = setTimeout(() => count.classList.remove("gained"), 2200);
+  setText(
+    "#dialogue-reward",
+    `Key granted · ${keys} total${stairs ? " · stair access unlocked" : ""}`,
+  );
+  $("#dialogue-reward").hidden = false;
+  game.notice = `Key granted: ${keys} total. ${detail}`;
+}
+function watchReward(a: ReturnType<typeof human>) {
+  const keys = a.keys ?? 0,
+    access = a.access.length;
+  if (!rewardWatch || rewardWatch.game !== game.id) {
+    rewardWatch = { game: game.id, keys, access };
+    return;
+  }
+  if (keys > rewardWatch.keys)
+    announceReward(keys, keys - rewardWatch.keys, access > rewardWatch.access);
+  rewardWatch.keys = keys;
+  rewardWatch.access = access;
+}
 function ui() {
   $("#log-status").textContent =
     runLogs.error ||
@@ -1652,6 +1728,7 @@ function ui() {
   if (!game.paused) completionAssessments();
   const a = human(game),
     f = game.floors[a.floor];
+  watchReward(a);
   document.body.classList.toggle("surge", game.surge.state === "active");
   document.body.classList.toggle("reduced", game.settings.reducedFlash);
   $("#bridge-label").textContent =

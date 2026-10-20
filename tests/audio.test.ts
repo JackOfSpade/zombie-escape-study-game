@@ -443,3 +443,50 @@ test("impact audio is dispatched within a simulation tick instead of waiting for
   d.update(g);
   assert.equal(oscillators.length, count + 1, "same event must not replay");
 });
+test("the player's own terminal unlocking plays a latch cue; an NPC completion elsewhere stays silent", () => {
+  const g = fixture();
+  const [mine, theirs] = Object.values(g.encounters).filter(
+    (e) => e.floor === 0,
+  );
+  const accepted = (author: string, id: string) => ({
+    id,
+    revision: 0,
+    author,
+    content: "",
+    status: "complete" as const,
+    feedback: "",
+    seq: 1,
+  });
+  mine.submissions.push(accepted("human", "mine"));
+  mine.accepted = "mine";
+  let before = g.seq;
+  event(
+    g,
+    "completion",
+    "Solo stair credential unlocked.",
+    0,
+    undefined,
+    mine.id,
+  );
+  const cue = soundEvents(g, before);
+  assert.equal(cue.length, 1);
+  assert.equal(cue[0].sample, "latch");
+  assert.match(cue[0].caption, /key granted/);
+  assert.ok(cue[0].gain > 0);
+  theirs.submissions.push(accepted("npc-1", "theirs"));
+  theirs.accepted = "theirs";
+  before = g.seq;
+  event(g, "completion", "Solo cache unlocked.", 0, undefined, theirs.id);
+  assert.equal(soundEvents(g, before).length, 0);
+  // The same completion on another floor is out of earshot.
+  before = g.seq;
+  event(
+    g,
+    "completion",
+    "Solo stair credential unlocked.",
+    1,
+    undefined,
+    mine.id,
+  );
+  assert.equal(soundEvents(g, before).length, 0);
+});

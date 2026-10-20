@@ -117,11 +117,28 @@ test("solo terminal uses one @study conversation, exact retry and one key reward
       () => document.documentElement.scrollWidth <= innerWidth,
     ),
   ).toBe(true);
+  await expect(page.locator("#reward-toast")).toBeHidden();
+  await expect(page.locator("#dialogue-reward")).toBeHidden();
   await page.locator("#chat-input").press("Enter");
   await expect(page.locator("#dialogue-status")).toContainText("Solved");
   await expect(page.locator("#messages")).toContainText(
     "Solved: your reasoning",
   );
+  // The granted key is announced where the player is looking, not only as a
+  // changed HUD number: a toast over the world, a pulse on the count and a
+  // line in the conversation panel.
+  await expect(page.locator("#reward-toast")).toBeVisible();
+  await expect(page.locator("#reward-toast")).toContainText("Key granted");
+  await expect(page.locator("#reward-title")).toHaveText("+1 key · 1 total");
+  await expect(page.locator("#reward-detail")).toContainText(
+    "stair access on this floor is open",
+  );
+  await expect(page.locator("#hud-keys")).toHaveText("1 key");
+  await expect(page.locator("#hud-keys")).toHaveClass(/gained/);
+  await expect(page.locator("#dialogue-reward")).toHaveText(
+    "Key granted · 1 total · stair access unlocked",
+  );
+  await page.screenshot({ path: "test-results/key-granted.png" });
   expect(calls).toBe(2);
   for (const request of requests) {
     expect(request.payload.mode).toBe("terminal-dialogue");
@@ -137,6 +154,15 @@ test("solo terminal uses one @study conversation, exact retry and one key reward
     return { keys: g.survivors[0].keys, submissions: e.submissions.length };
   });
   expect(result).toEqual({ keys: 1, submissions: 1 });
+  // Leaving the terminal clears its line; the toast times out on its own and
+  // a reload never re-announces a key the player already has.
+  await page.locator("#leave").click();
+  await expect(page.locator("#dialogue-reward")).toBeHidden();
+  await expect(page.locator("#reward-toast")).toBeHidden({ timeout: 10_000 });
+  await page.reload();
+  await expect(page.locator("#hud-keys")).toHaveText("1 key");
+  await page.waitForTimeout(600);
+  await expect(page.locator("#reward-toast")).toBeHidden();
   expect(errors).toEqual([]);
 });
 test("shared terminal presents only group chat and supplies its current draft without private tutor history", async ({

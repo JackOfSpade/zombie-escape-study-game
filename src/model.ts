@@ -424,6 +424,8 @@ export interface Problem {
 }
 export interface TutorRequest {
   transportPhase?: import("./bridge-client").HandoffProgress;
+  /** When transportPhase last changed (Date.now()); drives waiting hints. */
+  transportPhaseAt?: number;
   id: string;
   provider: Provider;
   payloadJson: string;

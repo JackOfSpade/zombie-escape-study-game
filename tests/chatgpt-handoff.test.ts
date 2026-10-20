@@ -483,6 +483,51 @@ test("interactive priority ages fairly and completed requests do not impose an a
   assert.equal(aged.get(worker).jobId, background.id);
 });
 
+test("queued requests nobody served within a day expire like answered ones, while a claimed job and fresh work stay", () => {
+  let now = 0;
+  const q = createHandoffQueue({ now: () => now });
+  q.enable(true);
+  const abandoned = q.enqueue("tutor", payload("abandoned-run"));
+  const claimed = q.enqueue("tutor", payload("claimed-run"));
+  const served = q.get(worker);
+  assert.equal(served.jobId, abandoned.id);
+  q.submit(worker, served.jobId, served.claim, { text: "Answered" });
+  assert.equal(q.get(worker).jobId, claimed.id);
+  now = 23 * 3600_000;
+  const recent = q.enqueue("tutor", payload("recent-run"));
+  assert.deepEqual(
+    q
+      .snapshot()
+      .recent.map((j: { id: string; status: string }) => [j.id, j.status]),
+    [
+      [abandoned.id, "done"],
+      [claimed.id, "working"],
+      [recent.id, "queued"],
+    ],
+  );
+  now = 25 * 3600_000;
+  const fresh = q.enqueue("tutor", payload("fresh-run"));
+  assert.deepEqual(
+    q
+      .snapshot()
+      .recent.map((j: { id: string; status: string }) => [j.id, j.status]),
+    [
+      [claimed.id, "working"],
+      [recent.id, "queued"],
+      [fresh.id, "queued"],
+    ],
+  );
+  // The exact saved request can be retried after expiry: it is re-created.
+  assert.throws(
+    () => q.result(abandoned.id, abandoned.hash),
+    /Unknown exact handoff request/,
+  );
+  assert.notEqual(
+    q.enqueue("tutor", payload("abandoned-run")).id,
+    abandoned.id,
+  );
+});
+
 test("generation rejects rubric objects before accepting a reply and retains the same claim for a corrected string rubric", () => {
   const q = createHandoffQueue();
   q.enable(true);

@@ -276,6 +276,99 @@ kbd {
 .hud-item {
   color: var(--muted);
 }
+/* A granted key is announced where the player is looking: a toast over the
+   world, a pulse on the HUD count and a line in the open terminal. */
+.reward-toast {
+  position: absolute;
+  left: 50%;
+  top: 18%;
+  transform: translateX(-50%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 14px 22px;
+  border: 1px solid var(--accent);
+  border-radius: 6px;
+  background: rgba(11, 20, 24, 0.9);
+  color: var(--ink);
+  text-align: center;
+  pointer-events: none;
+  animation:
+    reward-in 420ms cubic-bezier(0.2, 0.9, 0.3, 1.2),
+    reward-glow 1.4s ease-in-out 0.4s 3;
+}
+.reward-toast .eyebrow {
+  color: var(--accent);
+  letter-spacing: 2px;
+}
+.reward-toast strong {
+  font-size: 20px;
+  color: var(--accent);
+}
+.reward-toast span:last-child {
+  font-size: 11px;
+  color: var(--muted);
+}
+.hud-item.gained {
+  display: inline-block;
+  transform-origin: left center;
+  color: var(--accent);
+  animation: hud-pulse 700ms ease-out 3;
+}
+.dialogue-reward {
+  margin: 0 0 10px;
+  padding: 8px 10px;
+  border: 1px solid var(--accent);
+  border-left-width: 4px;
+  border-radius: 4px;
+  color: var(--accent);
+  font-size: 11px;
+  animation: reward-in 420ms ease-out;
+}
+@keyframes reward-in {
+  from {
+    opacity: 0;
+    transform: translateX(-50%) translateY(-14px) scale(0.92);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(-50%) translateY(0) scale(1);
+  }
+}
+.dialogue-reward {
+  animation-name: reward-in-flat;
+}
+@keyframes reward-in-flat {
+  from {
+    opacity: 0;
+    transform: translateY(-8px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+@keyframes reward-glow {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgba(145, 237, 186, 0);
+  }
+  50% {
+    box-shadow: 0 0 26px 4px rgba(145, 237, 186, 0.45);
+  }
+}
+@keyframes hud-pulse {
+  0% {
+    transform: scale(1);
+  }
+  35% {
+    transform: scale(1.25);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
 /* Equipment controls overlay the frame's bottom edge; keys-only runs show nothing. */
 .inventory {
   position: absolute;

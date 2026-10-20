@@ -91,6 +91,7 @@ export function soundEvents(g: Game, after: number): SoundCue[] {
         "door-latch",
         "helicopter",
         "board",
+        "completion",
       ].includes(e.type),
   );
   if (!events.length) return out;
@@ -149,6 +150,25 @@ export function soundEvents(g: Game, after: number): SoundCue[] {
         end: 100,
         caption: "[Helicopter approaching]",
       };
+    // The player's own terminal unlocking: the only completion that grants
+    // them a key, so NPC terminals elsewhere stay silent.
+    if (
+      e.type === "completion" &&
+      e.floor === g.survivors[0].floor &&
+      e.encounter &&
+      g.encounters[e.encounter]?.submissions.some(
+        (s) =>
+          s.id === g.encounters[e.encounter!].accepted && s.author === "human",
+      )
+    )
+      cue = {
+        frequency: 660,
+        duration: 0.25,
+        gain: 0.28,
+        end: 990,
+        caption: "[Lock releases · key granted]",
+        sample: "latch",
+      };
     if (e.type === "board" && e.actor === "human")
       cue = {
         frequency: 400,
@@ -158,7 +178,7 @@ export function soundEvents(g: Game, after: number): SoundCue[] {
         caption: "[Helicopter extraction]",
       };
     if (cue) {
-      cue.sample =
+      cue.sample ??=
         e.type === "breach"
           ? "breach"
           : e.type === "survivor-hit"

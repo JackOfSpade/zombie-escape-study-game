@@ -59,6 +59,18 @@
         ><span id="hud-access" class="hud-chip"></span
         ><span id="hud-pickup" class="hud-item" hidden></span>
       </div>
+      <div
+        id="reward-toast"
+        class="reward-toast"
+        role="status"
+        aria-live="assertive"
+        aria-atomic="true"
+        hidden
+      >
+        <span class="eyebrow">Key granted</span>
+        <strong id="reward-title"></strong>
+        <span id="reward-detail"></span>
+      </div>
       <div id="inventory" class="inventory" aria-label="Equipment"></div>
     </div>
     <div class="controls">
@@ -185,6 +197,12 @@
           <h3 id="conversation-title">Terminal AI</h3>
           <p id="dialogue-status" class="muted" role="status" hidden></p>
           <p id="conversation-context" class="muted"></p>
+          <p
+            id="dialogue-reward"
+            class="dialogue-reward"
+            role="status"
+            hidden
+          ></p>
           <div id="workspace-proposals" hidden></div>
           <div id="messages" aria-live="polite"></div>
           <p id="catchup-status" class="muted" hidden></p>
@@ -205,8 +223,7 @@
           <a
             id="open-chatgpt"
             class="quiet"
-            target="_blank"
-            rel="noopener noreferrer"
+            target="zombie-study-chatgpt"
             hidden
             >Open ChatGPT</a
           >

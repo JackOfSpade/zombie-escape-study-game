@@ -174,6 +174,12 @@
         function show(text) {
           (mode === "live" ? $("live-status") : $("status")).textContent = text;
         }
+        // ChatGPT holds a connector tool call behind an "Allow ChatGPT to use
+        // zombie-escape-study-game?" card in the chat column until the player
+        // answers it, and this app can cover that card in full view.
+        const APPROVAL_HINT =
+          "Message accepted by the host; still waiting for ChatGPT to call the reply tool. If the chat shows an “Allow ChatGPT to use zombie-escape-study-game?” card, choose Always allow there. The card sits in the chat column, so leave full view if this app covers it.";
+        const APPROVAL_HINT_AFTER_POLLS = 12;
         function rows(messages, label) {
           return messages.map((m) => {
             const row = document.createElement("div");
@@ -310,9 +316,10 @@
             $("retry").hidden = false;
             return;
           }
-          if (state.pending && ++polls < 180)
+          if (state.pending && ++polls < 180) {
+            if (polls === APPROVAL_HINT_AFTER_POLLS) show(APPROVAL_HINT);
             poll = setTimeout(refreshDemo, 1000);
-          else if (state.pending) {
+          } else if (state.pending) {
             show(
               "Still waiting for ChatGPT. The answer is retained; retry its saved turn if needed.",
             );
@@ -344,7 +351,10 @@
                 await tool("read_study_terminal", { relayId: state.relayId });
               }
               if (state.turn?.status === "claimed") {
-                if (++polls < 240) return schedule(liveLoop, 1000);
+                if (++polls < 240) {
+                  if (polls === APPROVAL_HINT_AFTER_POLLS) show(APPROVAL_HINT);
+                  return schedule(liveLoop, 1000);
+                }
                 show(
                   "Still waiting for ChatGPT's reply. Retry the saved turn if the conversation did not respond.",
                 );

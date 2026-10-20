@@ -245,17 +245,26 @@ test("live relay mode posts one @study turn per released game message and shows 
     progressContext: "Synthetic progress.",
   });
   queue.enable(true);
-  const first = queue.enqueue(
-    "tutor",
-    dialogue("synthetic-live-1", [
-      {
-        kind: "human",
-        author: "human",
-        text: "<img src=x onerror=alert('bad')> I think [2,3] is largest",
-        seq: 1,
-      },
-    ]),
-  );
+  // The relay serves only turns whose game is still polling for the reply, so
+  // this synthetic game polls each receipt the way the real client does.
+  const receipts: { id: string; hash: string }[] = [];
+  const polling = setInterval(() => {
+    for (const r of receipts) queue.result(r.id, r.hash);
+  }, 500);
+  const release = (requestId: string, messages: any[]) => {
+    const receipt = queue.enqueue("tutor", dialogue(requestId, messages));
+    receipts.push(receipt);
+    queue.result(receipt.id, receipt.hash);
+    return receipt;
+  };
+  const first = release("synthetic-live-1", [
+    {
+      kind: "human",
+      author: "human",
+      text: "<img src=x onerror=alert('bad')> I think [2,3] is largest",
+      seq: 1,
+    },
+  ]);
   await expect(ui.locator("#title")).toContainText("SYNTHETIC LIVE RELAY");
   await expect(ui.locator("#live-status")).toContainText(
     "Message accepted by the host",
@@ -291,24 +300,21 @@ test("live relay mode posts one @study turn per released game message and shows 
     "Waiting for your next terminal message",
   );
   // The game sends the next message; the UI claims it and posts exactly one more turn.
-  const second = queue.enqueue(
-    "tutor",
-    dialogue("synthetic-live-2", [
-      {
-        kind: "human",
-        author: "human",
-        text: "I think [2,3] is largest",
-        seq: 1,
-      },
-      { kind: "tutor", author: "tutor", text: "What is its total?", seq: 2 },
-      {
-        kind: "human",
-        author: "human",
-        text: "5; subtract outgoing, add incoming; two readings; stop at the end.",
-        seq: 3,
-      },
-    ]),
-  );
+  const second = release("synthetic-live-2", [
+    {
+      kind: "human",
+      author: "human",
+      text: "I think [2,3] is largest",
+      seq: 1,
+    },
+    { kind: "tutor", author: "tutor", text: "What is its total?", seq: 2 },
+    {
+      kind: "human",
+      author: "human",
+      text: "5; subtract outgoing, add incoming; two readings; stop at the end.",
+      seq: 3,
+    },
+  ]);
   await expect(ui.locator("#messages .user")).toHaveCount(2);
   await expect(ui.locator("#live-status")).toContainText(
     "Message accepted by the host",
@@ -332,6 +338,7 @@ test("live relay mode posts one @study turn per released game message and shows 
   const calls: string[] = await page.evaluate(() => (window as any).toolCalls);
   expect(calls).not.toContain("get_study_handoff");
   expect(calls).not.toContain("stage_study_terminal_turn");
+  clearInterval(polling);
   await page.screenshot({
     path: ".artifacts/terminal-relay-app-harness.png",
     fullPage: true,

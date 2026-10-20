@@ -677,6 +677,7 @@ export function retryTutorRequest(
   job.state = "pending";
   delete job.error;
   delete job.transportPhase;
+  delete job.transportPhaseAt;
   const operation = (async () => {
     try {
       if (!interactiveConnected(g) || status().mode !== job.provider)
@@ -728,7 +729,9 @@ export function retryTutorRequest(
         return;
       }
       const answer = await request("tutor", payload, (phase) => {
-        if (job.state === "pending") job.transportPhase = phase;
+        if (job.state !== "pending") return;
+        if (job.transportPhase !== phase) job.transportPhaseAt = Date.now();
+        job.transportPhase = phase;
       });
       if (
         typeof answer.text !== "string" ||

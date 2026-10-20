@@ -8,10 +8,12 @@ async function stubChatGpt(page: Page) {
       route.fulfill({ contentType: "text/html", body: "<title>stub</title>" }),
     );
 }
-async function openSoloTerminal(page: Page) {
+async function openSoloTerminal(page: Page, resume = false) {
   await stubChatGpt(page);
   await page.goto("/");
-  await page.getByRole("button", { name: "Enter the building" }).click();
+  // A saved run in progress resumes without the start card.
+  if (!resume)
+    await page.getByRole("button", { name: "Enter the building" }).click();
   await page.evaluate(async () => {
     const root = "/src/";
     const { ensureProblem } = await import(/* @vite-ignore */ root + "ai.ts");
@@ -132,6 +134,7 @@ test("Reconnect ChatGPT runs the whole sequence itself, keeps Settings closed, r
   await expect(button).toBeHidden();
   await expect(page.locator("#chat-form button")).toBeEnabled();
   await expect(notice).toBeHidden({ timeout: 15_000 });
+  expect(actions).toEqual(["start-public", "enable"]);
   expect(actions).toEqual(["start-public", "enable"]);
 });
 
@@ -261,5 +264,40 @@ test("a queued terminal message says when nothing in ChatGPT is listening", asyn
     { timeout: 15_000 },
   );
   await expect(button).toBeHidden();
+  expect(chat.isClosed()).toBe(false);
+  // The chat errors out and its app stops calling in while the message is
+  // still queued: the button comes back, and pressing it moves the same
+  // ChatGPT tab to a new chat instead of opening another tab to clean up.
+  const pages = () => page.context().pages().length;
+  const before = pages();
+  await chat.goto("https://chatgpt.com/c/old-chat");
+  activeSessions = 0;
+  await expect(button).toBeVisible({ timeout: 15_000 });
+  await button.click();
+  await chat.waitForURL(/^https:\/\/chatgpt\.com\/\?q=/);
+  await expect(page.locator("#completion-connection")).toContainText(
+    "Your ChatGPT tab moved to a new chat",
+  );
+  expect(pages()).toBe(before);
+  expect(chat.isClosed()).toBe(false);
+  activeSessions = 1;
+  await expect(page.locator("#completion-connection")).toContainText(
+    "Done. ChatGPT is connected",
+    { timeout: 15_000 },
+  );
+  // After the game page itself reloads, the tab is still found by its name:
+  // a new tab is created only when none exists.
+  await chat.goto("https://chatgpt.com/c/older-chat");
+  activeSessions = 0;
+  await openSoloTerminal(page, true);
+  await page.locator("#chat-input").fill("still here");
+  await page.locator("#chat-form button").click();
+  await expect(button).toBeVisible({ timeout: 15_000 });
+  await button.click();
+  await chat.waitForURL(/^https:\/\/chatgpt\.com\/\?q=/);
+  await expect(page.locator("#completion-connection")).toContainText(
+    "Your ChatGPT tab moved to a new chat",
+  );
+  expect(pages()).toBe(before);
   expect(chat.isClosed()).toBe(false);
 });

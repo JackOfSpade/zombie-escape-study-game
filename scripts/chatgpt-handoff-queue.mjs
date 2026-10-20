@@ -593,8 +593,16 @@ export function createHandoffQueue({
           throw Error("Conflicting reuse of a handoff request ID");
         return { id: previous.id, hash: previous.hash };
       }
+      // Answered jobs expire after a day. So does a queued job nobody served in
+      // a day: a reloaded or abandoned run leaves its terminal turn behind, and
+      // such turns would otherwise accumulate until the transport is full. A
+      // player who retries that exact saved request simply re-creates it.
       const keep = state.jobs.filter(
-        (j) => j.status !== "done" || now() - j.completedAt < 24 * 3600_000,
+        (j) =>
+          j.status === "working" ||
+          (j.status === "done"
+            ? now() - j.completedAt < 24 * 3600_000
+            : now() - j.createdAt < 24 * 3600_000),
       );
       if (
         keep.filter((j) => j.status !== "done").length >= maxJobs ||
