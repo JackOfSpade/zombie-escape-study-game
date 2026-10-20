@@ -63,6 +63,7 @@ import { materializeNpcWork } from "./npc-materialization";
 import { inspectNpcOutcome, outcomeIsVisible } from "./npc-outcome";
 import { humanUsingWorkspace, npcAtWorkstation } from "./npc-work-access";
 import { reconcileRoadmap } from "./roadmap-adoption";
+import { settleTutorRequest } from "./run-learning";
 import { canSee } from "./visibility";
 import { applyAutonomousProposal, proposalText } from "./workspace-proposals";
 const live = (g: Game) =>
@@ -724,7 +725,7 @@ export function retryTutorRequest(
         (m) => m.kind === "tutor" && m.requestId === job.id,
       );
       if (existing) {
-        job.state = "applied";
+        settleTutorRequest(job, "applied");
         job.responseMessageId = existing.id;
         return;
       }
@@ -834,7 +835,7 @@ export function retryTutorRequest(
         e.submissions.push(submission);
         applyCompletion(g, e, r!, submission, verdict);
       }
-      job.state = "applied";
+      settleTutorRequest(job, "applied");
     } catch (error) {
       job.state = "interrupted";
       job.error = String(error);
@@ -1025,7 +1026,7 @@ export async function send(
     return;
   if (channel === "tutor")
     for (const job of e.tutorRequests ?? [])
-      if (job.state === "interrupted") job.state = "superseded";
+      if (job.state === "interrupted") settleTutorRequest(job, "superseded");
   delete e.error;
   message(g, e, channel, "human", "human", text, "live-human");
   try {

@@ -1,6 +1,7 @@
 import { ensureDoor } from "./doors";
 import { type Game } from "./model";
 import { checkpointPhysics } from "./physics";
+import { releaseSettledRequests } from "./run-learning";
 import { readDurable, writeDurable } from "./storage";
 const KEY = "dead-air-save-v1";
 interface Envelope {
@@ -209,6 +210,8 @@ export function recover(g: Game) {
         if (e.state !== "consumed") e.state = "in-progress";
       }
   }
+  for (const e of Object.values(g.encounters)) releaseSettledRequests(e);
+  for (const e of g.study.archives) releaseSettledRequests(e, true);
   for (const e of [...Object.values(g.encounters), ...g.study.archives]) {
     for (const job of e.groupRequests ?? [])
       if (job.state === "pending") {

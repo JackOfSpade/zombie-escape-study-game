@@ -48,3 +48,37 @@ export function preparePracticeRooms(g: Game, roadmap: Roadmap) {
     }
   }
 }
+/**
+ * Earlier runs in which the human started this terminal's scheduled question
+ * and never completed it. A new run never resumes a lock, so the question is
+ * asked again from the start; facets established in those conversations are
+ * carried in study state (`knowledgeEstablished`) and not probed again.
+ */
+export function unfinishedEarlierVisits(
+  g: Game,
+  e: Encounter,
+): { runs: number; established: number } {
+  const c = e.problem?.contract;
+  if (!c || c.practice || e.state === "consumed")
+    return { runs: 0, established: 0 };
+  const earlier = g.study.archives.filter((a) => {
+    const prior = a.problem?.contract;
+    return (
+      (a.runId ?? "legacy") !== g.id &&
+      a.state !== "consumed" &&
+      !!prior &&
+      !prior.practice &&
+      prior.track === c.track &&
+      prior.depth === c.depth &&
+      JSON.stringify(prior.objectiveIds) === JSON.stringify(c.objectiveIds) &&
+      a.tutor.some((m) => m.kind === "human")
+    );
+  });
+  const refs = new Set(earlier.map((a) => `${a.runId ?? "legacy"}/${a.id}`));
+  return {
+    runs: new Set(earlier.map((a) => a.runId ?? "legacy")).size,
+    established: (g.study.knowledgeEstablished ?? []).filter((r) =>
+      refs.has(r.encounter),
+    ).length,
+  };
+}

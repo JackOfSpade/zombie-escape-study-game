@@ -1,6 +1,7 @@
 import { relayListening, relayServes } from "./bridge-client";
 import { terminalChannel, submissionView } from "./terminal-view";
 import { encounterGaps, probeSummary } from "./knowledge-probe";
+import { unfinishedEarlierVisits } from "./room-questions";
 import { setTopicEnabled } from "./topic-spawn";
 import {
   inspectorSummaryHtml,
@@ -524,6 +525,14 @@ function renderTerminal(force = false) {
   if (e.problem?.contract.practice)
     $("#terminal-provenance").textContent +=
       " · Variety practice on another topic of this tier: knowledge is probed and recorded, but this is not the scheduled visit";
+  const earlier = unfinishedEarlierVisits(game, e);
+  if (earlier.runs)
+    $("#terminal-provenance").textContent +=
+      ` · Started in ${earlier.runs === 1 ? "an earlier run" : `${earlier.runs} earlier runs`} but not completed there, so it is asked again: a new run never inherits an unfinished lock. ${
+        earlier.established
+          ? `${earlier.established} facet${earlier.established === 1 ? "" : "s"} you established then ${earlier.established === 1 ? "is" : "are"} carried over and will not be re-asked.`
+          : "Nothing was established before that conversation stopped."
+      }`;
   if (
     game.study.learner?.attempts.some(
       (a) =>
