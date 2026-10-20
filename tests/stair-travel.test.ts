@@ -5,6 +5,7 @@ import { claimStation, stairs, step, vault } from "../src/engine";
 import { canGrip } from "../src/handling";
 import { type Game, type Roadmap, CONFIG, distance } from "../src/model";
 import { decode, encode, recover } from "../src/persistence";
+import { inFurniture } from "../src/spatial";
 import { advanceStairs } from "../src/stair-travel";
 import { actor, createGame, createPlayableGame } from "../src/world";
 const r: Roadmap = JSON.parse(readFileSync("public/curriculum.json", "utf8"));
@@ -138,7 +139,7 @@ test("a locked staircase refuses a walking survivor and says why", () => {
   assert.equal(a.floor, 0);
   assert.equal(a.stairTravel, undefined);
 });
-test("blocked landing furniture delays arrival without clipping, clock reset or durability changes", () => {
+test("landing furniture on the entry moves arrival to a clear lobby spot without clipping, clock reset or durability changes", () => {
   const { g, a } = fixture(),
     f = g.floors[1],
     ob = f.furniture.find((o) => o.kind === "shelf")!;
@@ -147,9 +148,30 @@ test("blocked landing furniture delays arrival without clipping, clock reset or 
   a.access.push(0);
   assert.ok(stairs(g, a));
   const until = a.stairTravel!.until;
-  tick(g, 90);
+  tick(g, 59);
   assert.equal(a.floor, 0);
   assert.equal(a.stairTravel!.until, until);
+  tick(g, 2);
+  assert.equal(a.floor, 1);
+  assert.equal(a.stairTravel, undefined);
+  assert.equal(inFurniture(a, ob, 0.22), false);
+  assert.ok(distance(a, f.entry) > 0.5);
+  assert.equal(ob.hp, hp);
+  assert.equal(ob.destroyed, false);
+});
+test("furniture covering every landing candidate delays arrival until it is cleared", () => {
+  const { g, a } = fixture(),
+    f = g.floors[1],
+    ob = f.furniture.find((o) => o.kind === "shelf")!;
+  Object.assign(ob, { x: f.entry.x, y: f.entry.y, w: 9, h: 9 });
+  const hp = ob.hp;
+  a.access.push(0);
+  assert.ok(stairs(g, a));
+  const until = a.stairTravel!.until;
+  tick(g, 90);
+  assert.equal(a.floor, 0);
+  assert.ok(a.stairTravel);
+  assert.equal(a.stairTravel.until, until);
   assert.equal(ob.hp, hp);
   assert.match(g.notice, /landing blocked/);
   ob.destroyed = true;
@@ -158,7 +180,7 @@ test("blocked landing furniture delays arrival without clipping, clock reset or 
   assert.equal(a.floor, 1);
   assert.ok(distance(a, f.entry) < 0.01);
 });
-test("arrival chooses a clear connected landing and queues when every landing is occupied", () => {
+test("arrival chooses a clear connected landing beyond the occupied well spots", () => {
   const { g, a } = fixture(),
     p = g.floors[1].entry;
   a.access.push(0);
@@ -180,15 +202,34 @@ test("arrival chooses a clear connected landing and queues when every landing is
   g.survivors.push(...blockers);
   g.time = a.stairTravel!.until;
   assert.ok(advanceStairs(g, a));
-  assert.equal(a.floor, 0);
-  blockers[1].alive = false;
-  advanceStairs(g, a);
   assert.equal(a.floor, 1);
+  assert.equal(a.stairTravel, undefined);
   assert.ok(
-    g.survivors
-      .filter((b) => b !== a && b.alive)
-      .every((b) => distance(a, b) >= 0.55),
+    blockers.every((b) => distance(a, b) >= 0.55),
+    "lands clear of every living blocker",
   );
+  assert.ok(distance(a, p) < 4, "lands in the lobby in front of the well");
+});
+test("a landing crowded by bodies everywhere still completes the flight instead of waiting forever", () => {
+  const { g, a } = fixture(),
+    p = g.floors[1].entry;
+  a.access.push(0);
+  assert.ok(stairs(g, a));
+  let n = 0;
+  for (let dy = -1.5; dy <= 1.5; dy += 0.5)
+    for (let dx = -4.5; dx <= 1.5; dx += 0.5)
+      g.survivors.push(
+        Object.assign(actor(`crowd-${n}`, "Crowd", (n++ % 5) + 1), {
+          floor: 1,
+          x: p.x + dy,
+          y: p.y + dx,
+        }),
+      );
+  g.time = a.stairTravel!.until;
+  assert.ok(advanceStairs(g, a));
+  assert.equal(a.floor, 1);
+  assert.equal(a.stairTravel, undefined);
+  assert.ok(distance(a, p) < 0.01, "takes the nearest clear landing");
 });
 test("a survivor remains vulnerable at departure and death cannot later complete a flight", () => {
   const { g, a } = fixture();
@@ -234,6 +275,33 @@ test("NPCs also traverse the timed flight through the normal engine rather than 
   assert.equal(npc.floor, 0);
   tick(g, 2);
   assert.equal(npc.floor, 1);
+});
+test("an exploring NPC placed in the fresh floor-1 arrival well walks out of it instead of parking", () => {
+  const g = createPlayableGame(11, r),
+    human = g.survivors.find((s) => s.id === "human")!;
+  g.status = "playing";
+  human.escaped = true;
+  const parker = Object.assign(actor("parker", "Parker", 1), {
+    floor: 1,
+    x: 22,
+    y: 29,
+    stairwell: "down" as const,
+    access: [] as number[],
+    keys: 0,
+  });
+  g.survivors = [human, parker];
+  g.zombies = [];
+  for (const s of g.floors[1].stations)
+    g.encounters[s.encounter].state = "consumed";
+  g.nextSpawn = 999999;
+  g.surge.anchor = 999999;
+  tick(g, 150);
+  assert.equal(parker.floor, 1);
+  assert.ok(parker.y <= 27, `left the well (y=${parker.y})`);
+  assert.equal(
+    g.events.some((e) => e.type === "climb" && e.actor === "parker"),
+    false,
+  );
 });
 test("a fresh force-field floor carves the well into the north wall and a survivor walks in to climb", () => {
   const probe = createPlayableGame(11, r),

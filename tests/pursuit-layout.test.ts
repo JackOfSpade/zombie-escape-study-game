@@ -90,6 +90,21 @@ test("every study boundary spans the floor with all gaps covered by distinct for
         const fields = f.furniture.filter(
           (o) => o.field && Math.floor(o.y) === row,
         );
+        // One opening per wall: a red field has no neighbour to walk around to.
+        assert.equal(
+          fields.length,
+          1,
+          `seed ${seed} floor ${f.index}: ${fields.length} openings in wall ${row}`,
+        );
+        assert.equal(
+          fields[0].id,
+          row === stages[0].rear
+            ? `f${f.index}-room2-door`
+            : `f${f.index}-room${stages.find((s) => s.front === row)!.room}-forward`,
+        );
+        let gaps = 0;
+        for (let x = 2; x < 42; x++) if (!f.tiles[row][x]) gaps++;
+        assert.equal(gaps, 3, `seed ${seed} floor ${f.index}: wall ${row}`);
         for (let x = 2; x < 42; x++)
           if (!f.tiles[row][x]) {
             const covering = fields.filter(
@@ -275,6 +290,21 @@ test("generation validation rejects bypasses, inaccessible terminals and insuffi
   const row = f.generation!.stages![0].front;
   f.tiles[row][21] = 0;
   assert.ok(pursuitLayoutErrors(g, f).some((s) => s.includes("opening")));
+  Object.assign(f, structuredClone(saved));
+  assert.deepEqual(pursuitLayoutErrors(g, f), []);
+  // A second, covered opening in a front wall is a walk-around and is rejected.
+  const forward = f.furniture.find((o) => o.id === "f0-room2-forward")!;
+  const x = forward.x < 22 ? 35.5 : 8.5;
+  for (let dx = -1; dx <= 1; dx++) f.tiles[row][Math.floor(x) + dx] = 0;
+  f.furniture.push({
+    ...structuredClone(forward),
+    id: "f0-room2-second",
+    x,
+  });
+  assert.deepEqual(
+    pursuitLayoutErrors(g, f).filter((s) => s.startsWith("wall ")),
+    [`wall ${row} has 2 openings`],
+  );
   Object.assign(f, structuredClone(saved));
   for (let y = 2; y < 28; y++) f.tiles[y][1] = 0;
   f.tiles[26][2] = f.tiles[3][2] = 0;

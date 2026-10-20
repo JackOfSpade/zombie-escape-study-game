@@ -27,10 +27,33 @@ export function fieldAllows(o: Furniture, a: Pick<Actor, "id" | "access">) {
     (o.destroyed ||
       f.authorized.includes(a.id) ||
       f.crossing.includes(a.id) ||
-      (f.exit
-        ? a.access.includes(o.floor)
-        : f.limit === undefined || f.used < f.limit))
+      (f.exit && a.access.includes(o.floor)) ||
+      (f.limit === undefined ? !f.exit : f.used < f.limit))
   );
+}
+/** Whether an intact force field lies on the straight segment a->b. */
+export function fieldBetween(f: Floor, a: Point, b: Point): boolean {
+  const near = f.furniture.filter((o) => {
+    if (!o.field || o.destroyed) return false;
+    const r = (o.w + o.h) / 2;
+    return (
+      o.x + r >= Math.min(a.x, b.x) &&
+      o.x - r <= Math.max(a.x, b.x) &&
+      o.y + r >= Math.min(a.y, b.y) &&
+      o.y - r <= Math.max(a.y, b.y)
+    );
+  });
+  if (near.length === 0) return false;
+  const d = Math.hypot(b.x - a.x, b.y - a.y),
+    n = Math.max(1, Math.ceil(d / 0.15));
+  for (let i = 0; i <= n; i++) {
+    const p = {
+      x: a.x + ((b.x - a.x) * i) / n,
+      y: a.y + ((b.y - a.y) * i) / n,
+    };
+    if (near.some((o) => inFurniture(p, o))) return true;
+  }
+  return false;
 }
 /** Whether an actor can plan an interaction, including spending its own key. */
 export function canUseField(o: Furniture, a: Actor) {
@@ -48,7 +71,7 @@ export function useField(g: Game, a: Actor, o: Furniture) {
   if ((a.keys ?? 0) < 1) {
     if (a.id === "human")
       g.notice =
-        "Red force field: one key required. Solve a solo terminal to earn a key, or find a green entrance.";
+        "Red force field: one key required, or solve a solo terminal on this floor for access. There is no other way through this wall.";
     return false;
   }
   a.keys = (a.keys ?? 0) - 1;
@@ -217,7 +240,7 @@ function ejectFromField(g: Game, o: Furniture, a: Actor, side: number) {
     g.notice =
       (a.keys ?? 0) > 0
         ? "Red force field. Press E to spend a key."
-        : "Red force field: entry denied. One key is required; solve a terminal or find a green entrance.";
+        : "Red force field: entry denied. A key or a solved solo terminal on this floor is required.";
   const ev = event(
     g,
     "field-denied",
@@ -286,7 +309,10 @@ export function updateFields(g: Game, previous?: ReadonlyMap<string, Point>) {
         .sort((a, b) => a.time - b.time || a.a.id.localeCompare(b.a.id));
       for (const { a, origin } of candidates) {
         if (paidAccess(o, a) || f.crossing.includes(a.id)) continue;
-        if (f.exit || (f.limit !== undefined && f.used >= f.limit)) {
+        if (
+          (f.limit === undefined && f.exit) ||
+          (f.limit !== undefined && f.used >= f.limit)
+        ) {
           // Native contact slop at a closed face is harmless. Actual overlap is
           // removed now, before another physics step or a rendered frame.
           if (inFurniture(a, o, FIELD_RADIUS - 0.01))
@@ -310,7 +336,7 @@ export function updateFields(g: Game, previous?: ReadonlyMap<string, Point>) {
             const sealed = event(
               g,
               "field-sealed",
-              "Entrance free passes exhausted. Personal keys or alternate routes are now required.",
+              "Free passes exhausted. A personal key or a solved solo terminal on this floor is now required.",
               floor.index,
             );
             sealed.position = { x: o.x, y: o.y };

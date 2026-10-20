@@ -190,6 +190,8 @@ export interface Actor extends Point {
   noiseUntil?: number;
   noiseLevel?: number;
   blockedTime?: number;
+  /** Net progress toward the current waypoint: its position, best distance and time of last improvement. */
+  routeProgress?: { x: number; y: number; best: number; at: number };
   threatMemory?: import("./npc-threat-memory").ThreatMemory;
   studyLoop?: import("./npc-study-loop").StudyLoop;
   studyLoopCheckAt?: number;

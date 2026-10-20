@@ -72,12 +72,16 @@ test("keys are consumed once, never shared, and remain spent through save/restor
     fieldAllows(restored.floors[0].furniture[0], restored.survivors[0]),
   );
 });
-test("entrance quota is consumed on first touch, closes permanently and spares forward exits", () => {
+test("merged forward opening consumes free passes on first touch, closes permanently and stays green with floor access", () => {
   const g = createPlayableGame(42, roadmap),
     a = g.survivors[0];
-  const o = g.floors[0].furniture.find((o) => o.id === "f0-room0-door")!;
+  const o = g.floors[0].furniture.find((o) => o.id === "f0-room2-forward")!;
+  assert.equal(o.field!.exit, true);
+  assert.equal(o.field!.direction, -1);
+  assert.ok(o.field!.limit! >= 3);
   o.field!.limit = 1;
   const f = o.field!;
+  assert.equal(fieldAllows(o, a), true, "free passes remain");
   Object.assign(a, { x: o.x, y: o.y + 1.2 });
   updateFields(g);
   Object.assign(a, { x: o.x, y: o.y });
@@ -97,11 +101,22 @@ test("entrance quota is consumed on first touch, closes permanently and spares f
   a.y = o.y - 1.2;
   updateFields(g);
   assert.equal(f.used, 1);
-  const exit = g.floors[0].furniture.find((o) => o.id === "f0-room0-forward")!;
-  assert.equal(exit.field!.limit, undefined);
-  a.access.push(0);
-  assert.ok(fieldAllows(exit, a));
+  assert.ok(
+    g.events.some((e) => e.type === "field-sealed"),
+    "Reaching the quota seals the opening",
+  );
   assert.equal(fieldAllows(o, a), false);
+  assert.equal(
+    g.floors[0].furniture.filter(
+      (other) => other.field && Math.floor(other.y) === Math.floor(o.y),
+    ).length,
+    1,
+    "No alternate opening in the same wall",
+  );
+  a.access.push(0);
+  assert.ok(fieldAllows(o, a));
+  updateFields(g);
+  assert.equal(f.used, 1);
 });
 test("NPC routes exclude red fields when they have no key", () => {
   const r = fixture("force-field-personal"),
@@ -271,9 +286,14 @@ test("zero-key floors retain a free study route and enough initial solo opportun
             g.encounters[s.encounter].questionRoom ===
             `f${f.index}-room${room}`,
         );
+        // The single opening a room is entered through: the public door for
+        // room 2, otherwise the previous stage's merged forward field.
+        const entry = f.doors[room];
         const door = f.furniture.find(
-          (o) => o.id === `f${f.index}-room${room}-door`,
+          (o) => o.field && o.x === entry.x && o.y === entry.y,
         )!;
+        assert.ok(door, `seed ${seed} floor ${f.index} room ${room} entry`);
+        assert.equal(door.field!.publicEntry === true, room === 2);
         capacity += Math.min(stations.length, door.field!.limit ?? Infinity);
         if (door.field!.limit !== undefined)
           door.field!.used = door.field!.limit;

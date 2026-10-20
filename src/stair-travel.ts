@@ -7,8 +7,11 @@ import {
   event,
 } from "./model";
 import { walkSegment } from "./navigation";
-import { solid } from "./spatial";
-import { inStairwell } from "./stairwell";
+import { line, solid } from "./spatial";
+import { STAIRWELL_RADIUS, inStairwell, stairwell } from "./stairwell";
+
+/** On a carved well, walking this close to the marker completes the flight. */
+export const STAIRWELL_DEEP = STAIRWELL_RADIUS / 2;
 
 export interface StairTravel {
   fromFloor: number;
@@ -121,9 +124,13 @@ export function advanceStairs(g: Game, a: Actor) {
     cancelStairs(g, a);
     return false;
   }
-  if (g.time + 1e-8 < travel.until) return true;
+  const deep =
+    source.layout === "pursuit" && distance(a, marker) <= STAIRWELL_DEEP;
+  if (!deep && g.time + 1e-8 < travel.until) return true;
   const f = g.floors[travel.toFloor];
-  const candidates = [
+  if (!f) return true;
+  const well = stairwell(f, travel.toFloor > travel.fromFloor ? "down" : "up");
+  const points: Point[] = [
     { x: 0, y: 0 },
     { x: 0, y: 0.7 },
     { x: 0.7, y: 0 },
@@ -133,22 +140,46 @@ export function advanceStairs(g: Game, a: Actor) {
     x: travel.destination.x + p.x,
     y: travel.destination.y + p.y,
   }));
-  const landing = candidates.find(
-    (p) =>
-      !solid(f, p) &&
-      walkSegment(f, travel.destination, p) &&
-      !g.survivors.some(
-        (b) =>
-          b !== a &&
-          b.alive &&
-          !b.escaped &&
-          b.floor === travel.toFloor &&
-          distance(b, p) < 0.55,
-      ) &&
-      !g.zombies.some(
-        (z) => z.hp > 0 && z.floor === travel.toFloor && distance(z, p) < 0.55,
-      ),
+  points.push({ ...well.mouth });
+  for (const depth of [0.5, 1, 1.5, 2, 2.5])
+    for (const lateral of [0, 0.5, -0.5])
+      points.push({
+        x: well.mouth.x + lateral,
+        y: well.mouth.y + well.open * depth,
+      });
+  const destinationBlocked = solid(
+    f,
+    travel.destination,
+    0.25,
+    undefined,
+    true,
   );
+  const candidates = points
+    .map((p, i) => ({ p, i, d: distance(p, travel.destination) }))
+    .sort((u, v) => u.d - v.d || u.i - v.i)
+    .map((c) => c.p)
+    .filter(
+      (p) =>
+        !solid(f, p) &&
+        (walkSegment(f, travel.destination, p) ||
+          // Furniture on the destination itself: the landing only needs a
+          // wall-free line from the staircase, never a spot inside furniture.
+          (destinationBlocked && line(f, travel.destination, p))),
+    );
+  const free = (p: Point) =>
+    !g.survivors.some(
+      (b) =>
+        b !== a &&
+        b.alive &&
+        !b.escaped &&
+        b.floor === travel.toFloor &&
+        distance(b, p) < 0.55,
+    ) &&
+    !g.zombies.some(
+      (z) => z.hp > 0 && z.floor === travel.toFloor && distance(z, p) < 0.55,
+    );
+  // A crowded landing never blocks a flight forever: physics separates bodies.
+  const landing = candidates.find(free) ?? candidates[0];
   if (!landing) {
     if (a.id === "human")
       g.notice = "Stair landing blocked. Step back out to stay on this floor.";

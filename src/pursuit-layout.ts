@@ -64,7 +64,8 @@ export function pursuitLayout(g: Game, f: Floor) {
     point: Point,
     w: number,
     h: number,
-    entrance?: number,
+    kind: "public" | "forward" | "gate",
+    room = 0,
   ) => {
     for (
       let y = Math.floor(point.y - h / 2);
@@ -77,7 +78,7 @@ export function pursuitLayout(g: Game, f: Floor) {
         x++
       )
         f.tiles[y][x] = 0;
-    const publicEntry = entrance === 2;
+    const hp = kind === "gate" ? 900 : 1200;
     const o: Furniture = {
       id,
       floor: f.index,
@@ -85,8 +86,8 @@ export function pursuitLayout(g: Game, f: Floor) {
       ...point,
       w,
       h,
-      hp: entrance === undefined ? 900 : 1200,
-      maxHp: entrance === undefined ? 900 : 1200,
+      hp,
+      maxHp: hp,
       speed: 0,
       rotation: 0,
       destroyed: false,
@@ -102,20 +103,20 @@ export function pursuitLayout(g: Game, f: Floor) {
         crossing: [],
         sides: {},
         used: 0,
-        exit: entrance === undefined,
-        ...(publicEntry
+        exit: kind === "forward",
+        ...(kind === "public"
           ? { publicEntry: true }
-          : entrance !== undefined
-            ? { limit: 3 + ((g.seed + f.index + entrance) % 3), direction: -1 }
+          : kind === "forward"
+            ? { limit: 3 + ((g.seed + f.index + room) % 3), direction: -1 }
             : {}),
       },
     };
     f.furniture.push(o);
     return o;
   };
-  // Entry quotas remain optional openings. Credentialed forward exits are independent.
-  // Adjacent stages share a wall, but their entry and exit occupy opposite
-  // halves of it. Each pair is rolled separately, avoiding a repeated hallway.
+  // One opening per shared wall: each stage's single forward field is green
+  // with floor access, admits a few first-touch visitors from the rear, and
+  // otherwise needs a personal key. A red field cannot be walked around.
   const exits = stages.map((stage) => ({
     x:
       stage.room === 1
@@ -124,18 +125,23 @@ export function pursuitLayout(g: Game, f: Floor) {
     y: stage.front + 0.5,
   }));
   for (const [i, stage] of stages.entries()) {
-    const previousExit = exits[i - 1];
-    const entry = {
-      x:
-        i === 0
-          ? 21.5
-          : 7.5 + Math.floor(rand(random) * 7) + (previousExit.x < 22 ? 23 : 0),
-      y: stage.rear + 0.5,
-    };
+    // The retired separate entry position was rolled here; keep consuming the
+    // roll so each seed's room sizes and terminal arrangement stay unchanged.
+    if (i > 0) rand(random);
+    const entry =
+      i === 0 ? { x: 21.5, y: stage.rear + 0.5 } : { ...exits[i - 1] };
     const exit = exits[i];
     f.doors[stage.room] = entry;
-    add(`f${f.index}-room${stage.room}-door`, entry, 3, 1, stage.room);
-    add(`f${f.index}-room${stage.room}-forward`, exit, 3, 1);
+    if (i === 0)
+      add(`f${f.index}-room${stage.room}-door`, entry, 3, 1, "public");
+    add(
+      `f${f.index}-room${stage.room}-forward`,
+      exit,
+      3,
+      1,
+      "forward",
+      stage.room,
+    );
     Object.assign(f.rooms[stage.room], {
       forwardEntry: entry,
       forwardExit: exit,
@@ -144,7 +150,7 @@ export function pursuitLayout(g: Game, f: Floor) {
   if (f.index === 0) {
     for (let y = 29; y < H; y++)
       for (let x = 18; x <= 25; x++) f.tiles[y][x] = 0;
-    const main = add("main-gate", { x: 22, y: 28.5 }, 4, 1);
+    const main = add("main-gate", { x: 22, y: 28.5 }, 4, 1, "gate");
     main.hp = main.maxHp = originalMain?.maxHp ?? 600;
     main.field!.exit = false;
   }
@@ -245,8 +251,17 @@ export function pursuitLayoutErrors(g: Game, f: Floor): string[] {
   };
   const contains = (seen: Set<number>, p: Point) =>
     seen.has(Math.floor(p.y) * W + Math.floor(p.x));
-  const entries = fields.filter((o) => /-room\d-door$/.test(o.id));
-  const egress = flood(f.stairs, entries);
+  // One opening per wall: a red field must have no green neighbour to walk to.
+  for (const row of [stages[0].rear, ...stages.map((s) => s.front)]) {
+    const count = fields.filter((o) => Math.floor(o.y) === row).length;
+    if (count !== 1) errors.push(`wall ${row} has ${count} openings`);
+  }
+  // Credentialed egress: with every free-pass quota exhausted and no key, a
+  // survivor with floor access passes exactly the exit and public fields.
+  const sealed = fields.filter(
+    (o) => !o.field!.exit && o.field!.limit !== undefined,
+  );
+  const egress = flood(f.stairs, sealed);
   const freeStudy = flood(
     f.entry,
     fields.filter((o) => !o.field!.publicEntry),

@@ -6,6 +6,7 @@ import {
   useField,
   canUseField,
   fieldRouteSignature,
+  fieldBetween,
 } from "./force-fields";
 import { planVault } from "./vault";
 import { recordZombieTrails } from "./blood";
@@ -84,7 +85,9 @@ import {
   beginStairs,
   cancelStairs,
   enterStairs,
+  stairwellAt,
 } from "./stair-travel";
+import { stairwell } from "./stairwell";
 import {
   chooseRetreat,
   routeContacts,
@@ -804,6 +807,7 @@ function follow(
     a.navTarget = { ...target };
     a.repath = 0;
     a.path = [];
+    delete a.routeProgress;
   }
   a.repath -= dt;
   if (!a.path.length && a.repath <= 0) {
@@ -951,6 +955,81 @@ function follow(
     a.repath = 0;
     a.blockedTime = 0;
   }
+  if (!p.action && a.path[0] === p) trackRouteProgress(g, a, p);
+}
+
+/**
+ * Contact with a standing body can push an NPC back every tick, so it keeps
+ * "moving" without approaching its waypoint. After 0.8 s without net progress
+ * step sideways (away from the blocker, never into a doorway) and replan from there.
+ */
+function trackRouteProgress(g: Game, a: Actor, p: Point) {
+  const gap = distance(a, p),
+    progress = a.routeProgress;
+  if (!progress || distance(progress, p) > 0.05) {
+    a.routeProgress = { x: p.x, y: p.y, best: gap, at: g.time };
+    return;
+  }
+  if (gap < progress.best - 0.05) {
+    progress.best = gap;
+    progress.at = g.time;
+    return;
+  }
+  if (g.time - progress.at <= 0.8) return;
+  const f = g.floors[a.floor],
+    heading = a.heading;
+  let blocker: Actor | undefined;
+  for (const b of g.survivors)
+    if (
+      b !== a &&
+      b.alive &&
+      !b.escaped &&
+      b.floor === a.floor &&
+      distance(a, b) <= 1 &&
+      (b.x - a.x) * heading.x + (b.y - a.y) * heading.y > 0 &&
+      (!blocker || distance(a, b) < distance(a, blocker))
+    )
+      blocker = b;
+  const n = { x: -heading.y, y: heading.x };
+  let sides = [1, -1];
+  if (blocker) {
+    const away = (s: number) =>
+      distance({ x: a.x + s * n.x, y: a.y + s * n.y }, blocker!);
+    if (away(-1) > away(1)) sides = [-1, 1];
+  }
+  for (const side of sides)
+    for (const reach of [0.7, 1.0, 1.3]) {
+      const c = {
+        x: a.x + side * n.x * reach,
+        y: a.y + side * n.y * reach,
+      };
+      if (
+        !solid(f, c, 0.25) &&
+        walkSegment(f, a, c) &&
+        !g.survivors.some(
+          (b) =>
+            b !== a &&
+            b.alive &&
+            !b.escaped &&
+            b.floor === a.floor &&
+            distance(b, c) < 0.6,
+        ) &&
+        !g.zombies.some(
+          (z) => z.hp > 0 && z.floor === a.floor && distance(z, c) < 0.6,
+        ) &&
+        !f.furniture.some(
+          (o) => o.field && !o.destroyed && inFurniture(c, o, 0.3),
+        )
+      ) {
+        a.path = [c];
+        a.repath = 0.3;
+        delete a.routeProgress;
+        return;
+      }
+    }
+  a.path = [];
+  a.repath = 0;
+  a.routeProgress = { x: p.x, y: p.y, best: gap, at: g.time };
 }
 
 function yieldFurniture(g: Game, a: Actor, dt: number) {
@@ -1266,12 +1345,17 @@ function npc(g: Game, a: Actor, dt: number) {
     }
   }
 
-  const enemies = g.zombies.filter(
-    (z) =>
-      z.floor === a.floor &&
-      z.hp > 0 &&
-      canSee(f, a, z, Math.min(9, sightRadius(f))),
-  );
+  const sighted = g.zombies
+    .filter(
+      (z) =>
+        z.floor === a.floor &&
+        z.hp > 0 &&
+        canSee(f, a, z, Math.min(9, sightRadius(f))),
+    )
+    .sort((b, c) => distance(a, b) - distance(a, c));
+  // An intact force field is cover: a zombie behind it cannot reach the
+  // survivor until it breaks through, so it does not trigger a retreat.
+  const enemies = sighted.filter((z) => !fieldBetween(f, a, z));
   let near: Zombie | undefined = enemies.sort(
     (b, c) => distance(a, b) - distance(a, c),
   )[0];
@@ -1322,12 +1406,20 @@ function npc(g: Game, a: Actor, dt: number) {
     if (light) useItem(g, a, light.id);
   }
   near = enemies.find((z) => z.hp > 0);
-  rememberThreats(g, a, enemies);
+  // Memory keeps every sighting so a study loop can plan around a zombie that
+  // may break a field; retreat planning ignores positions covered by a field.
+  rememberThreats(g, a, sighted);
+  const remembered = rememberedThreats(g, a);
   const liveThreats = enemies.filter((z) => z.hp > 0),
     liveIds = new Set(liveThreats.map((z) => z.id));
   const planningThreats = [
     ...liveThreats,
-    ...rememberedThreats(g, a).filter((p) => !liveIds.has(p.id)),
+    ...remembered.filter(
+      (p) =>
+        !liveIds.has(p.id) &&
+        !sighted.some((z) => z.id === p.id) &&
+        !fieldBetween(f, a, p),
+    ),
   ];
   let attention = 0.4;
   delete a.handling;
@@ -1340,7 +1432,13 @@ function npc(g: Game, a: Actor, dt: number) {
     delete a.fleeTarget;
     a.fleeUntil = 0;
   }
-  const studyLoop = studyLoopDecision(g, a, planningThreats);
+  // A study loop plans around every sighted zombie, field-covered ones
+  // included: a field between the survivor and its station can be broken.
+  const loopThreats = [
+    ...sighted,
+    ...remembered.filter((p) => !sighted.some((z) => z.id === p.id)),
+  ];
+  const studyLoop = studyLoopDecision(g, a, loopThreats);
   if (studyLoop?.mode === "move") {
     a.activity = "fleeing";
     delete a.station;
@@ -1434,8 +1532,12 @@ function npc(g: Game, a: Actor, dt: number) {
       a.activity = "defending";
       return;
     }
-    follow(g, a, f.stairs, dt);
-    stairs(g, a);
+    if (a.stairwell === "up" && !a.stairTravel) {
+      // A cancelled flight restarts only after stepping out and back in.
+      const well = stairwell(f, "up");
+      follow(g, a, { x: well.mouth.x, y: well.mouth.y + well.open * 1.0 }, dt);
+    } else follow(g, a, f.stairs, dt);
+    if (!a.stairTravel && !a.stairwell) stairs(g, a);
   } else {
     // Local exploration: choose visible available stations, never use a station remotely.
     const candidates = f.stations.filter(
@@ -1507,7 +1609,11 @@ function npc(g: Game, a: Actor, dt: number) {
         }
         delete a.target;
       }
-      if (a.y >= 28) {
+      const standingIn = a.stairTravel ? undefined : stairwellAt(g, a);
+      if (standingIn) {
+        const well = stairwell(f, standingIn);
+        a.target = { x: well.mouth.x, y: well.mouth.y + well.open * 1.0 };
+      } else if (f.layout !== "pursuit" && a.y >= 28) {
         a.target = { ...f.entry };
       }
       if (!a.target) {

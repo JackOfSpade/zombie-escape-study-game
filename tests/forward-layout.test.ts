@@ -38,11 +38,25 @@ test("randomized fresh floors give every terminal a forward route with its origi
     const g = createPlayableGame(seed, roadmap);
     for (const f of g.floors.slice(0, 4)) {
       assert.equal(f.generation?.version, 3);
-      const blocked = new Set<number>();
-      for (const [room, d] of f.doors.entries()) {
+      const mouths = new Set<number>();
+      for (const room of f.rooms ?? [])
+        if (room.innerMouth)
+          mouths.add(
+            Math.floor(room.innerMouth.y) * W + Math.floor(room.innerMouth.x),
+          );
+      for (const station of f.stations) {
+        const questionRoom = g.encounters[station.encounter]?.questionRoom;
+        const match = /^f(\d+)-room(\d+)$/.exec(questionRoom ?? "");
+        assert.ok(match, `seed${seed} ${station.id} room ${questionRoom}`);
+        assert.equal(Number(match[1]), f.index);
+        const d = f.doors[Number(match[2])];
+        assert.ok(d, `seed${seed} ${station.id} entry ${questionRoom}`);
         const o = f.furniture.find(
-          (o) => o.id === `f${f.index}-room${room}-door`,
-        )!;
+          (o) =>
+            o.field && Math.abs(o.x - d.x) < 0.1 && Math.abs(o.y - d.y) < 0.1,
+        );
+        assert.ok(o, `seed${seed} ${station.id} entry field ${questionRoom}`);
+        const blocked = new Set(mouths);
         for (
           let y = Math.floor(d.y - o.h / 2);
           y < Math.ceil(d.y + o.h / 2);
@@ -54,17 +68,11 @@ test("randomized fresh floors give every terminal a forward route with its origi
             x++
           )
             blocked.add(y * W + x);
-      }
-      for (const room of f.rooms ?? [])
-        if (room.innerMouth)
-          blocked.add(
-            Math.floor(room.innerMouth.y) * W + Math.floor(room.innerMouth.x),
-          );
-      for (const station of f.stations)
         assert.ok(
           forwardPath(f, station, blocked),
           `seed${seed} floor${f.index} ${station.id}`,
         );
+      }
       for (const o of f.furniture)
         if (o.kind !== "door")
           assert.ok(canPlace(f, o, o), `initial footprint ${seed}/${o.id}`);

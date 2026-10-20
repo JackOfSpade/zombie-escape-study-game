@@ -104,7 +104,7 @@
         "field": "hp"
       },
       "op": "eq",
-      "expected": 900
+      "expected": 1200
     }
   ],
   "layout": "forward",
