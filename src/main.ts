@@ -866,7 +866,7 @@ function renderTerminal(force = false) {
       (disconnected
         ? "ChatGPT is disconnected. Your work is saved. Connect ChatGPT sets everything up and opens ChatGPT for you."
         : unheard
-          ? "ChatGPT isn't listening for this terminal yet. Connect ChatGPT opens it for you with the request ready."
+          ? "ChatGPT isn't listening for this terminal yet. Connect ChatGPT opens a new chat and copies the request for you to paste."
           : ""),
   );
   $("#connect-completion").hidden =
@@ -1089,6 +1089,10 @@ $("#connect-completion").onclick = () => {
   // after this page reloads, gets the same ChatGPT tab back (an empty URL
   // returns an existing named tab without navigating it) instead of adding
   // one the player has to close.
+  // The request goes on the clipboard rather than in the chat URL: ChatGPT
+  // sends a ?q= request at once, before the player can pick a model and
+  // thinking level. Copy first, while this page still has focus.
+  if (relayListening() !== true) copyTerminalRequest();
   const tab =
     relayListening() === true ? null : window.open("", CHATGPT_TAB_NAME);
   void reconnectChatGpt(tab, tab ? blankTab(tab) : false);
@@ -1588,13 +1592,26 @@ const blankTab = (tab: Window) => {
     return false;
   }
 };
-/** A new ChatGPT chat with the request typed in. ChatGPT may send it on its
- * own; links from other sites are sometimes only prefilled. */
-const CHATGPT_TERMINAL_URL =
-  "https://chatgpt.com/?q=" +
-  encodeURIComponent(
-    "Open my zombie-escape-study-game study terminal so it can serve my game's terminal turns.",
-  );
+/** A new, empty ChatGPT chat. The request is pasted by the player so they can
+ * choose the model and thinking level before it is sent. */
+const CHATGPT_NEW_CHAT_URL = "https://chatgpt.com/";
+const CHATGPT_TERMINAL_REQUEST =
+  "Open my zombie-escape-study-game study terminal so it can serve my game's terminal turns.";
+/** Whether the last Connect press put the request on the clipboard. */
+let terminalRequestCopied = false;
+function copyTerminalRequest() {
+  terminalRequestCopied = false;
+  void navigator.clipboard
+    ?.writeText(CHATGPT_TERMINAL_REQUEST)
+    .then(() => {
+      terminalRequestCopied = true;
+    })
+    .catch(() => {});
+}
+const pasteRequestStep = () =>
+  terminalRequestCopied
+    ? "The request is on your clipboard: choose your model and thinking level, paste it, then press Enter."
+    : `Choose your model and thinking level, then send: "${CHATGPT_TERMINAL_REQUEST}"`;
 function reportReconnect(text: string | null) {
   reconnectProgress = text;
   if (active) renderTerminal();
@@ -1671,22 +1688,22 @@ async function reconnectChatGpt(tab: Window | null = null, fresh = false) {
       const ready = relayServes(info);
       if (ready) break;
       if (i === 0) {
-        // Point the reserved tab at a new ChatGPT chat with the request typed
-        // in; if the browser blocked it, offer the same chat as a link.
+        // Point the reserved tab at a new, empty ChatGPT chat; if the browser
+        // blocked it, offer the same chat as a link.
         if (tab && !tab.closed) {
-          tab.location.href = CHATGPT_TERMINAL_URL;
+          tab.location.href = CHATGPT_NEW_CHAT_URL;
           chatOpened = true;
           try {
             tab.focus();
           } catch {
             // A browser may refuse to raise the tab; the notice says where it is.
           }
-        } else reconnectChatUrl = CHATGPT_TERMINAL_URL;
+        } else reconnectChatUrl = CHATGPT_NEW_CHAT_URL;
       }
       reportReconnect(
         chatOpened
-          ? `Connected and released. ${fresh ? "ChatGPT opened in a new tab" : "Your ChatGPT tab moved to a new chat"} with the request typed in; if it didn't send by itself, press Enter there. This clears when your terminal is ready.`
-          : "Connected and released. Open ChatGPT below to start your study terminal; if the request doesn't send by itself, press Enter there. This clears when your terminal is ready.",
+          ? `Connected and released. ${fresh ? "ChatGPT opened in a new tab" : "Your ChatGPT tab moved to a new chat"}. ${pasteRequestStep()} This clears when your terminal is ready.`
+          : `Connected and released. Open ChatGPT below to start your study terminal. ${pasteRequestStep()} This clears when your terminal is ready.`,
       );
       await wait(3000);
     }

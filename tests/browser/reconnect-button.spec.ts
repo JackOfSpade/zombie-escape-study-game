@@ -37,6 +37,7 @@ async function openSoloTerminal(page: Page, resume = false) {
 test("Reconnect ChatGPT runs the whole sequence itself, keeps Settings closed, reports done and disappears", async ({
   page,
 }) => {
+  await page.context().grantPermissions(["clipboard-read", "clipboard-write"]);
   const relay = {
     enabled: false,
     verified: false,
@@ -121,9 +122,11 @@ test("Reconnect ChatGPT runs the whole sequence itself, keeps Settings closed, r
   });
   await expect(notice).toContainText("ChatGPT opened in a new tab");
   expect(actions).toEqual(["start-public", "enable"]);
-  // The reserved tab now holds a new ChatGPT chat with the request typed in.
-  await chat.waitForURL(/^https:\/\/chatgpt\.com\/\?q=/);
-  expect(new URL(chat.url()).searchParams.get("q")).toMatch(
+  // The reserved tab now holds a new, empty ChatGPT chat; the request is on
+  // the clipboard so the player picks the thinking level before sending.
+  await chat.waitForURL(/^https:\/\/chatgpt\.com\/$/);
+  await expect(notice).toContainText("paste it, then press Enter");
+  expect(await page.evaluate(() => navigator.clipboard.readText())).toMatch(
     /zombie-escape-study-game study terminal/,
   );
   await expect(page.locator("#settings")).toBeHidden();
@@ -247,7 +250,7 @@ test("a queued terminal message says when nothing in ChatGPT is listening", asyn
   const popup = page.waitForEvent("popup");
   await button.click();
   const chat = await popup;
-  await chat.waitForURL(/^https:\/\/chatgpt\.com\/\?q=/);
+  await chat.waitForURL(/^https:\/\/chatgpt\.com\/$/);
   await expect(page.locator("#completion-connection")).toContainText(
     "ChatGPT opened in a new tab",
   );
@@ -274,7 +277,7 @@ test("a queued terminal message says when nothing in ChatGPT is listening", asyn
   activeSessions = 0;
   await expect(button).toBeVisible({ timeout: 15_000 });
   await button.click();
-  await chat.waitForURL(/^https:\/\/chatgpt\.com\/\?q=/);
+  await chat.waitForURL(/^https:\/\/chatgpt\.com\/$/);
   await expect(page.locator("#completion-connection")).toContainText(
     "Your ChatGPT tab moved to a new chat",
   );
@@ -294,7 +297,7 @@ test("a queued terminal message says when nothing in ChatGPT is listening", asyn
   await page.locator("#chat-form button").click();
   await expect(button).toBeVisible({ timeout: 15_000 });
   await button.click();
-  await chat.waitForURL(/^https:\/\/chatgpt\.com\/\?q=/);
+  await chat.waitForURL(/^https:\/\/chatgpt\.com\/$/);
   await expect(page.locator("#completion-connection")).toContainText(
     "Your ChatGPT tab moved to a new chat",
   );
