@@ -1,3 +1,4 @@
+import { openGameMenu } from "./helpers/game-menu";
 // Synthetic native protocol and source rows, not real learner certification.
 import { expect, test } from "@playwright/test";
 import { readFile } from "node:fs/promises";
@@ -164,6 +165,7 @@ test("reviewed source invalidation withdraws a prior imported pass without learn
   const before = await page.evaluate(() =>
     JSON.stringify((window as any).__deadAir.game.study.learner),
   );
+  await openGameMenu(page);
   await page.locator("#curriculum-button").click();
   await page.getByText("Review an updated roadmap", { exact: true }).click();
   await page.locator("#roadmap-review-file").setInputFiles({

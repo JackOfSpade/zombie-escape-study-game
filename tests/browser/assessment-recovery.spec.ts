@@ -1,3 +1,4 @@
+import { openGameMenu } from "./helpers/game-menu";
 import { expect, test } from "@playwright/test";
 
 test("importing a lower-sequence run still assesses its retained human completion", async ({
@@ -42,12 +43,16 @@ test("importing a lower-sequence run still assesses its retained human completio
   await expect(page.locator("#event-feed")).toContainText(
     "Synthetic prior-run high sequence",
   );
+  await openGameMenu(page);
   await page.locator("#settings-toggle").click();
   await page.locator("#import").setInputFiles({
     name: "synthetic-import.json",
     mimeType: "application/json",
     buffer: Buffer.from(saved),
   });
+  await expect(page.locator("#pause-home")).toBeVisible();
+  // Imported worlds remain paused until the player resumes automatic work.
+  await page.locator("#resume-game").click();
   await expect
     .poll(() =>
       page.evaluate(
@@ -104,12 +109,11 @@ test("retrying an assessment durably captures its pending request before a reply
       await save(g);
     });
     // A paused world cannot autosave an otherwise unsaved retry later.
-    await page.keyboard.press("Escape");
-    await page.locator("#resume-game").click();
+    await openGameMenu(page);
     await page.locator("#curriculum-button").click();
-    await page.evaluate(() => {
-      (window as any).__deadAir.game.paused = true;
-    });
+    expect(
+      await page.evaluate(() => (window as any).__deadAir.game.paused),
+    ).toBe(true);
     hold = true;
     await page.locator("[data-assessment]").click();
     await expect(page.locator("[data-assessment]")).toBeDisabled();

@@ -1,3 +1,4 @@
+import { openGameMenu } from "./helpers/game-menu";
 // Actual UI, controlled source judgment; no real learner data is corrected.
 import { expect, test } from "@playwright/test";
 import { readFile } from "node:fs/promises";
@@ -44,6 +45,7 @@ test("original checkpoint correction exposes complete historical review before a
   const before = await page.evaluate(() =>
     JSON.stringify((window as any).__deadAir.game.study.learner),
   );
+  await openGameMenu(page);
   await page.locator("#curriculum-button").click();
   await page.getByText("Review an updated roadmap", { exact: true }).click();
   await page.locator("#roadmap-review-file").setInputFiles({

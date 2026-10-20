@@ -1,3 +1,4 @@
+import { openGameMenu } from "./helpers/game-menu";
 import { expect, test } from "@playwright/test";
 import { enterLegacyBuilding } from "./helpers/legacy-world";
 
@@ -67,9 +68,11 @@ test("a late player can use an initially generated opportunity after nineteen NP
   await expect
     .poll(() => page.evaluate(() => (window as any).__deadAir.game.time))
     .toBeGreaterThan(time + 0.4);
+  await openGameMenu(page);
   await page.getByRole("button", { name: "Save run", exact: true }).click();
   // The click resolves before the async save; reloading earlier loses it.
   await expect(page.locator("#notice")).toContainText("Run saved locally");
+  await page.locator("#resume-game").click();
   await page.reload();
   await page.waitForFunction(() => !!(window as any).__deadAir);
   await page.locator("#world").focus();

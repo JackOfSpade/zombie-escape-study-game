@@ -1,3 +1,4 @@
+import { openGameMenu } from "./helpers/game-menu";
 // Synthetic bridge responses exercise the real UI/adapter, not native semantic quality.
 import { expect, test } from "@playwright/test";
 import { readFile } from "node:fs/promises";
@@ -174,6 +175,7 @@ for (const scenario of [
       g.encounters["f0-room0"].code = "private draft must survive adoption";
       return JSON.stringify(g.study.learner);
     });
+    await openGameMenu(page);
     await page.locator("#curriculum-button").click();
     await page.getByText("Review an updated roadmap", { exact: true }).click();
     await page.locator("#roadmap-review-file").setInputFiles({
@@ -194,6 +196,7 @@ for (const scenario of [
       expect(calls).toBe(1);
       await page.reload();
       await page.waitForFunction(() => !!(window as any).__deadAir);
+      await openGameMenu(page);
       await page.locator("#curriculum-button").click();
       await page
         .getByRole("button", { name: "Retry saved reconciliation" })
@@ -205,6 +208,7 @@ for (const scenario of [
       await page.reload();
       await page.waitForFunction(() => !!(window as any).__deadAir);
       interruptedRelease();
+      await openGameMenu(page);
       await page.locator("#curriculum-button").click();
       await expect(page.locator("#roadmap-adoption-controls")).toContainText(
         "interrupted",
@@ -219,6 +223,7 @@ for (const scenario of [
       "pending",
     );
     await page.locator("#close-inspector").click();
+    await openGameMenu(page);
     await page.locator("#curriculum-button").click();
     await expect(page.locator("#roadmap-adoption-controls")).toContainText(
       "pending",
@@ -375,6 +380,7 @@ for (const scenario of [
               .status,
         ),
       ).toBe("P");
+    await openGameMenu(page);
     await page.locator("#curriculum-button").click();
     await expect(page.locator("#roadmap-adoption-controls")).toContainText(
       "1 reviewed import(s)",

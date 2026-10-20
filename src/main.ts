@@ -151,9 +151,8 @@ async function persist() {
     return false;
   }
 }
-// These panels are modeless: focus can return to the world while survival runs.
-const panelOrder: string[] = [];
-const panelReturnFocus = new Map<string, HTMLElement>();
+// Settings and agent tools are subpages of the paused game menu.
+let pausePanel: string | undefined;
 function panelToggle(id: string) {
   return $(id === "settings" ? "#settings-toggle" : "#curriculum-button");
 }
@@ -174,31 +173,44 @@ function setHtml(el: Element, html: string) {
   writtenHtml.set(el, html);
   el.innerHTML = html;
 }
+function showPauseHome(focus?: HTMLElement) {
+  for (const id of ["settings", "inspector"]) {
+    $(`#${id}`).hidden = true;
+    panelToggle(id).setAttribute("aria-expanded", "false");
+  }
+  pausePanel = undefined;
+  $("#pause-home").hidden = false;
+  $("#pause-panels").hidden = true;
+  $("#pause-panel-header").hidden = true;
+  const menu = $<HTMLDialogElement>("#pause-menu");
+  delete menu.dataset.panel;
+  menu.setAttribute("aria-labelledby", "pause-title");
+  if (menu.open && focus) focus.focus();
+}
 function openPanel(id: string, focus: string) {
-  const panel = $(`#${id}`);
-  if (panel.hidden && document.activeElement instanceof HTMLElement)
-    panelReturnFocus.set(id, document.activeElement);
-  const previous = panelOrder.indexOf(id);
-  if (previous >= 0) panelOrder.splice(previous, 1);
-  panelOrder.push(id);
-  for (const [index, name] of panelOrder.entries())
-    $(`#${name}`).style.zIndex = String(10 + index);
-  panel.hidden = false;
+  const menu = $<HTMLDialogElement>("#pause-menu");
+  if (!menu.open) setPaused(true);
+  showPauseHome();
+  pausePanel = id;
+  $("#pause-home").hidden = true;
+  $("#pause-panels").hidden = false;
+  $("#pause-panel-header").hidden = false;
+  $(`#${id}`).hidden = false;
   panelToggle(id).setAttribute("aria-expanded", "true");
+  menu.dataset.panel = id;
+  menu.setAttribute("aria-labelledby", `${id}-title`);
+  $("#pause-panels").scrollTop = 0;
   keys.clear();
   $(focus).focus();
 }
 function closePanel(id: string) {
-  $(`#${id}`).hidden = true;
-  panelToggle(id).setAttribute("aria-expanded", "false");
-  const index = panelOrder.indexOf(id);
-  if (index >= 0) panelOrder.splice(index, 1);
-  const previous = panelReturnFocus.get(id);
-  panelReturnFocus.delete(id);
+  if (pausePanel !== id) return;
   keys.clear();
-  if (previous?.isConnected && !previous.closest("[hidden]")) previous.focus();
-  else canvas.focus();
+  showPauseHome(panelToggle(id));
 }
+$("#pause-back").onclick = () => {
+  if (pausePanel) closePanel(pausePanel);
+};
 function ownsKeyboard(target: EventTarget | null) {
   return (
     target instanceof Element &&
@@ -212,28 +224,44 @@ document.addEventListener("focusin", (ev) => {
 });
 let pauseFocus: HTMLElement | undefined;
 function setPaused(paused: boolean) {
-  if (game.status !== "playing") return;
   const menu = $<HTMLDialogElement>("#pause-menu");
-  game.paused = paused;
+  const playing = game.status === "playing";
   keys.clear();
   acc = 0;
   if (paused) {
-    pauseFocus =
-      document.activeElement instanceof HTMLElement
-        ? document.activeElement
-        : undefined;
+    if (!menu.open)
+      pauseFocus =
+        document.activeElement instanceof HTMLElement
+          ? document.activeElement
+          : undefined;
+    if (playing) game.paused = true;
     audio.stop();
+    showPauseHome();
+    setText("#pause-title", playing ? "Game paused" : "Game menu");
+    setText(
+      "#pause-description",
+      playing
+        ? "The building is frozen. Take a breather."
+        : "Adjust your settings or manage your saved progress.",
+    );
+    setText("#resume-game", playing ? "Resume · Esc" : "Back · Esc");
+    $("#save-quit").hidden = !playing;
     if (!menu.open) menu.showModal();
     $("#resume-game").focus();
   } else {
+    game.paused = false;
+    showPauseHome();
+    document.body.classList.remove("agent-tools");
     menu.close();
-    audio.start();
-    audio.update(game);
-    if (pauseFocus?.isConnected && !pauseFocus.closest("[hidden]"))
+    if (playing) {
+      audio.start();
+      audio.update(game);
+    }
+    if (pauseFocus?.isConnected && !pauseFocus.closest("[hidden], #pause-menu"))
       pauseFocus.focus();
     else canvas.focus();
   }
-  runLogs.record(game, paused ? "pause" : "resume");
+  if (playing) runLogs.record(game, paused ? "pause" : "resume");
   runLogs.capture(game, true);
   void persist().then((saved) => {
     $("#pause-save-status").textContent = saved
@@ -241,13 +269,16 @@ function setPaused(paused: boolean) {
       : saveError;
   });
 }
-$("#pause-toggle").onclick = () => setPaused(!game.paused);
+$("#pause-toggle").onclick = () =>
+  setPaused(!$<HTMLDialogElement>("#pause-menu").open);
 $("#resume-game").onclick = () => setPaused(false);
 $("#restart-game").onclick = () => void fresh($("#pause-save-status"));
 $("#save-quit").onclick = () => void saveAndQuit();
 $("#pause-menu").addEventListener("cancel", (event) => {
   event.preventDefault();
-  if (!restarting) setPaused(false);
+  if (restarting) return;
+  if (pausePanel) closePanel(pausePanel);
+  else setPaused(false);
 });
 window.addEventListener("error", (event) => {
   runLogs.record(game, "browser-error", {
@@ -261,6 +292,7 @@ window.addEventListener("unhandledrejection", () => {
   void runLogs.flush();
 });
 function begin() {
+  document.body.classList.remove("agent-tools");
   game.status = "playing";
   game.paused = false;
   running = true;
@@ -297,6 +329,7 @@ async function fresh(statusLine?: HTMLElement) {
       "#pause-menu button, #start-card button",
     ),
   ];
+  const disabledBefore = controls.map((button) => button.disabled);
   for (const b of controls) b.disabled = true;
   closeTerminal();
   say("Saving learning progress…");
@@ -315,7 +348,9 @@ async function fresh(statusLine?: HTMLElement) {
     ),
   ]);
   const saved = await persist();
-  for (const b of controls) b.disabled = false;
+  controls.forEach((button, index) => {
+    button.disabled = disabledBefore[index];
+  });
   restarting = false;
   if (!saved && !unsavedRestartConfirmed) {
     unsavedRestartConfirmed = true;
@@ -360,9 +395,9 @@ function startCard() {
   }
   card.hidden = false;
   if (game.status === "ready")
-    card.innerHTML = `<span class="eyebrow">A REAL-TIME STUDY ESCAPE</span><h2>The dead are<br>on your heels.</h2><p>Twenty survivors. Four floors. Four seats.<br>Choose your route. Learn your way out.</p><button id="start">Enter the building ↗</button><small>${escape(status().detail)}</small>`;
+    card.innerHTML = `<span class="eyebrow">A REAL-TIME STUDY ESCAPE</span><h2>The dead are<br>on your heels.</h2><p>Twenty survivors. Four floors. Four seats.<br>Choose your route. Learn your way out.</p><button id="start">Enter the building ↗</button><small class="agent-only">${escape(status().detail)}</small>`;
   else
-    card.innerHTML = `<span class="eyebrow">${game.status === "escaped" ? "TRANSMISSION RECEIVED" : "SIGNAL LOST"}</span><h2>${game.status === "escaped" ? "You made it." : "Your work survives."}</h2><p>${escape(game.notice)}<br>${game.stats.rescued} extracted · ${game.stats.deaths} lost · ${Math.floor(game.time)} seconds</p><button id="again">Begin another run ↗</button><button id="backup" class="quiet">Export work & evidence</button><button id="spectate" class="quiet">Watch the building ↗</button>`;
+    card.innerHTML = `<span class="eyebrow">${game.status === "escaped" ? "TRANSMISSION RECEIVED" : "SIGNAL LOST"}</span><h2>${game.status === "escaped" ? "You made it." : "Your work survives."}</h2><p>${escape(game.notice)}<br>${game.stats.rescued} extracted · ${game.stats.deaths} lost · ${Math.floor(game.time)} seconds</p><button id="again">Begin another run ↗</button><button id="backup" class="quiet agent-only">Export work & evidence</button><button id="spectate" class="quiet">Watch the building ↗</button>`;
   document.getElementById("start")?.addEventListener("click", begin);
   document
     .getElementById("again")
@@ -388,6 +423,7 @@ async function saveAndQuit() {
   const saved = await persist();
   $("#pause-save-status").textContent = "";
   $<HTMLDialogElement>("#pause-menu").close();
+  document.body.classList.remove("agent-tools");
   quitMenu = true;
   const card = $("#start-card");
   card.classList.remove("finished");
@@ -1208,6 +1244,7 @@ $("#save-button").onclick = async () => {
   game.notice =
     saveError ||
     "Run saved locally. Export a backup from Settings to move between browsers.";
+  $("#pause-save-status").textContent = game.notice;
 };
 $("#curriculum-button").onclick = () => {
   openPanel("inspector", "#inspector-title");
@@ -1812,10 +1849,11 @@ $("#live-profile").onclick = async () => {
   if (status().mode === "development") {
     game.notice =
       "Enable the ChatGPT handoff or connect a verified study bridge before starting a live profile.";
+    setText("#live-profile-status", game.notice);
     return;
   }
   const learner = game.study.learner;
-  if (!(await fresh($("#log-status")))) return;
+  if (!(await fresh($("#live-profile-status")))) return;
   const next = initialStudy(roadmap, "live");
   if (learner) next.learner = learner;
   next.archives = game.study.archives;
@@ -1836,7 +1874,7 @@ $("#live-profile").onclick = async () => {
   game.notice =
     "Live study profile: original curriculum state retained; development visits are not academic evidence.";
   persist();
-  closePanel("settings");
+  showPauseHome();
 };
 $("#export").onclick = () =>
   download("zombie-escape-study-game-run.json", encode(game));
@@ -1852,7 +1890,7 @@ $("#import").onchange = async () => {
     persist();
     startCard();
     closePanel("settings");
-    if (game.paused) setPaused(true);
+    setPaused(true);
   } catch (err) {
     game.notice = `Import rejected: ${String(err)}`;
   }
@@ -1871,6 +1909,11 @@ window.addEventListener("keydown", (ev) => {
   if (ev.code === "Escape") {
     ev.preventDefault();
     if (ev.repeat || restarting) return;
+    if ($<HTMLDialogElement>("#pause-menu").open) {
+      if (pausePanel) closePanel(pausePanel);
+      else setPaused(false);
+      return;
+    }
     if (quitMenu) {
       if (!restarting) continueRun();
       return;
@@ -1884,9 +1927,10 @@ window.addEventListener("keydown", (ev) => {
         syncSpectatorBar();
         canvas.focus();
       }
-    } else setPaused(!game.paused);
+    } else setPaused(true);
     return;
   }
+  if ($<HTMLDialogElement>("#pause-menu").open) return;
   if (spectating(game) && view) {
     if (ownsKeyboard(ev.target) || !PAN_KEYS.includes(ev.code)) return;
     ev.preventDefault();
@@ -2257,7 +2301,8 @@ function frame(time: number) {
   } else framePerformance.reset();
   requestAnimationFrame(frame);
 }
-// Development diagnostics are read-only from the UI; browser acceptance fixtures use module-level engine APIs.
+// Agent diagnostics stay out of the player menu. Browser acceptance fixtures
+// use these hooks and module-level engine APIs in synthetic browser contexts.
 Object.assign(window, {
   __deadAir: {
     get game() {
@@ -2268,6 +2313,12 @@ Object.assign(window, {
     },
     roadmap,
     interact,
+    /** Agent-only entry: diagnostics have no control in the player interface. */
+    openAgentMenu() {
+      document.body.classList.add("agent-tools");
+      if ($<HTMLDialogElement>("#pause-menu").open) showPauseHome();
+      else setPaused(true);
+    },
     /** The newest three games' diagnostics, read by agents, never a download. */
     logs() {
       runLogs.capture(game, true);

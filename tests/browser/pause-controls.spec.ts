@@ -17,6 +17,65 @@ async function setup(page: Page) {
     f.stations = [{ ...f.stations[0], x: 10.8, y: 10 }];
   });
 }
+test("player controls live in the pause dialog and developer tools stay hidden", async ({
+  page,
+}) => {
+  await setup(page);
+  await expect(page.locator("#settings-toggle")).toBeHidden();
+  await expect(page.locator("#curriculum-button")).toBeHidden();
+  await expect(page.locator("#save-button")).toBeHidden();
+  await expect(page.locator("#game-menu-toggle")).toHaveCount(0);
+
+  await page.locator("#world").focus();
+  await page.keyboard.down("d");
+  await page.waitForTimeout(100);
+  await page.keyboard.press("Escape");
+  await page.keyboard.up("d");
+  const menu = page.getByRole("dialog", { name: "Game paused", exact: true });
+  await expect(menu).toBeVisible();
+  for (const id of [
+    "resume-game",
+    "settings-toggle",
+    "restart-game",
+    "save-quit",
+  ])
+    await expect(menu.locator(`#${id}`)).toBeVisible();
+  await expect(page.locator("#curriculum-button")).toBeHidden();
+  await expect(page.locator("#save-button")).toBeHidden();
+  await expect(page.getByRole("link", { name: /Test Lab/i })).toHaveCount(0);
+  const before = await page.evaluate(() => {
+    const g = (window as any).__deadAir.game;
+    return { time: g.time, x: g.survivors[0].x, y: g.survivors[0].y };
+  });
+  await menu.locator("#settings-toggle").click();
+  await expect(
+    page.getByRole("dialog", { name: "Transmission settings", exact: true }),
+  ).toBeVisible();
+  await expect(page.locator("#pause-home")).toBeHidden();
+  await expect(page.locator("#volume")).toBeFocused();
+  await page.waitForTimeout(200);
+  expect(await page.evaluate(() => (window as any).__deadAir.game.time)).toBe(
+    before.time,
+  );
+  await page.keyboard.press("Escape");
+  await expect(menu).toBeVisible();
+  await expect(page.locator("#settings")).toBeHidden();
+  await expect(page.locator("#settings-toggle")).toBeFocused();
+  expect(await page.evaluate(() => (window as any).__deadAir.game.paused)).toBe(
+    true,
+  );
+
+  await page.keyboard.press("Escape");
+  await expect(page.locator("#pause-menu")).toBeHidden();
+  await expect(page.locator("#world")).toBeFocused();
+  await page.waitForTimeout(200);
+  const resumed = await page.evaluate(() => {
+    const g = (window as any).__deadAir.game;
+    return { time: g.time, x: g.survivors[0].x, y: g.survivors[0].y };
+  });
+  expect(resumed.time).toBeGreaterThan(before.time);
+  expect([resumed.x, resumed.y]).toEqual([before.x, before.y]);
+});
 test("Esc freezes survival while typing, preserves work and survives reload; resume has no catch-up", async ({
   page,
 }) => {

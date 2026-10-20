@@ -1,3 +1,4 @@
+import { openGameMenu } from "./helpers/game-menu";
 // Synthetic native provider only. Real browser edits, saved work and world transactions.
 import { expect, test } from "@playwright/test";
 import { readFile } from "node:fs/promises";
@@ -214,6 +215,7 @@ for (const scenario of ["unchanged", "stale", "new-work"])
         attemptId: l.attempts[0].id,
       };
     });
+    await openGameMenu(page);
     await page.locator("#curriculum-button").click();
     await page.getByText("Review an updated roadmap", { exact: true }).click();
     await page.locator("#roadmap-review-file").setInputFiles({
@@ -230,12 +232,14 @@ for (const scenario of ["unchanged", "stale", "new-work"])
     await expect.poll(() => !!release).toBe(true);
     if (stale) {
       await page.locator("#close-inspector").click();
+      await page.locator("#resume-game").click();
       await page.locator("#world").focus();
       await page.keyboard.press("e");
       await page
         .locator("#workspace")
         .fill("PRIVATE_ACTIVE_BROWSER_DRAFT plus newer actual typing");
       await page.locator("#leave").click();
+      await openGameMenu(page);
       await page.locator("#curriculum-button").click();
       release();
       await expect(page.locator("#roadmap-adoption-controls")).toContainText(
@@ -253,6 +257,7 @@ for (const scenario of ["unchanged", "stale", "new-work"])
         ),
       ).toBe("in-progress");
       await page.locator("#close-inspector").click();
+      await page.locator("#resume-game").click();
       await page.locator("#world").focus();
       await page.keyboard.press("e");
       await expect(page.locator("#workspace")).toHaveValue(
@@ -276,6 +281,7 @@ for (const scenario of ["unchanged", "stale", "new-work"])
       "adopted and saved",
     );
     await page.locator("#close-inspector").click();
+    await page.locator("#resume-game").click();
     await page.locator("#world").focus();
     await page.keyboard.press("e");
     await expect(page.locator("#workspace")).toHaveValue(
@@ -342,9 +348,11 @@ for (const scenario of ["unchanged", "stale", "new-work"])
         ];
       }),
     ).toEqual([0, 0, 0, 1]);
+    await openGameMenu(page);
     await page.getByRole("button", { name: "Save run", exact: true }).click();
     // The click resolves before the async save; reloading earlier loses it.
     await expect(page.locator("#notice")).toContainText("Run saved locally");
+    await page.locator("#resume-game").click();
     await page.reload();
     await page.waitForFunction(() => !!(window as any).__deadAir);
     expect(

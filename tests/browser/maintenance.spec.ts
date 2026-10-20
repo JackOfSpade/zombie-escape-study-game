@@ -1,3 +1,4 @@
+import { openGameMenu } from "./helpers/game-menu";
 import { test, expect } from "@playwright/test";
 
 test("real IndexedDB recovers after a synchronous open failure and commits the next save", async ({
@@ -44,6 +45,7 @@ test("a delayed roadmap export cannot commit its old snapshot to a restarted run
     g.study.learner = initialLearner((window as any).__deadAir.roadmap);
     return g.id;
   });
+  await openGameMenu(page);
   await page.locator("#curriculum-button").click();
   await page.evaluate(() => {
     const original = crypto.subtle.digest.bind(crypto.subtle);
@@ -107,6 +109,7 @@ test("an older handoff status response cannot undo a newer local disable result"
     route.fulfill({ json: { enabled: false } }),
   );
   await page.goto("/");
+  await openGameMenu(page);
   await page.locator("#settings-toggle").click();
   await expect.poll(() => calls).toBe(1);
   await page.locator("#handoff-enable").evaluate((input: HTMLInputElement) => {

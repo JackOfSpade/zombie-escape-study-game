@@ -2,7 +2,7 @@
 
 The Test Lab is primarily an automated framework for coding agents (Codex, Claude Code and other shell-capable tools). Agents create or modify scenario files, load existing cases, run deterministic suites against the real engine, inspect structured failures and replay them after a code fix. No dev server, browser, AI service or manual setup is required. Repository instructions are in `AGENTS.md` and `CLAUDE.md`.
 
-Each test uses a fresh synthetic memory-only world with actual engine/Planck physics. It never reads or writes real game saves, diagnostic history, learner records or ChatGPT credentials, and makes no study bridge/AI requests. The optional visual debugger at **http://127.0.0.1:5173/lab.html** (also linked in Settings and included in production builds) uses the same scenario format and runner.
+Each test uses a fresh synthetic memory-only world with actual engine/Planck physics. It never reads or writes real game saves, diagnostic history, learner records or ChatGPT credentials, and makes no study bridge/AI requests. The optional visual debugger at **http://127.0.0.1:5173/lab.html** (included in production builds) uses the same scenario format and runner. Diagnostics have no entry in the player menu; agents can still open the lab directly. Browser fixtures can call `window.__deadAir.openAgentMenu()` to access retained inspection and diagnostic controls in their synthetic page. Returning to gameplay hides those controls again.
 
 ## Automated agent workflow
 

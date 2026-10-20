@@ -15,6 +15,7 @@
   --display-scale: 1;
   --view-width: calc(100vw / var(--display-scale));
   --view-height: calc(100vh / var(--display-scale));
+  --hud-inset: 20px;
   color-scheme: dark;
 }
 * {
@@ -24,10 +25,17 @@ body {
   margin: 0;
   zoom: var(--display-scale);
 }
+@supports (height: 100dvh) {
+  :root {
+    --view-height: calc(100dvh / var(--display-scale));
+  }
+}
 /* Reflow at the available scaled width. Fixed panels stay outside this
    container so they remain attached to the browser viewport while scrolling. */
 .game-layout {
   container-type: inline-size;
+  height: var(--view-height);
+  overflow: hidden;
 }
 body.surge {
   --bg: #1a1526;
@@ -82,46 +90,49 @@ summary:focus-visible {
   display: none !important;
 }
 header {
-  height: 78px;
-  border-bottom: 1px solid var(--line);
+  position: absolute;
+  top: var(--hud-inset);
+  right: var(--hud-inset);
+  z-index: 5;
+}
+button.game-control {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  padding: 0 32px;
-  background: var(--bg);
+  justify-content: center;
+  gap: 7px;
+  height: 36px;
+  min-width: 36px;
+  padding: 8px;
+  background: #0b1418e8;
+  border-color: #52635b70;
+  border-radius: 8px;
+  box-shadow: 0 2px 10px #0003;
 }
-.brand {
-  font:
-    700 24px "Space Grotesk",
-    sans-serif;
-  letter-spacing: 3px;
-  color: var(--ink);
-  text-decoration: none;
+.game-control svg {
+  width: 18px;
+  height: 18px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+/* Diagnostic controls are available to agent tooling, never in player menus. */
+body:not(.agent-tools) .agent-only {
+  display: none !important;
+}
+.menu-connection {
   display: flex;
-  align-items: center;
-  gap: 12px;
+  align-items: flex-start;
+  gap: 8px;
+  padding-top: 18px;
+  margin-top: 18px;
+  border-top: 1px solid var(--line);
+  line-height: 1.6;
 }
-.brand-title {
-  overflow-wrap: anywhere;
-  min-width: 0;
-}
-.brand small {
-  font-size: 10px;
-  letter-spacing: 2px;
-  border-left: 1px solid var(--line);
-  padding-left: 15px;
-  color: var(--muted);
-}
-.brand-mark {
-  color: var(--accent);
-  font-size: 32px;
-}
-.header-right {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  font-size: 11px;
-  color: var(--muted);
+.menu-connection .live-dot {
+  flex-shrink: 0;
+  margin-top: 5px;
 }
 .live-dot {
   width: 6px;
@@ -132,27 +143,34 @@ header {
 main {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
-  max-width: 1920px;
-  margin: auto;
-  padding: 25px 30px 12px;
-  gap: 26px;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  gap: 0;
 }
 .world {
   min-width: 0;
-  /* Without the side column the frame is capped so the play area keeps the
-     scale it was tuned for; the canvas resolution follows its CSS size. */
-  max-width: 1034px;
+  min-height: 0;
   width: 100%;
-  margin: 0 auto;
-}
-.terminal-open .world {
-  max-width: none;
+  height: 100%;
 }
 .world-top {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-bottom: 17px;
+  position: absolute;
+  top: var(--hud-inset);
+  left: var(--hud-inset);
+  max-width: calc(100% - 110px);
+  pointer-events: none;
+  color: var(--ink);
+  text-shadow: 0 2px 5px #000;
+}
+.world-top h1 {
+  font-size: 15px;
+  margin-top: 4px;
+  line-height: 1.2;
+}
+.world-top .eyebrow {
+  font-size: 9px;
 }
 .eyebrow {
   font-size: 10px;
@@ -177,11 +195,8 @@ p {
   line-height: 1.6;
 }
 .viewport {
-  height: calc(var(--view-height) - 250px);
-  min-height: 440px;
+  height: 100%;
   background: #0b1418;
-  border: 1px solid var(--line);
-  border-radius: 8px;
   position: relative;
   overflow: hidden;
 }
@@ -192,10 +207,17 @@ canvas {
   outline: none;
 }
 .controls {
+  position: absolute;
+  bottom: var(--hud-inset);
+  left: var(--hud-inset);
   display: flex;
-  gap: 16px;
+  gap: 12px;
   flex-wrap: wrap;
-  margin: 17px 0;
+  margin: 0;
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: #0b1418b3;
+  pointer-events: none;
   color: var(--muted);
   font-size: 10px;
 }
@@ -210,10 +232,20 @@ kbd {
   margin-right: 4px;
 }
 #notice {
+  position: absolute;
+  left: var(--hud-inset);
+  bottom: calc(var(--hud-inset) + 42px);
+  max-width: min(560px, calc(100% - 2 * var(--hud-inset)));
   font-size: 12px;
   color: var(--accent);
-  margin: 12px 0;
-  min-height: 20px;
+  margin: 0;
+  padding: 7px 10px;
+  border-radius: 6px;
+  background: #0b1418d9;
+  pointer-events: none;
+}
+#notice:empty {
+  display: none;
 }
 /* The dashboard keeps the data elements the game writes to; while playing
    the survivor status lives in the in-frame HUD instead of a side panel. */
@@ -222,8 +254,8 @@ kbd {
 }
 .hud {
   position: absolute;
-  left: 15px;
-  top: 15px;
+  left: var(--hud-inset);
+  top: calc(var(--hud-inset) + 54px);
   display: flex;
   align-items: center;
   gap: 14px;
@@ -365,8 +397,9 @@ body.spectating .inventory {
 }
 .spectator {
   position: absolute;
-  left: 15px;
-  top: 15px;
+  left: var(--hud-inset);
+  top: calc(var(--hud-inset) + 54px);
+  max-width: calc(100% - 2 * var(--hud-inset));
   z-index: 1;
   display: flex;
   align-items: center;
@@ -410,9 +443,9 @@ body.spectating canvas.dragging {
 }
 /* Narrow viewports (terminal open, phones): stack the HUD rows. */
 .terminal-open .hud {
-  flex-direction: column;
-  align-items: flex-start;
+  flex-wrap: wrap;
   gap: 6px;
+  max-width: calc(100% - 2 * var(--hud-inset));
 }
 @container (max-width: 600px) {
   .hud {
@@ -577,6 +610,7 @@ body.spectating canvas.dragging {
   flex-direction: column;
   padding: 8%;
   z-index: 2;
+  overflow: auto;
 }
 .overlay.finished {
   background: linear-gradient(
@@ -615,27 +649,26 @@ body.spectating canvas.dragging {
 }
 #world-caption {
   position: absolute;
-  bottom: 24px;
-  left: 15px;
+  bottom: 104px;
+  left: var(--hud-inset);
   color: var(--accent);
   font-size: 12px;
   text-shadow: 0 2px 4px #000;
 }
-.terminal-open main {
-  grid-template-columns: minmax(0, 1fr) minmax(400px, 0.85fr);
-}
 .terminal-open .dashboard {
   display: none;
 }
-.terminal-open .viewport {
-  height: calc(var(--view-height) - 250px);
+.terminal-open .world-top {
+  max-width: calc(100% - 2 * var(--hud-inset));
 }
 #terminal {
   background: var(--panel);
   border: 1px solid var(--line);
   border-radius: 7px;
   min-width: 0;
-  max-height: calc(var(--view-height) - 120px);
+  min-height: 0;
+  height: calc(var(--view-height) - 92px);
+  margin: 72px 20px 20px 0;
   display: flex;
   flex-direction: column;
 }
@@ -767,22 +800,12 @@ body.spectating canvas.dragging {
 }
 #settings,
 #inspector {
-  --panel-top: min(90px, calc(var(--view-height) * 0.12));
-  position: fixed;
-  z-index: 10;
-  background: var(--panel);
-  border: 1px solid var(--line);
-  box-shadow: 0 20px 100px #000a;
-  border-radius: 8px;
-  padding: 26px;
-  right: min(30px, calc(var(--view-width) * 0.05));
-  top: var(--panel-top);
-  width: min(460px, calc(var(--view-width) * 0.9));
-  max-height: min(
-    calc(var(--view-height) * 0.8),
-    calc(var(--view-height) - var(--panel-top) - 12px)
-  );
+  padding: 22px;
+  width: 100%;
+  max-height: calc(var(--view-height) - 104px);
   overflow: auto;
+  overscroll-behavior: contain;
+  overflow-wrap: anywhere;
 }
 #settings label {
   display: block;
@@ -819,9 +842,6 @@ body.spectating canvas.dragging {
 #display-scale-help {
   margin-top: 0;
 }
-#inspector {
-  width: min(800px, calc(var(--view-width) * 0.92));
-}
 #inspector p {
   font-size: 12px;
 }
@@ -852,23 +872,6 @@ body.reduced * {
   transition: none !important;
 }
 @container (max-width: 1000px) {
-  main {
-    padding: 18px;
-    grid-template-columns: minmax(0, 1fr);
-    gap: 18px;
-  }
-  .header-right {
-    gap: 7px;
-  }
-  .brand small {
-    display: none;
-  }
-  .terminal-open main {
-    grid-template-columns: 1fr 1fr;
-  }
-  #terminal {
-    max-height: none;
-  }
   .terminal-heading {
     padding: 10px;
   }
@@ -877,65 +880,50 @@ body.reduced * {
   }
 }
 @container (max-width: 760px) {
-  header {
-    padding: 10px 15px;
-    height: auto;
-    min-height: 65px;
-    gap: 8px;
-    flex-wrap: wrap;
+  header,
+  .world {
+    --hud-inset: 12px;
   }
-  .brand {
-    font-size: 14px;
-    letter-spacing: 0;
-    min-width: 0;
-    gap: 7px;
-    flex-basis: 100%;
+  .world-top,
+  .terminal-open .world-top {
+    max-width: calc(100% - 90px);
   }
-  .header-right {
-    flex-shrink: 0;
-    margin-left: auto;
-    flex-wrap: wrap;
-    justify-content: flex-end;
-    max-width: 100%;
+  .world-top h1 {
+    font-size: 12px;
   }
-  .header-right > span {
+  .world-top .eyebrow {
+    letter-spacing: 1px;
+    font-size: 8px;
+  }
+  .game-control span {
     display: none;
-  }
-  main,
-  .terminal-open main {
-    display: flex;
-    flex-direction: column;
-    padding: 12px;
-  }
-  .viewport,
-  .terminal-open .viewport {
-    height: calc(var(--view-height) * 0.55);
-    min-height: 350px;
-  }
-
-  .terminal-open #terminal {
-    max-height: none;
   }
   .overlay h2 {
     font-size: 40px;
   }
   .controls {
-    gap: 8px;
+    gap: 8px 12px;
+    max-width: calc(100% - 24px);
   }
-  .header-right button {
-    padding: 5px;
+  .controls span:last-child {
+    display: none;
   }
   .feed {
     display: none;
-  }
-  .world-top {
-    margin-bottom: 12px;
   }
   .overlay {
     padding: 7%;
   }
   .overlay p {
     font-size: 12px;
+  }
+  .overlay {
+    padding-top: 86px;
+    padding-bottom: 80px;
+  }
+  .inventory {
+    max-width: calc(100% - 24px);
+    bottom: 104px;
   }
 }
 
@@ -1061,20 +1049,61 @@ body.reduced * {
 }
 
 #pause-menu {
-  max-width: min(440px, calc(var(--view-width) * 0.9));
-  border: 1px solid #7d947b;
-  border-radius: 12px;
-  padding: 2rem;
-  color: #e5eadf;
-  background: #142025;
+  width: min(420px, calc(var(--view-width) - 24px));
+  max-width: none;
+  max-height: calc(var(--view-height) - 24px);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 0;
+  color: var(--ink);
+  background: var(--panel);
+  box-shadow: 0 24px 100px #0008;
+  overflow: auto;
 }
 #pause-menu::backdrop {
-  background: #050c10bd;
+  background: #050c10c9;
 }
-#pause-menu button {
+#pause-home {
+  padding: 28px;
+}
+#pause-home h2 {
+  margin-top: 10px;
+}
+#pause-home button {
   display: block;
   width: 100%;
-  margin-top: 1rem;
+  margin-top: 12px;
+  padding: 12px 16px;
+  font-size: 13px;
+}
+#pause-description {
+  font-size: 13px;
+  color: var(--muted);
+  margin-bottom: 22px;
+}
+#pause-save-status {
+  font-size: 11px;
+  color: var(--accent);
+  margin: 18px 0 0;
+}
+#pause-menu[data-panel="settings"] {
+  width: min(500px, calc(var(--view-width) - 24px));
+}
+#pause-menu[data-panel="inspector"] {
+  width: min(900px, calc(var(--view-width) - 24px));
+}
+#pause-panel-header {
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--line);
+}
+#pause-back {
+  border: 0;
+  margin: 0;
+}
+#agent-tools {
+  border-top: 1px solid var(--line);
+  margin-top: 22px;
+  padding-top: 18px;
 }
 #pause-menu p {
   line-height: 1.6;
@@ -1159,11 +1188,43 @@ body.reduced * {
 }
 @container (max-width: 1100px) {
   .terminal-open main {
-    grid-template-columns: 1fr;
+    display: flex;
+    flex-direction: column;
   }
-  .terminal-open .viewport {
-    height: calc(var(--view-height) * 0.32);
-    min-height: 220px;
+  .terminal-open .world {
+    height: clamp(160px, calc(var(--view-height) * 0.28), 260px);
+    flex-shrink: 0;
+  }
+  .terminal-open #terminal {
+    flex: 1;
+    height: auto;
+    min-height: 0;
+    margin: 0 8px 8px;
+  }
+  .terminal-open .hud,
+  .terminal-open .spectator {
+    top: auto;
+    bottom: 10px;
+  }
+  .terminal-open .controls,
+  .terminal-open #notice,
+  .terminal-open .inventory {
+    display: none;
+  }
+  @media (max-height: 600px) {
+    .terminal-open .world {
+      height: 64px;
+    }
+    .terminal-open .hud {
+      display: none;
+    }
+    .terminal-open #terminal {
+      display: block;
+      overflow: auto;
+    }
+    .terminal-open #terminal-body {
+      overflow: visible;
+    }
   }
 }
 @container (max-width: 760px) {

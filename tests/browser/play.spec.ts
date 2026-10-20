@@ -1,3 +1,4 @@
+import { openGameMenu } from "./helpers/game-menu";
 import { restoreTerminalMode } from "./helpers/terminal-mode";
 import { expect, test, type Page } from "@playwright/test";
 import { readFile, writeFile } from "node:fs/promises";
@@ -76,7 +77,10 @@ test("real browser: launch, playable movement, no typing capture, exact resume, 
   await expect(page.locator("#terminal")).toBeVisible();
   await expect(page.locator("#workspace")).toHaveValue(draft);
   await expect(page.locator("#problem")).toHaveText(prompt!);
+  await openGameMenu(page);
   await page.getByRole("button", { name: "Save run", exact: true }).click();
+  await expect(page.locator("#notice")).toContainText("Run saved locally");
+  await page.locator("#resume-game").click();
   await page.reload();
   await page.waitForFunction(() => !!(window as any).__deadAir);
   await page.evaluate(() => {
@@ -162,16 +166,18 @@ test("terminal use respects wall/door occlusion and keeps the draft when access 
     "draft kept behind a new obstruction",
   );
 });
-test("UI settings and curriculum do not pause simulation; narrow layout remains usable", async ({
+test("UI settings and curriculum stay in the pause menu; narrow layout remains usable", async ({
   page,
 }) => {
   await page.setViewportSize({ width: 780, height: 900 });
   await page.goto("/");
   await page.getByRole("button", { name: "Enter the building" }).click();
+  await openGameMenu(page);
   await page.getByRole("button", { name: "Settings", exact: true }).click();
   await expect(page.getByText("Transmission settings")).toBeVisible();
   await page.getByLabel("Surge visual cues & sound captions").check();
   await page.getByRole("button", { name: "Done", exact: true }).click();
+  await openGameMenu(page);
   await page.getByRole("button", { name: "Inspect" }).click();
   await expect(page.locator("#inspector")).toBeVisible();
   await expect(page.locator("#inspector-content")).toContainText(
@@ -197,9 +203,9 @@ test("UI settings and curriculum do not pause simulation; narrow layout remains 
     () => (window as any).__deadAir.game.time,
   );
   await page.waitForTimeout(600);
-  expect(
-    await page.evaluate(() => (window as any).__deadAir.game.time),
-  ).toBeGreaterThan(beforeInspect + 0.3);
+  expect(await page.evaluate(() => (window as any).__deadAir.game.time)).toBe(
+    beforeInspect,
+  );
   await page.locator('[data-readiness="PE"] summary').click();
   const originalDownload = page.waitForEvent("download");
   await page
@@ -590,7 +596,9 @@ for (const fixtureKind of ["checkpoint", "transfer", "historical"] as const) {
       await route.fulfill({ json: { text: "Fixture guidance" } });
     });
     await enterLegacyBuilding(page);
+    await openGameMenu(page);
     await page.getByRole("button", { name: "Settings", exact: true }).click();
+    await page.getByText("ChatGPT handoff connection", { exact: true }).click();
     await page
       .getByRole("button", { name: "Start a live study run", exact: true })
       .click();
@@ -691,6 +699,7 @@ for (const fixtureKind of ["checkpoint", "transfer", "historical"] as const) {
         reconciliations: 1,
       });
     await page.locator("#leave").click();
+    await openGameMenu(page);
     await page.getByRole("button", { name: "Inspect" }).click();
     await expect(page.locator("#inspector-content")).toContainText(
       "Game-recorded academic visits: 1",
@@ -735,6 +744,7 @@ for (const fixtureKind of ["checkpoint", "transfer", "historical"] as const) {
     );
     await page.reload();
     await page.waitForFunction(() => !!(window as any).__deadAir);
+    await openGameMenu(page);
     await page.getByRole("button", { name: "Inspect" }).click();
     const secondDownload = page.waitForEvent("download");
     await page
@@ -827,7 +837,9 @@ test("group proposal fixture: private tutor context stays private and replies be
       });
   });
   await enterLegacyBuilding(page);
+  await openGameMenu(page);
   await page.getByRole("button", { name: "Settings", exact: true }).click();
+  await page.getByText("ChatGPT handoff connection", { exact: true }).click();
   await page
     .getByRole("button", { name: "Start a live study run", exact: true })
     .click();
@@ -996,7 +1008,10 @@ test("group proposal fixture: private tutor context stays private and replies be
     .click();
   await expect(stale).toContainText("dismissed");
   await expect(page.locator("#workspace")).toHaveValue("newer human workspace");
+  await openGameMenu(page);
   await page.getByRole("button", { name: "Save run", exact: true }).click();
+  await expect(page.locator("#notice")).toContainText("Run saved locally");
+  await page.locator("#resume-game").click();
   await page.reload();
   await page.waitForFunction(() => !!(window as any).__deadAir);
   await page.locator("#world").focus();
@@ -1096,7 +1111,9 @@ for (const provider of ["study-mode", "chatgpt-handoff"])
     });
     await page.goto("/");
     await page.getByRole("button", { name: "Enter the building" }).click();
+    await openGameMenu(page);
     await page.getByRole("button", { name: "Settings", exact: true }).click();
+    await page.getByText("ChatGPT handoff connection", { exact: true }).click();
     await page
       .getByRole("button", { name: "Start a live study run", exact: true })
       .click();
@@ -1176,7 +1193,10 @@ for (const provider of ["study-mode", "chatgpt-handoff"])
       fullPage: false,
     });
     await page.locator("#leave").click();
+    await openGameMenu(page);
     await page.getByRole("button", { name: "Save run", exact: true }).click();
+    await expect(page.locator("#notice")).toContainText("Run saved locally");
+    await page.locator("#resume-game").click();
     await page.reload();
     await page.waitForFunction(() => !!(window as any).__deadAir);
     await page.locator("#world").focus();
@@ -1219,6 +1239,7 @@ test("durable saves retain a large archive beyond localStorage capacity", async 
     g.status = "ready";
     document.querySelector<HTMLElement>("#start-card")!.hidden = true;
   }, size);
+  await openGameMenu(page);
   await page.getByRole("button", { name: "Save run", exact: true }).click();
   await expect(page.locator("#notice")).toContainText("Run saved locally", {
     timeout: 15000,
@@ -1315,8 +1336,10 @@ test("container workspace: real code execution preserves a captured revision whi
     "captured code output",
   );
   await page.locator("#leave").click();
+  await openGameMenu(page);
   await page.getByRole("button", { name: "Save run", exact: true }).click();
   await expect(page.locator("#notice")).toContainText("Run saved locally");
+  await page.locator("#resume-game").click();
   await page.reload();
   await page.waitForFunction(() => !!(window as any).__deadAir);
   expect(
@@ -1329,6 +1352,7 @@ test("container workspace: real code execution preserves a captured revision whi
   const learnerBeforeObservation = await page.evaluate(() =>
     JSON.stringify((window as any).__deadAir.game.study.learner),
   );
+  await openGameMenu(page);
   await page.locator("#curriculum-button").click();
   await page.locator("#environment-observations summary").click();
   await page.locator("#environment-item").selectOption("PE:ENV06");
@@ -1372,6 +1396,7 @@ test("roadmap review preview: uploaded Markdown reports ancestry and protected c
   const roadmap = JSON.parse(await readFile("public/curriculum.json", "utf8"));
   await page.goto("/");
   await page.getByRole("button", { name: "Enter the building" }).click();
+  await openGameMenu(page);
   await page.locator("#curriculum-button").click();
   await page.getByText("Review an updated roadmap", { exact: true }).click();
   const before = await page.evaluate(() =>
@@ -1585,10 +1610,12 @@ test("audio and accessibility: real sound output, mute, stable reduced-motion ca
     };
   });
   expect(canvas).toEqual({ ordinaryChanges: true, reducedStable: true });
+  await openGameMenu(page);
   await page.getByRole("button", { name: "Settings", exact: true }).click();
   await page.getByLabel("Surge visual cues & sound captions").check();
   await page.getByLabel("Reduced motion", { exact: true }).check();
   await page.getByRole("button", { name: "Done", exact: true }).click();
+  await page.locator("#resume-game").click();
   await page.evaluate(() => {
     const g = (window as any).__deadAir.game,
       st = g.floors[0].stations[0];
@@ -1818,7 +1845,10 @@ test("equipment UI: readable effects, no wasted healing or blocked shots, physic
   await expect(
     page.getByRole("button", { name: /Limited-use weapon/ }),
   ).toHaveCount(0);
+  await openGameMenu(page);
   await page.getByRole("button", { name: "Save run", exact: true }).click();
+  await expect(page.locator("#notice")).toContainText("Run saved locally");
+  await page.locator("#resume-game").click();
   await page.reload();
   await page.waitForFunction(() => !!(window as any).__deadAir);
   await expect(page.getByRole("button", { name: /Flare/ })).toContainText(
@@ -1973,7 +2003,10 @@ for (const provider of ["study-mode", "chatgpt-handoff"])
     ).toEqual({ author: "npc-0", ev: 0, jobs: 1 });
     await page.screenshot({ path: "test-results/team-work.png" });
     await page.getByRole("button", { name: /Leave/ }).click();
+    await openGameMenu(page);
     await page.getByRole("button", { name: "Save run", exact: true }).click();
+    await expect(page.locator("#notice")).toContainText("Run saved locally");
+    await page.locator("#resume-game").click();
     await page.reload();
     await page.waitForFunction(() => !!(window as any).__deadAir);
     await page.locator("#world").focus();
@@ -2001,6 +2034,7 @@ test("practical observations: unreviewed output is inert, persists without chang
     g.nextSpawn = Number.MAX_SAFE_INTEGER;
     return JSON.stringify(g.study.learner);
   });
+  await openGameMenu(page);
   await page.locator("#curriculum-button").click();
   await page.locator("#environment-observations summary").click();
   await expect(page.locator("#environment-item option")).toHaveCount(6);
@@ -2061,6 +2095,7 @@ test("practical observations: unreviewed output is inert, persists without chang
   await page.screenshot({ path: "test-results/environment-observations.png" });
   await page.reload();
   await page.waitForFunction(() => !!(window as any).__deadAir);
+  await openGameMenu(page);
   await page.locator("#curriculum-button").click();
   await page.locator("#environment-observations summary").click();
   await expect(page.locator("#environment-observation-list")).toContainText(
@@ -2100,6 +2135,7 @@ test("environment packet survives an actual browser-storage write failure and ca
       IDBDatabase.prototype.transaction = transaction;
     };
   });
+  await openGameMenu(page);
   await page.locator("#curriculum-button").click();
   await page.locator("#environment-observations summary").click();
   await page
@@ -2259,7 +2295,10 @@ test("shared reading and private tutoring preserve an exact question through del
     "Synthetic private guidance",
   );
   await page.locator("#leave").click();
+  await openGameMenu(page);
   await page.getByRole("button", { name: "Save run", exact: true }).click();
+  await expect(page.locator("#notice")).toContainText("Run saved locally");
+  await page.locator("#resume-game").click();
   await page.reload();
   await page.waitForFunction(() => !!(window as any).__deadAir);
   await page.waitForTimeout(250);
@@ -2616,7 +2655,10 @@ for (const provider of ["study-mode", "chatgpt-handoff"])
         ),
       ).toBe(1);
       await page.getByRole("button", { name: /Leave/ }).click();
+      await openGameMenu(page);
       await page.getByRole("button", { name: "Save run", exact: true }).click();
+      await expect(page.locator("#notice")).toContainText("Run saved locally");
+      await page.locator("#resume-game").click();
       await page.reload();
       await page.waitForFunction(() => !!(window as any).__deadAir);
       await page.locator("#world").focus();
@@ -2704,6 +2746,7 @@ for (const { storageFailure, provider } of [
         cycle: g.study.learner.cycle,
       });
     });
+    await openGameMenu(page);
     await page.locator("#curriculum-button").click();
     await page.locator("#environment-observations summary").click();
     await page.locator("#environment-item").selectOption("PE:ENV06");
@@ -2757,6 +2800,7 @@ for (const { storageFailure, provider } of [
       .click();
     await expect.poll(() => !!releaseReview).toBe(true);
     await page.locator("#close-inspector").click();
+    await openGameMenu(page);
     await page.locator("#curriculum-button").click();
     await page.locator("#environment-observations summary").click();
     releaseReview!();
@@ -2805,6 +2849,7 @@ for (const { storageFailure, provider } of [
     expect(text).toContain("revision: 10");
     await page.reload();
     await page.waitForFunction(() => !!(window as any).__deadAir);
+    await openGameMenu(page);
     await page.locator("#curriculum-button").click();
     await page.locator("#environment-observations summary").click();
     await expect(page.locator("#environment-observation-list")).toContainText(

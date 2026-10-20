@@ -1,3 +1,4 @@
+import { openGameMenu, openPlayerMenu } from "./helpers/game-menu";
 import { expect, test, type Page } from "@playwright/test";
 import { enterLegacyBuilding } from "./helpers/legacy-world";
 
@@ -28,10 +29,11 @@ async function survivor(page: Page) {
   });
 }
 
-test("curriculum dropdown owns navigation and shortcuts while real-time survival continues", async ({
+test("curriculum dropdown owns navigation and shortcuts while survival stays paused", async ({
   page,
 }) => {
   await safeRun(page);
+  await openGameMenu(page);
   await page.getByRole("button", { name: "Inspect ↗" }).click();
   await page
     .getByText("Practical environment observations", { exact: true })
@@ -55,7 +57,10 @@ test("curriculum dropdown owns navigation and shortcuts while real-time survival
   await page.keyboard.press("e");
   const after = await survivor(page);
   expect({ ...after, time: before.time }).toEqual(before);
-  expect(after.time).toBeGreaterThan(before.time + 0.2);
+  expect(after.time).toBe(before.time);
+  expect(await page.evaluate(() => (window as any).__deadAir.game.paused)).toBe(
+    true,
+  );
   await expect(page.locator("#terminal")).toBeHidden();
   expect(await page.evaluate(() => (window as any).keyboardDefaults)).toEqual([
     { code: "ArrowDown", prevented: false },
@@ -72,6 +77,7 @@ test("settings has keyboard focus and explicit close preserves the terminal", as
   await page.keyboard.press("e");
   await expect(page.locator("#terminal")).toBeVisible();
   await page.locator("#workspace").fill("preserved while changing settings");
+  await openPlayerMenu(page);
   const toggle = page.getByRole("button", { name: "Settings", exact: true });
   await toggle.focus();
   await page.keyboard.press("Enter");
@@ -83,6 +89,7 @@ test("settings has keyboard focus and explicit close preserves the terminal", as
   await page.keyboard.press("ArrowLeft");
   await page.locator("#settings-close").click();
   await expect(page.locator("#settings")).toBeHidden();
+  await expect(page.locator("#pause-home")).toBeVisible();
   await expect(toggle).toBeFocused();
   await expect(page.locator("#terminal")).toBeVisible();
   await expect(page.locator("#workspace")).toHaveValue(
@@ -90,6 +97,8 @@ test("settings has keyboard focus and explicit close preserves the terminal", as
   );
   const after = await survivor(page);
   expect([after.x, after.y]).toEqual([before.x, before.y]);
+  expect(after.time).toBe(before.time);
+  await page.locator("#resume-game").click();
   await page.locator("#leave").click();
   await expect(page.locator("#terminal")).toBeHidden();
   await expect(page.locator("#world")).toBeFocused();
@@ -106,6 +115,7 @@ test("opening panels clears held movement and close restores the invoking contro
   await page.locator("#world").focus();
   await page.keyboard.down("d");
   await page.waitForTimeout(100);
+  await openPlayerMenu(page);
   await page.getByRole("button", { name: "Settings", exact: true }).click();
   const before = await survivor(page);
   await page.waitForTimeout(200);
@@ -113,9 +123,11 @@ test("opening panels clears held movement and close restores the invoking contro
   await page.waitForTimeout(200);
   const after = await survivor(page);
   expect([after.x, after.y]).toEqual([before.x, before.y]);
+  expect(after.time).toBe(before.time);
   await page.keyboard.up("d");
   await expect(page.locator("#settings-toggle")).toBeFocused();
-  const inspect = page.getByRole("button", { name: "Inspect ↗" });
+  const inspect = page.locator("#curriculum-button");
+  await openGameMenu(page);
   await inspect.click();
   await expect(
     page.getByRole("dialog", { name: "Learning continuity", exact: true }),
@@ -124,39 +136,47 @@ test("opening panels clears held movement and close restores the invoking contro
   await page.locator("#close-inspector").click();
   await expect(page.locator("#inspector")).toBeHidden();
   await expect(inspect).toBeFocused();
+  await expect(page.locator("#pause-home")).toBeVisible();
 });
 
-test("panels remain modeless, close in display order and preserve navigation back to the world", async ({
+test("pause submenus return home before Esc resumes the world", async ({
   page,
 }) => {
   await safeRun(page);
-  const inspect = page.getByRole("button", { name: "Inspect ↗" }),
-    settings = page.getByRole("button", { name: "Settings", exact: true });
+  const inspect = page.locator("#curriculum-button"),
+    settings = page.locator("#settings-toggle");
+  await openGameMenu(page);
   await inspect.click();
-  await settings.click();
   await expect(inspect).toHaveAttribute("aria-expanded", "true");
-  await expect(settings).toHaveAttribute("aria-expanded", "true");
-  expect(
-    await page
-      .locator("#settings")
-      .evaluate((el) => Number(getComputedStyle(el).zIndex)),
-  ).toBeGreaterThan(
-    await page
-      .locator("#inspector")
-      .evaluate((el) => Number(getComputedStyle(el).zIndex)),
-  );
-  await page.locator("#settings-close").click();
+  await expect(page.locator("#pause-home")).toBeHidden();
   await expect(page.locator("#settings")).toBeHidden();
-  await expect(settings).toHaveAttribute("aria-expanded", "false");
-  await expect(page.locator("#inspector")).toBeVisible();
-  await page.locator("#world").focus();
+  await expect(page.locator("#pause-back")).toBeVisible();
   const before = await survivor(page);
+  await page.keyboard.press("Escape");
+  await expect(page.locator("#inspector")).toBeHidden();
+  await expect(page.locator("#pause-home")).toBeVisible();
+  await expect(inspect).toBeFocused();
+  await expect(inspect).toHaveAttribute("aria-expanded", "false");
+
+  await settings.click();
+  await expect(settings).toHaveAttribute("aria-expanded", "true");
+  await expect(page.locator("#pause-home")).toBeHidden();
+  await expect(page.locator("#inspector")).toBeHidden();
+  await page.getByRole("button", { name: "Back to pause menu" }).click();
+  await expect(page.locator("#settings")).toBeHidden();
+  await expect(settings).toBeFocused();
+  await expect(settings).toHaveAttribute("aria-expanded", "false");
+  await expect(page.locator("#pause-home")).toBeVisible();
+  expect((await survivor(page)).time).toBe(before.time);
+  expect(await page.evaluate(() => (window as any).__deadAir.game.paused)).toBe(
+    true,
+  );
+
+  await page.keyboard.press("Escape");
+  await expect(page.locator("#pause-menu")).toBeHidden();
+  await expect(page.locator("#world")).toBeFocused();
   await page.keyboard.down("w");
   await page.waitForTimeout(200);
   await page.keyboard.up("w");
   expect((await survivor(page)).y).toBeLessThan(before.y);
-  await page.locator("#close-inspector").click();
-  await expect(page.locator("#inspector")).toBeHidden();
-  await expect(inspect).toBeFocused();
-  await expect(inspect).toHaveAttribute("aria-expanded", "false");
 });

@@ -1,3 +1,4 @@
+import { openGameMenu } from "./helpers/game-menu";
 // Controlled local queue only; no external ChatGPT or real learner transmission.
 import { expect, test } from "@playwright/test";
 import { readFile } from "node:fs/promises";
@@ -73,6 +74,7 @@ test("ChatGPT roadmap review survives reload with exact files and provider, then
     await expect(page.locator("#bridge-label")).toContainText(
       "ChatGPT handoff",
     );
+    await openGameMenu(page);
     await page.locator("#curriculum-button").click();
     await page.getByText("Review an updated roadmap", { exact: true }).click();
     await page.locator("#roadmap-review-file").setInputFiles({
@@ -107,10 +109,12 @@ test("ChatGPT roadmap review survives reload with exact files and provider, then
         .getByRole("button", { name: "Adopt reviewed roadmap", exact: true })
         .count(),
     ).toBe(0);
+    await openGameMenu(page);
     await page.getByRole("button", { name: "Save run", exact: true }).click();
     // The click resolves before the async save; reloading earlier loses it.
     await expect(page.locator("#notice")).toContainText("Run saved locally");
     await page.reload();
+    await openGameMenu(page);
     await page.locator("#curriculum-button").click();
     await page
       .getByRole("button", { name: "Retry saved reconciliation", exact: true })

@@ -1,8 +1,10 @@
 import { expect, test, type Page } from "@playwright/test";
 import { enterLegacyBuilding } from "./helpers/legacy-world";
 import { isolateRunnerBridge } from "./helpers/runner-bridge";
+import { openPlayerMenu } from "./helpers/game-menu";
 
 async function openSettings(page: Page) {
+  await openPlayerMenu(page);
   await page.getByRole("button", { name: "Settings", exact: true }).click();
   await expect(page.locator("#volume")).toBeFocused();
 }
@@ -163,6 +165,7 @@ test("maximum size keeps Settings and study controls usable on a narrow screen",
   await expect(page.locator("#settings")).toBeInViewport({ ratio: 0.98 });
   await page.locator("#settings-close").click();
   await expect(page.locator("#settings")).toBeHidden();
+  await page.locator("#resume-game").click();
   await expect(page.locator("#workspace")).toHaveValue(
     "Draft kept while resizing",
   );

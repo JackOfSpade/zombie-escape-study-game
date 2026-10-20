@@ -1,3 +1,4 @@
+import { openGameMenu } from "./helpers/game-menu";
 // Controlled source review only; no external ChatGPT or real learner grades.
 import { expect, test } from "@playwright/test";
 import { readFile } from "node:fs/promises";
@@ -61,6 +62,7 @@ for (const removed of [0, 1])
       await save(current);
     }, encode(g));
     await page.reload();
+    await openGameMenu(page);
     await page.locator("#curriculum-button").click();
     await page.getByText("Review an updated roadmap", { exact: true }).click();
     await page.locator("#roadmap-review-file").setInputFiles({

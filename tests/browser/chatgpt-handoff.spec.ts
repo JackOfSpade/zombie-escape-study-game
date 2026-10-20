@@ -1,3 +1,4 @@
+import { openGameMenu } from "./helpers/game-menu";
 import { restoreTerminalMode } from "./helpers/terminal-mode";
 // End-to-end local transport with controlled worker replies; no actual ChatGPT claim.
 import { expect, test } from "@playwright/test";
@@ -124,6 +125,7 @@ test("ChatGPT handoff UI: exact generation survives reload, tutoring stays priva
   try {
     await page.goto("/");
     await page.getByRole("button", { name: "Enter the building" }).click();
+    await openGameMenu(page);
     await page.getByRole("button", { name: "Settings", exact: true }).click();
     await page.getByText("ChatGPT handoff connection", { exact: true }).click();
     await page.locator("#handoff-enable").check();
@@ -174,7 +176,10 @@ test("ChatGPT handoff UI: exact generation survives reload, tutoring stays priva
     await page.keyboard.press("e");
     const generated = await next("generate"),
       before = await page.evaluate(() => (window as any).__deadAir.game.time);
+    await openGameMenu(page);
     await page.getByRole("button", { name: "Save run", exact: true }).click();
+    await expect(page.locator("#notice")).toContainText("Run saved locally");
+    await page.locator("#resume-game").click();
     await page.reload();
     await expect(page.locator("#bridge-label")).toContainText(
       "ChatGPT handoff",
@@ -215,6 +220,7 @@ test("ChatGPT handoff UI: exact generation survives reload, tutoring stays priva
     await expect(page.locator("#problem-title")).toHaveText(
       "Connection unavailable",
     );
+    await openGameMenu(page);
     await page.getByRole("button", { name: "Settings", exact: true }).click();
     await page.getByText("ChatGPT handoff connection", { exact: true }).click();
     await page
@@ -231,6 +237,7 @@ test("ChatGPT handoff UI: exact generation survives reload, tutoring stays priva
       path: "test-results/chatgpt-handoff-settings.png",
     });
     await page.getByRole("button", { name: "Done", exact: true }).click();
+    await page.locator("#resume-game").click();
     await page.locator("#leave").click();
     await page.locator("#world").focus();
     await page.keyboard.press("e");
@@ -259,7 +266,10 @@ test("ChatGPT handoff UI: exact generation survives reload, tutoring stays priva
     await page.locator("#chat-form button").click();
     const tutor = await next("tutor");
     expect(JSON.stringify(tutor.payload)).toContain("PRIVATE_HANDOFF_QUESTION");
+    await openGameMenu(page);
     await page.getByRole("button", { name: "Save run", exact: true }).click();
+    await expect(page.locator("#notice")).toContainText("Run saved locally");
+    await page.locator("#resume-game").click();
     await page.reload();
     await expect(page.locator("#bridge-label")).toContainText(
       "ChatGPT handoff",
@@ -319,7 +329,10 @@ test("ChatGPT handoff UI: exact generation survives reload, tutoring stays priva
     await page.locator("#chat-form button").click();
     const group = await next("group");
     expect(JSON.stringify(group.payload)).not.toContain("PRIVATE_HANDOFF_");
+    await openGameMenu(page);
     await page.getByRole("button", { name: "Save run", exact: true }).click();
+    await expect(page.locator("#notice")).toContainText("Run saved locally");
+    await page.locator("#resume-game").click();
     await page.reload();
     await position();
     await page.locator("#world").focus();
@@ -392,8 +405,10 @@ test("ChatGPT handoff UI: exact generation survives reload, tutoring stays priva
       "Which assumption needs a clearer contract?",
     );
     const doneWhileRetreating = q.snapshot().done;
+    await openGameMenu(page);
     await page.getByRole("button", { name: "Save run", exact: true }).click();
     await expect(page.locator("#notice")).toContainText("Run saved locally");
+    await page.locator("#resume-game").click();
     await page.reload();
     await position();
     // position() parks all NPCs; restore this saved speaker's participation
@@ -444,8 +459,10 @@ test("ChatGPT handoff UI: exact generation survives reload, tutoring stays priva
     await page
       .locator("#workspace")
       .fill("Later unsent draft must not replace the captured revision");
+    await openGameMenu(page);
     await page.getByRole("button", { name: "Save run", exact: true }).click();
     await expect(page.locator("#notice")).toContainText("Run saved locally");
+    await page.locator("#resume-game").click();
     await page.reload();
     await page.waitForFunction(() => !!(window as any).__deadAir);
     await position();
@@ -556,7 +573,10 @@ test("ChatGPT handoff UI: exact generation survives reload, tutoring stays priva
     ).toBe(true);
     expect(state.access).toContain(0);
     expect(errors).toEqual([]);
+    await openGameMenu(page);
     await page.getByRole("button", { name: "Save run", exact: true }).click();
+    await expect(page.locator("#notice")).toContainText("Run saved locally");
+    await page.locator("#resume-game").click();
     await page.reload();
     await page.waitForFunction(() => !!(window as any).__deadAir);
     expect(

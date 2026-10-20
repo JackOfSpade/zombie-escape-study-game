@@ -1,3 +1,4 @@
+import { openGameMenu } from "./helpers/game-menu";
 import { expect, test } from "@playwright/test";
 import { writeFile } from "node:fs/promises";
 import { enterLegacyBuilding } from "./helpers/legacy-world";
@@ -133,8 +134,10 @@ test("container workspace React: captured checks, safe preview and edits survive
     "does not establish correctness",
   );
   await page.locator("#leave").click();
+  await openGameMenu(page);
   await page.getByRole("button", { name: "Save run", exact: true }).click();
   await expect(page.locator("#notice")).toContainText("Run saved locally");
+  await page.locator("#resume-game").click();
   await page.reload();
   await page.waitForFunction(() => !!(window as any).__deadAir);
   await page.locator("#world").focus();
