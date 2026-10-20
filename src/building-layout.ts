@@ -1,0 +1,113 @@
+import {
+  CONFIG,
+  H,
+  W,
+  rand,
+  type BuildingFootprint,
+  type Floor,
+  type Game,
+} from "./model";
+import { carveStairwells } from "./stairwell";
+
+/** Domain-separated streams: adding a floor/layout roll cannot change the
+ * building shell, another floor, loot, population or simulation randomness. */
+export function layoutRandom(seed: number, domain: number, floor = 0) {
+  let value = (seed ^ domain ^ Math.imul(floor + 1, 0x9e3779b9)) >>> 0;
+  value = Math.imul(value ^ (value >>> 16), 0x21f0aaad);
+  value = Math.imul(value ^ (value >>> 15), 0x735a2d97);
+  return { rng: (value ^ (value >>> 15)) >>> 0 };
+}
+
+export function createBuildingFootprint(seed: number): BuildingFootprint {
+  const random = layoutRandom(seed, 0x7368656c);
+  const shapes = ["rectangle", "chamfered", "stepped", "waisted"] as const;
+  const shape = shapes[Math.floor(rand(random) * shapes.length)];
+  const width = 36 + 2 * Math.floor(rand(random) * 3);
+  const top = 2 + Math.floor(rand(random) * 3),
+    bottom = 28;
+  const left = 22 - width / 2,
+    right = 22 + width / 2;
+  const inset = 2 + Math.floor(rand(random) * 3);
+  const mirrored = rand(random) < 0.5;
+  const shoulder = top + 8 + Math.floor(rand(random) * 7);
+  const rows = Array.from({ length: H }, (_, y) => {
+    if (y < top || y >= bottom) return { left: 22, right: 22 };
+    let l = left,
+      r = right;
+    if (shape === "chamfered") {
+      const cut = Math.max(0, inset - Math.min(y - top, bottom - 1 - y));
+      l += cut;
+      r -= cut;
+    } else if (
+      shape === "stepped" &&
+      (mirrored ? y < shoulder : y >= shoulder)
+    ) {
+      if (mirrored) l += inset;
+      else r -= inset;
+    } else if (shape === "waisted" && y >= shoulder - 3 && y < shoulder + 3) {
+      l += inset;
+      r -= inset;
+    }
+    return { left: l, right: r };
+  });
+  return { version: 1, shape, width, depth: bottom - top, top, bottom, rows };
+}
+
+export function footprintTiles(boundary: BuildingFootprint) {
+  return boundary.rows.map(({ left, right }) =>
+    Array.from({ length: W }, (_, x) => (x >= left && x < right ? 0 : 1)),
+  );
+}
+
+/** Roof uses the exact same shell, including its wings and recesses. Keep the
+ * extraction pad and the approach from the shared arrival shaft unobstructed. */
+export function buildingRoof(f: Floor) {
+  if (!f.boundary) return;
+  f.tiles = footprintTiles(f.boundary);
+  const row = f.boundary.rows[22];
+  for (let x = row.left; x < row.right; x++)
+    if (x < 21 || x > 23) f.tiles[22][x] = 1;
+  carveStairwells(f);
+}
+
+/** Check the stored design against actual geometry. Portal cells are explicit:
+ * wells occupy the two boundary-wall rows; only ground level has an outside lane. */
+export function buildingLayoutErrors(g: Game): string[] {
+  const first = g.floors[0]?.boundary;
+  if (!first) return ["missing building boundary"];
+  const expected = JSON.stringify(first);
+  const errors: string[] = [];
+  for (const f of g.floors) {
+    if (JSON.stringify(f.boundary) !== expected) {
+      errors.push(`floor ${f.index} has a different building boundary`);
+      continue;
+    }
+    if (f.entry.x !== 22 && f.index > 0)
+      errors.push(`floor ${f.index} arrival shaft is misaligned`);
+    if (f.index > 0 && f.entry.y !== first.bottom + 1)
+      errors.push(`floor ${f.index} arrival shaft depth is misaligned`);
+    if (
+      f.index < CONFIG.floors &&
+      (f.stairs.x !== 22 || f.stairs.y !== first.top - 1)
+    )
+      errors.push(`floor ${f.index} ascending shaft is misaligned`);
+    for (let y = 0; y < H; y++)
+      for (let x = 0; x < W; x++) {
+        const row = first.rows[y];
+        const inside = x >= row.left && x < row.right;
+        const well =
+          (x === 21 || x === 22) &&
+          ((f.index < CONFIG.floors && y >= first.top - 2 && y < first.top) ||
+            (f.index > 0 && y >= first.bottom && y < first.bottom + 2));
+        const entrance =
+          f.index === 0 &&
+          ((y === first.bottom && x >= 20 && x < 24) ||
+            (y > first.bottom && x >= 18 && x <= 25));
+        if (!f.tiles[y]?.[x] && !inside && !well && !entrance)
+          errors.push(`floor ${f.index} opens outside boundary at ${x},${y}`);
+        if ((well || entrance) && f.tiles[y]?.[x] !== 0)
+          errors.push(`floor ${f.index} has a blocked portal at ${x},${y}`);
+      }
+  }
+  return errors;
+}

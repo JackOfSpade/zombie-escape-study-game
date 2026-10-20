@@ -90,7 +90,7 @@ export function createPlayableGame(
   study?: StudyState,
 ): Game {
   const g = createGame(seed, r, study, { layout: "forward" });
-  redesign(g, r);
+  redesign(g, r, { randomized: true });
   return g;
 }
 /** Legacy layout remains the default for existing scenario/benchmark compatibility. */

@@ -6,6 +6,7 @@ import { step } from "../src/engine";
 import { TestRunner } from "../src/gametest/runner";
 import { emptyScenario } from "../src/gametest/schema";
 import { pursuitLayoutErrors } from "../src/pursuit-layout";
+import { redesign } from "../src/force-fields";
 import { survivorPath } from "../src/navigation";
 import { createGame, createPlayableGame } from "../src/world";
 import { type Floor, type Point, type Roadmap, W, H } from "../src/model";
@@ -60,8 +61,18 @@ test("no main-door-to-stairs bypass around the first occupied study hall", () =>
           | undefined
       )?.stages;
       const stage = stages?.find((s) => s.room === 2);
-      const left = 2,
-        right = stage ? 41 : 16,
+      const left = f.boundary
+          ? Math.min(
+              ...f.boundary.rows
+                .filter((r) => r.left < r.right)
+                .map((r) => r.left),
+            )
+          : 2,
+        right = stage
+          ? f.boundary
+            ? Math.max(...f.boundary.rows.map((r) => r.right)) - 1
+            : 41
+          : 16,
         top = stage ? stage.front + 1 : (f.generation?.lowerDivider ?? 16) + 1,
         bottom = stage ? stage.rear - 1 : 27;
       assert.equal(
@@ -79,13 +90,20 @@ test("no main-door-to-stairs bypass around the first occupied study hall", () =>
 });
 
 test("every study boundary spans the floor with all gaps covered by distinct force fields", () => {
+  const orders = new Set<string>();
   for (let seed = 0; seed < 64; seed++)
     for (const f of createPlayableGame(seed, roadmap).floors.slice(0, 4)) {
       const stages = f.generation!.stages!;
+      assert.equal(f.generation!.version, 4);
+      assert.equal(stages[0].room, 2, "the free study hall is first");
       assert.deepEqual(
-        stages.map((s) => s.room),
-        [2, 3, 0, 1],
+        stages
+          .slice(1)
+          .map((s) => s.room)
+          .sort(),
+        [0, 1, 3],
       );
+      orders.add(stages.map((s) => s.room).join(","));
       for (const row of [stages[0].rear, ...stages.map((s) => s.front)]) {
         const fields = f.furniture.filter(
           (o) => o.field && Math.floor(o.y) === row,
@@ -103,9 +121,11 @@ test("every study boundary spans the floor with all gaps covered by distinct for
             : `f${f.index}-room${stages.find((s) => s.front === row)!.room}-forward`,
         );
         let gaps = 0;
-        for (let x = 2; x < 42; x++) if (!f.tiles[row][x]) gaps++;
+        const boundary = f.boundary!.rows[row];
+        for (let x = boundary.left; x < boundary.right; x++)
+          if (!f.tiles[row][x]) gaps++;
         assert.equal(gaps, 3, `seed ${seed} floor ${f.index}: wall ${row}`);
-        for (let x = 2; x < 42; x++)
+        for (let x = boundary.left; x < boundary.right; x++)
           if (!f.tiles[row][x]) {
             const covering = fields.filter(
               (o) => x + 0.5 > o.x - o.w / 2 && x + 0.5 < o.x + o.w / 2,
@@ -132,6 +152,11 @@ test("every study boundary spans the floor with all gaps covered by distinct for
         );
       }
     }
+  assert.equal(
+    orders.size,
+    6,
+    "all orders of the later rooms occur across seeds",
+  );
 });
 
 test("completed zero-key solvers can reach stairs from every room with all entrance quotas exhausted", () => {
@@ -166,14 +191,18 @@ test("completed zero-key solvers can reach stairs from every room with all entra
   }
 });
 test("loading older forward worlds preserves their existing geometry and ongoing state", () => {
-  const g = createGame(42, roadmap, undefined, { layout: "forward" }),
-    before = JSON.stringify(g.floors);
-  assert.equal(g.floors[0].generation?.version, 2);
-  const loaded = decode(encode(g));
-  assert.equal(JSON.stringify(loaded.floors), before);
+  for (const version of [2, 3]) {
+    const g = createGame(42, roadmap, undefined, { layout: "forward" });
+    if (version === 3) redesign(g, roadmap);
+    const before = JSON.stringify(g.floors);
+    assert.equal(g.floors[0].generation?.version, version);
+    assert.equal(g.floors[0].boundary, undefined);
+    const loaded = decode(encode(g));
+    assert.equal(JSON.stringify(loaded.floors), before);
+  }
   assert.equal(
     createPlayableGame(42, roadmap).floors[0].generation?.version,
-    3,
+    4,
   );
 });
 
@@ -254,8 +283,8 @@ test("seeds vary room proportions, silhouettes, gates and terminal positions wit
       // Ignore the transverse gates so gate positions alone cannot satisfy shape variation.
       silhouettes.add(JSON.stringify(stages.map((s) => f.tiles[s.front + 1])));
       terminals.add(JSON.stringify(f.stations.map((s) => [s.x, s.y])));
-      assert.equal(stages[0].rear, 25);
-      assert.equal(stages.at(-1)!.front, 5);
+      assert.equal(stages[0].rear, f.boundary!.bottom - 3);
+      assert.equal(stages.at(-1)!.front, f.boundary!.top + 3);
       for (const stage of stages) {
         assert.ok(stage.rear - stage.front >= (stage.room === 2 ? 5 : 4));
         const stations = f.stations.filter(
@@ -306,8 +335,10 @@ test("generation validation rejects bypasses, inaccessible terminals and insuffi
     [`wall ${row} has 2 openings`],
   );
   Object.assign(f, structuredClone(saved));
-  for (let y = 2; y < 28; y++) f.tiles[y][1] = 0;
-  f.tiles[26][2] = f.tiles[3][2] = 0;
+  const boundary = f.boundary!;
+  for (let y = boundary.top; y < boundary.bottom; y++) f.tiles[y][1] = 0;
+  for (const y of [boundary.bottom - 2, boundary.top + 1])
+    for (let x = 1; x <= boundary.rows[y].left; x++) f.tiles[y][x] = 0;
   assert.ok(pursuitLayoutErrors(g, f).some((s) => s.includes("bypass")));
   Object.assign(f, structuredClone(saved));
   Object.assign(f.stations[1], { x: f.stations[0].x, y: f.stations[0].y });

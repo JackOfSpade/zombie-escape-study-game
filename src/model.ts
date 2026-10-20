@@ -331,7 +331,19 @@ export interface Station extends Point {
 /** Office function of a furnished room; it decides which objects it may hold. */
 export type OfficeRoomType =
   "break" | "cubicles" | "meeting" | "storage" | "reception" | "manager";
+/** The usable envelope, chosen once for a building. Right/bottom are exclusive.
+ * Rows use world coordinates; partitions and furnishings never change this mask. */
+export interface BuildingFootprint {
+  version: 1;
+  shape: "rectangle" | "chamfered" | "stepped" | "waisted";
+  width: number;
+  depth: number;
+  top: number;
+  bottom: number;
+  rows: { left: number; right: number }[];
+}
 export interface Floor {
+  boundary?: BuildingFootprint;
   /** Room functions chosen when the floor was furnished (generation only). */
   office?: { zone: string; type: OfficeRoomType }[];
   blood?: (string | undefined)[];
@@ -344,7 +356,7 @@ export interface Floor {
     forwardEntry?: Point;
   }[];
   generation?: {
-    version: 2 | 3;
+    version: 2 | 3 | 4;
     upperDivider: number;
     lowerDivider: number;
     stages?: { room: number; rear: number; front: number }[];

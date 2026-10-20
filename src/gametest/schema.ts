@@ -69,6 +69,7 @@ export interface Check {
       }
     | { type: "separation"; ids: string[] }
     | { type: "event"; event: string }
+    | { type: "buildingLayoutErrors" }
     | { type: "soundConnected"; floor: number; a: Point; b: Point };
   op: "eq" | "gte" | "lte";
   expected: number | boolean;
@@ -79,7 +80,7 @@ export interface Scenario {
   name: string;
   seed: number;
   template: "arena" | "building";
-  layout?: "legacy" | "forward";
+  layout?: "legacy" | "forward" | "randomized";
   rules?: "force-fields";
   simulation: "game" | "physics";
   maxTicks: number;
@@ -250,9 +251,14 @@ export function parseScenario(value: string | unknown): Scenario {
     integer(s.seed, 0, 0xffffffff) &&
       ["arena", "building"].includes(String(s.template)) &&
       (s.layout === undefined ||
-        ["legacy", "forward"].includes(String(s.layout))) &&
+        ["legacy", "forward", "randomized"].includes(String(s.layout))) &&
       ["game", "physics"].includes(String(s.simulation)),
     "Invalid seed, template or simulation.",
+  );
+  requireThat(
+    s.layout !== "randomized" ||
+      (s.template === "building" && s.rules === "force-fields"),
+    "Randomized layouts require a building and force-field rules.",
   );
   requireThat(
     integer(s.maxTicks, 1, LAB_LIMITS.ticks) &&
@@ -401,6 +407,11 @@ export function parseScenario(value: string | unknown): Scenario {
       );
     else if (q.type === "event")
       requireThat(id(q.event), "Invalid event type.");
+    else if (q.type === "buildingLayoutErrors")
+      requireThat(
+        Object.keys(q).length === 1,
+        "Building layout error checks take no parameters.",
+      );
     else
       requireThat(
         q.type === "soundConnected" &&

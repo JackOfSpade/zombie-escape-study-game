@@ -98,9 +98,22 @@ function hash(x: number, y: number, seed: number) {
 type Zone = "carpet" | "carpetAlt" | "lino" | "concrete" | "roof";
 /** Which floor finish a cell has: carpeted rooms, vinyl circulation, outside paving. */
 export function floorZone(f: Floor, x: number, y: number): Zone {
-  if (f.index === 4) return "roof";
-  if (x < 2 || x >= 42 || y < 2 || y >= 28) return "concrete";
-  const stages = f.generation?.version === 3 ? f.generation.stages : undefined;
+  if (f.boundary) {
+    const row = f.boundary.rows[y];
+    if (
+      y < f.boundary.top ||
+      y >= f.boundary.bottom ||
+      !row ||
+      x < row.left ||
+      x >= row.right
+    )
+      return "concrete";
+    if (f.index === 4) return "roof";
+  } else {
+    if (f.index === 4) return "roof";
+    if (x < 2 || x >= 42 || y < 2 || y >= 28) return "concrete";
+  }
+  const stages = f.generation?.stages;
   if (stages) {
     const i = stages.findIndex((s) => y > s.front && y < s.rear);
     if (i < 0) return "lino";

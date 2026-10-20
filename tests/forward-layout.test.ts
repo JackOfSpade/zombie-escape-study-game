@@ -37,7 +37,7 @@ test("randomized fresh floors give every terminal a forward route with its origi
   for (let seed = 0; seed < 64; seed++) {
     const g = createPlayableGame(seed, roadmap);
     for (const f of g.floors.slice(0, 4)) {
-      assert.equal(f.generation?.version, 3);
+      assert.equal(f.generation?.version, 4);
       const mouths = new Set<number>();
       for (const room of f.rooms ?? [])
         if (room.innerMouth)

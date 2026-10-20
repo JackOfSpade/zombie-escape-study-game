@@ -121,6 +121,92 @@ test("bounded JSON scenarios reject malformed geometry, timelines, unknown actio
   assert.throws(() => parseScenario(" ".repeat(1_000_001)), /1 MB/);
   assert.throws(() => parseScenario({ schema: 1, payload: "private" }));
 });
+test("building layout queries reject missing metadata instead of vacuously passing", () => {
+  const s = emptyScenario();
+  s.maxTicks = 1;
+  s.checks = [
+    {
+      name: "A real generated footprint is required",
+      mode: "always",
+      query: { type: "buildingLayoutErrors" },
+      op: "eq",
+      expected: 0,
+    },
+  ];
+  const result = new TestRunner(s, roadmap).run();
+  assert.equal(result.status, "failed");
+  assert.ok((result.checks[0].actual as number) > 0);
+  assert.equal(result.tick, 1);
+  assert.throws(
+    () =>
+      parseScenario({
+        ...s,
+        checks: [
+          {
+            ...s.checks[0],
+            query: { type: "buildingLayoutErrors", id: "human" },
+          },
+        ],
+      }),
+    /take no parameters/,
+  );
+});
+test("randomized lab layouts are explicit and require the fresh building rules", () => {
+  const s = emptyScenario();
+  assert.throws(
+    () => parseScenario({ ...s, layout: "randomized" }),
+    /require a building and force-field rules/,
+  );
+  assert.throws(
+    () => parseScenario({ ...s, template: "building", layout: "randomized" }),
+    /require a building and force-field rules/,
+  );
+  assert.equal(
+    parseScenario({
+      ...s,
+      template: "building",
+      layout: "randomized",
+      rules: "force-fields",
+    }).layout,
+    "randomized",
+  );
+});
+test("randomized lab worlds preserve their footprint through checkpoints and reject a changed upper shell", () => {
+  const fixture = parseScenario(
+    readFileSync(
+      "tests/fixtures/gametest/building-footprint-consistency.json",
+      "utf8",
+    ),
+  );
+  const s = {
+    ...fixture,
+    maxTicks: 2,
+    actions: [{ tick: 2, type: "checkpoint" as const }],
+  };
+  const runner = new TestRunner(s, roadmap);
+  assert.equal(runner.game.floors[0].generation?.version, 4);
+  const before = runner.game.floors.map((f) => structuredClone(f.boundary));
+  assert.ok(before.every(Boolean));
+  assert.equal(runner.run().status, "passed");
+  assert.deepEqual(
+    runner.game.floors.map((f) => f.boundary),
+    before,
+  );
+  assert.deepEqual(runner.report().actions, [
+    { tick: 2, type: "checkpoint", ok: true },
+  ]);
+  const captured = captureLayout(runner.game, s);
+  assert.equal(captured.template, "arena");
+  assert.doesNotThrow(() => new TestRunner(parseScenario(captured), roadmap));
+
+  const changed = new TestRunner(s, roadmap);
+  const boundary = changed.game.floors[1].boundary!;
+  changed.game.floors[1].boundary = { ...boundary, width: boundary.width + 2 };
+  const failed = changed.run();
+  assert.equal(failed.status, "failed");
+  assert.equal(failed.tick, 1);
+  assert.ok((failed.checks[0].actual as number) > 0);
+});
 test("layout capture keeps door frames and poses, omits study data and remains re-importable", () => {
   const r = new TestRunner(preset("push-door"), roadmap);
   r.run();

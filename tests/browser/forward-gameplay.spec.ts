@@ -6,7 +6,13 @@ const stacked = JSON.parse(
 const forward = JSON.parse(
   readFileSync("tests/fixtures/gametest/forward-room-exit.json", "utf8"),
 );
-test("new runs use forward layouts and retain their geometry after pause/save/reload", async ({
+const randomized = JSON.parse(
+  readFileSync(
+    "tests/fixtures/gametest/building-footprint-consistency.json",
+    "utf8",
+  ),
+);
+test("new runs share one randomized boundary on every floor and retain it after pause/save/reload", async ({
   page,
 }) => {
   await page.goto("/");
@@ -19,16 +25,31 @@ test("new runs use forward layouts and retain their geometry after pause/save/re
         tiles: f.tiles,
         rooms: f.rooms,
         generation: f.generation,
+        boundary: f.boundary,
+        entry: f.entry,
+        stairs: f.stairs,
       })),
     };
   });
   expect(
-    before.floors.slice(0, 4).every(
-      (f: any) =>
-        // Fresh force-field runs use the version 3 forward layout.
-        f.generation.version === 3 && f.rooms.every((r: any) => r.forwardExit),
-    ),
+    before.floors
+      .slice(0, 4)
+      .every(
+        (f: any) =>
+          f.generation.version === 4 &&
+          f.rooms.every((r: any) => r.forwardExit),
+      ),
   ).toBe(true);
+  expect(before.floors[0].boundary).toBeDefined();
+  expect(before.floors[0].boundary.width).toBeGreaterThan(0);
+  expect(before.floors[0].boundary.depth).toBeGreaterThan(0);
+  for (const floor of before.floors)
+    expect(floor.boundary).toEqual(before.floors[0].boundary);
+  // The roof is part of the same structure, including the arrival shaft.
+  expect(before.floors.at(-1).entry).toEqual({
+    x: 22,
+    y: before.floors[0].boundary.bottom + 1,
+  });
   await page.keyboard.press("Escape");
   await expect(page.locator("#pause-save-status")).toContainText("saved");
   await page.reload();
@@ -41,10 +62,24 @@ test("new runs use forward layouts and retain their geometry after pause/save/re
         tiles: f.tiles,
         rooms: f.rooms,
         generation: f.generation,
+        boundary: f.boundary,
+        entry: f.entry,
+        stairs: f.stairs,
       })),
     };
   });
   expect(after).toEqual(before);
+});
+test("randomized footprint validation also runs in the browser lab across a checkpoint", async ({
+  page,
+}) => {
+  await page.goto("/lab.html");
+  await expect(page.locator("#lab-message")).toContainText("Loaded");
+  await page.locator("#lab-json").fill(JSON.stringify(randomized));
+  await page.locator("#lab-apply-json").click();
+  await page.locator("#lab-run").click();
+  await expect(page.locator("#lab-status")).toHaveText("passed");
+  await expect(page.locator("#lab-results")).toContainText("got 0 at tick 120");
 });
 test("the actual Space key climbs a two-object barricade and records its attempt", async ({
   page,

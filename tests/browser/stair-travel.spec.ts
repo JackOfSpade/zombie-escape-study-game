@@ -58,9 +58,13 @@ test("walking into the personal staircase starts a saved flight; leaving the wel
       x: g.floors[0].stairs.x + 0.75,
       y: g.floors[0].stairs.y + 3,
     });
-    return { study: JSON.stringify(g.study), stairs: g.floors[0].stairs };
+    return {
+      study: JSON.stringify(g.study),
+      stairs: g.floors[0].stairs,
+      boundary: g.floors[0].boundary,
+    };
   });
-  expect(baseline.stairs).toEqual({ x: 22, y: 1 });
+  expect(baseline.stairs).toEqual({ x: 22, y: baseline.boundary.top - 1 });
   await page.locator("#world").focus();
   // No E: walking north into the well starts the flight by itself.
   const started = await walkIntoWell(page);

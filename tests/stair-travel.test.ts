@@ -306,18 +306,20 @@ test("an exploring NPC placed in the fresh floor-1 arrival well walks out of it 
 test("a fresh force-field floor carves the well into the north wall and a survivor walks in to climb", () => {
   const probe = createPlayableGame(11, r),
     f0 = probe.floors[0],
-    f1 = probe.floors[1];
-  assert.deepEqual({ x: f0.stairs.x, y: f0.stairs.y }, { x: 22, y: 1 });
+    f1 = probe.floors[1],
+    top = f0.boundary!.top,
+    bottom = f0.boundary!.bottom;
+  assert.deepEqual({ x: f0.stairs.x, y: f0.stairs.y }, { x: 22, y: top - 1 });
   for (const [y, x] of [
-    [0, 21],
-    [0, 22],
-    [1, 21],
-    [1, 22],
+    [top - 2, 21],
+    [top - 2, 22],
+    [top - 1, 21],
+    [top - 1, 22],
   ])
     assert.equal(f0.tiles[y][x], 0, `floor 0 tile ${x},${y}`);
-  assert.equal(f1.tiles[28][21], 0);
-  assert.equal(f1.tiles[29][22], 0);
-  assert.deepEqual({ x: f1.entry.x, y: f1.entry.y }, { x: 22, y: 29 });
+  assert.equal(f1.tiles[bottom][21], 0);
+  assert.equal(f1.tiles[bottom + 1][22], 0);
+  assert.deepEqual({ x: f1.entry.x, y: f1.entry.y }, { x: 22, y: bottom + 1 });
   assert.deepEqual({ x: f0.entry.x, y: f0.entry.y }, { x: 21.5, y: 26.5 });
   function walk(access: number[]) {
     const g = createPlayableGame(11, r),
@@ -327,7 +329,12 @@ test("a fresh force-field floor carves the well into the north wall and a surviv
     g.nextSpawn = 999999;
     g.surge.anchor = 999999;
     g.zombies = [];
-    Object.assign(a, { x: 22, y: 4, floor: 0, access });
+    Object.assign(a, {
+      x: 22,
+      y: g.floors[0].boundary!.top + 1,
+      floor: 0,
+      access,
+    });
     delete a.stairwell;
     for (let i = 0; i < 150 && a.floor === 0; i++)
       step(g, 1 / 30, { x: 0, y: -1, grab: false });
@@ -335,7 +342,7 @@ test("a fresh force-field floor carves the well into the north wall and a surviv
   }
   const up = walk([0]);
   assert.equal(up.a.floor, 1);
-  assert.ok(distance(up.a, { x: 22, y: 29 }) < 0.8);
+  assert.ok(distance(up.a, { x: 22, y: bottom + 1 }) < 0.8);
   assert.equal(lockedEvents(up.g), 0);
   const locked = walk([]);
   assert.equal(locked.a.floor, 0);

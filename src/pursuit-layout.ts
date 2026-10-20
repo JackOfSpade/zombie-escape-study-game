@@ -8,46 +8,76 @@ import {
   rand,
 } from "./model";
 import { carveStairwells } from "./stairwell";
+import { footprintTiles, layoutRandom } from "./building-layout";
 /** Fresh force-field floors have no corridor around their study rooms.
  * Each complete transverse room is a cut between the rear entry and front stairs. */
 export function pursuitLayout(g: Game, f: Floor) {
   if (f.index === 4 || !f.stations.length) return;
-  const random = { rng: (g.seed ^ Math.imul(f.index + 1, 0x6d2b79f5)) >>> 0 };
+  const boundary = f.boundary;
+  const random = boundary
+    ? layoutRandom(g.seed, 0x726f6f6d, f.index)
+    : { rng: (g.seed ^ Math.imul(f.index + 1, 0x6d2b79f5)) >>> 0 };
   // Allocate the available depth instead of independently rolling room sizes:
   // every stage keeps a usable interior and the stair/entry lobbies stay connected.
   const depths = [5, 4, 4, 4];
-  for (let spare = 3; spare > 0; spare--)
+  const rearRow = boundary ? boundary.bottom - 3 : 25;
+  const frontRow = boundary ? boundary.top + 3 : 5;
+  for (let spare = rearRow - frontRow - 17; spare > 0; spare--)
     depths[Math.floor(rand(random) * depths.length)]++;
-  let rearWall = 25;
-  const stages = [2, 3, 0, 1].map((room, i) => {
+  const order = [3, 0, 1];
+  if (boundary)
+    for (let i = order.length - 1; i > 0; i--) {
+      const j = Math.floor(rand(random) * (i + 1));
+      [order[i], order[j]] = [order[j], order[i]];
+    }
+  let rearWall = rearRow;
+  const stages = [2, ...order].map((room, i) => {
     const stage = { room, rear: rearWall, front: rearWall - depths[i] };
     rearWall = stage.front;
     return stage;
   });
-  const bounds = stages.map(() => ({
-    left: 2 + Math.floor(rand(random) * 4),
-    right: 42 - Math.floor(rand(random) * 4),
-  }));
+  const bounds = stages.map((stage) =>
+    boundary
+      ? {
+          left: Math.max(
+            ...boundary.rows
+              .slice(stage.front, stage.rear + 1)
+              .map((r) => r.left),
+          ),
+          right: Math.min(
+            ...boundary.rows
+              .slice(stage.front, stage.rear + 1)
+              .map((r) => r.right),
+          ),
+        }
+      : {
+          left: 2 + Math.floor(rand(random) * 4),
+          right: 42 - Math.floor(rand(random) * 4),
+        },
+  );
   f.layout = "pursuit";
   f.generation = {
-    version: 3,
+    version: boundary ? 4 : 3,
     upperDivider: stages[2].front,
     lowerDivider: stages[0].front,
     stages,
   };
-  f.tiles = Array.from({ length: H }, (_, y) =>
-    Array.from({ length: W }, (_, x) =>
-      x >= 2 && x < 42 && y >= 2 && y < 28 ? 0 : 1,
-    ),
-  );
+  f.tiles = boundary
+    ? footprintTiles(boundary)
+    : Array.from({ length: H }, (_, y) =>
+        Array.from({ length: W }, (_, x) =>
+          x >= 2 && x < 42 && y >= 2 && y < 28 ? 0 : 1,
+        ),
+      );
   for (const row of [stages[0].rear, ...stages.map((s) => s.front)])
     for (let x = 2; x < 42; x++) f.tiles[row][x] = 1;
-  // Vary room widths independently. These side recesses never connect stages;
-  // the entire transverse boundary remains solid except at its force fields.
-  for (const [i, stage] of stages.entries())
-    for (let y = stage.front + 1; y < stage.rear; y++)
-      for (let x = 2; x < 42; x++)
-        if (x < bounds[i].left || x >= bounds[i].right) f.tiles[y][x] = 1;
+  // Historical floors keep their independent side recesses. New buildings use
+  // their shared envelope directly; floor partitions cannot change the outline.
+  if (!boundary)
+    for (const [i, stage] of stages.entries())
+      for (let y = stage.front + 1; y < stage.rear; y++)
+        for (let x = 2; x < 42; x++)
+          if (x < bounds[i].left || x >= bounds[i].right) f.tiles[y][x] = 1;
   f.entry = { x: 21.5, y: 26.5 };
   f.stairs = { x: 21.5, y: 3.5 };
   // Staircases are real wells in the north and south boundary walls.
@@ -117,13 +147,20 @@ export function pursuitLayout(g: Game, f: Floor) {
   // One opening per shared wall: each stage's single forward field is green
   // with floor access, admits a few first-touch visitors from the rear, and
   // otherwise needs a personal key. A red field cannot be walked around.
-  const exits = stages.map((stage) => ({
-    x:
-      stage.room === 1
-        ? 21.5
-        : 7.5 + Math.floor(rand(random) * 7) + (rand(random) < 0.5 ? 0 : 23),
-    y: stage.front + 0.5,
-  }));
+  const exits = stages.map((stage, i) => {
+    let x = 21.5;
+    if (boundary && i < stages.length - 1) {
+      // Intersect both sides of the wall so a stepped wing can never make an
+      // opening through the outside shell. Leave space beside the full field.
+      const adjacent = boundary.rows.slice(stage.front - 1, stage.front + 2);
+      const left = Math.max(...adjacent.map((r) => r.left));
+      const right = Math.min(...adjacent.map((r) => r.right));
+      x = left + 2.5 + Math.floor(rand(random) * (right - left - 4));
+    } else if (!boundary && stage.room !== 1) {
+      x = 7.5 + Math.floor(rand(random) * 7) + (rand(random) < 0.5 ? 0 : 23);
+    }
+    return { x, y: stage.front + 0.5 };
+  });
   for (const [i, stage] of stages.entries()) {
     // The retired separate entry position was rolled here; keep consuming the
     // roll so each seed's room sizes and terminal arrangement stay unchanged.

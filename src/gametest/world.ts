@@ -137,7 +137,7 @@ export function spawn(g: Game, s: Spawn, replace = false) {
 }
 export function createTestWorld(s: Scenario, roadmap: Roadmap) {
   const g = createGame(s.seed, roadmap, undefined, {
-    layout: s.layout ?? "legacy",
+    layout: s.layout === "randomized" ? "forward" : (s.layout ?? "legacy"),
   });
   g.id = `gametest-${s.id}`;
   g.status = "playing";
@@ -167,7 +167,8 @@ export function createTestWorld(s: Scenario, roadmap: Roadmap) {
   }
   if (s.template === "arena" && s.naturalSpawns)
     for (let x = 18; x <= 25; x++) g.floors[0].tiles[H - 1][x] = 0;
-  if (s.rules === "force-fields") redesign(g, roadmap);
+  if (s.rules === "force-fields")
+    redesign(g, roadmap, { randomized: s.layout === "randomized" });
   // Scenario identity replaces the factory run ID. Keep private study sessions
   // bound to that same synthetic run, just as they are in a playable game.
   for (const encounter of Object.values(g.encounters)) encounter.runId = g.id;
@@ -251,6 +252,7 @@ export function captureLayout(g: Game, s: Scenario): Scenario {
   return {
     ...structuredClone(s),
     template: "arena",
+    layout: s.layout === "randomized" ? "legacy" : s.layout,
     startTime: g.time,
     entities,
     deleted: [],

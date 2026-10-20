@@ -1,5 +1,6 @@
 import { SWARM } from "../force-fields";
 import { soundConnected } from "../acoustics";
+import { buildingLayoutErrors } from "../building-layout";
 import { step, toggleDoor, toggleGrip, vault } from "../engine";
 import { distance, type Game, type Roadmap, type Point } from "../model";
 import {
@@ -75,6 +76,7 @@ function read(g: Game, c: Check): number | boolean {
     return g.events.filter((e) => e.type === q.event).length;
   if (q.type === "soundConnected")
     return soundConnected(g.floors[q.floor], q.a, q.b);
+  if (q.type === "buildingLayoutErrors") return buildingLayoutErrors(g).length;
   const values =
     q.kind === "zombie"
       ? g.zombies.filter((z) => z.hp > 0)

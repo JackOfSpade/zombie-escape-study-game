@@ -55,14 +55,17 @@ export function stairwellApproach(f: Floor, kind: "up" | "down"): Point[] {
 /** Carve the wells of a fresh floor into its boundary walls. Floor 0 has no
  * descending well (its entry stays the arrival point from outside). */
 export function carveStairwells(f: Floor) {
-  const columns = [21, 22];
+  const columns = [21, 22],
+    top = f.boundary?.top ?? 2,
+    bottom = f.boundary?.bottom ?? H - 6;
   if (f.index < CONFIG.floors) {
-    f.stairs = { x: 22, y: 1 };
-    for (let y = 0; y < 2; y++) for (const x of columns) f.tiles[y][x] = 0;
+    f.stairs = { x: 22, y: top - 1 };
+    for (let y = top - 2; y < top; y++)
+      for (const x of columns) f.tiles[y][x] = 0;
   }
   if (f.index > 0) {
-    f.entry = { x: 22, y: H - 5 };
-    for (let y = H - 6; y < H - 4; y++)
+    f.entry = { x: 22, y: bottom + 1 };
+    for (let y = bottom; y < bottom + 2; y++)
       for (const x of columns) f.tiles[y][x] = 0;
   }
 }

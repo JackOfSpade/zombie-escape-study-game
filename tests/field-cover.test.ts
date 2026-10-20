@@ -55,15 +55,19 @@ test("an intact force field covers a zombie; a destroyed one no longer does", ()
   assert.equal(door.destroyed, false);
   assert.equal(fieldBetween(f, a, z), true);
   let fled = 0;
-  let maxX = a.x;
+  let minY = a.y;
+  const exit = f.rooms!.find((room) => room.index === 2)!.forwardExit!;
   // Keep the zombie pinned behind the field; it would otherwise start hitting it.
   tick(g, 90, () => {
     Object.assign(z, { x: 21.5, y: 26.5, floor: 0 });
     if (a.activity === "fleeing") fled++;
-    maxX = Math.max(maxX, a.x);
+    minY = Math.min(minY, a.y);
   });
   assert.equal(fled, 0, "never flees from a field-covered zombie");
-  assert.ok(maxX > 25, `advances toward the forward opening (x=${maxX})`);
+  assert.ok(
+    minY < exit.y - 1,
+    `advances through the forward opening (y=${minY})`,
+  );
   assert.equal(a.floor, 0);
 
   // Same survivor, field destroyed and the zombie within reaction distance.

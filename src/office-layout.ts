@@ -615,29 +615,34 @@ const ROOMS: OfficeRoomType[] = [
 export function pursuitOfficeZones(f: Floor): OfficeZone[] {
   const stages = f.generation?.stages;
   if (f.index >= 4 || !stages) return [];
+  const bounds = (y1: number, y2: number) => {
+    if (!f.boundary) return { x1: 2, y1, x2: 41, y2 };
+    y1 = Math.max(y1, f.boundary.top);
+    y2 = Math.min(y2, f.boundary.bottom - 1);
+    // A stage may cross a chamfer or setback. Its furnishing rectangle must
+    // fit every row it spans; placement still checks the real walls too.
+    const rows = f.boundary.rows.slice(y1, y2 + 1);
+    return {
+      x1: Math.max(...rows.map((row) => row.left)),
+      y1,
+      x2: Math.min(...rows.map((row) => row.right)) - 1,
+      y2,
+    };
+  };
   return [
     ...stages.map((s) => ({
       id: `room${s.room}`,
-      x1: 2,
-      y1: s.front + 1,
-      x2: 41,
-      y2: s.rear - 1,
+      ...bounds(s.front + 1, s.rear - 1),
       types: s.room === 2 ? (["cubicles"] as OfficeRoomType[]) : ROOMS,
     })),
     {
       id: "entry",
-      x1: 2,
-      y1: stages[0].rear + 1,
-      x2: 41,
-      y2: 27,
+      ...bounds(stages[0].rear + 1, (f.boundary?.bottom ?? 28) - 1),
       types: ["reception"],
     },
     {
       id: "lobby",
-      x1: 2,
-      y1: 2,
-      x2: 41,
-      y2: stages[stages.length - 1].front - 1,
+      ...bounds(f.boundary?.top ?? 2, stages[stages.length - 1].front - 1),
       types: ["break", "reception"],
     },
   ];

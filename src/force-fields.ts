@@ -1,4 +1,9 @@
 import { pursuitLayout } from "./pursuit-layout";
+import {
+  buildingLayoutErrors,
+  buildingRoof,
+  createBuildingFootprint,
+} from "./building-layout";
 import { carveStairwells } from "./stairwell";
 import {
   fieldClearance,
@@ -91,8 +96,16 @@ export function useField(g: Game, a: Actor, o: Furniture) {
 }
 
 /** Fresh-run redesign; historical saves and lab fixtures retain their original rules. */
-export function redesign(g: Game, roadmap?: Roadmap) {
+export function redesign(
+  g: Game,
+  roadmap?: Roadmap,
+  options: { randomized?: boolean } = {},
+) {
   g.rules = "force-fields";
+  if (options.randomized) {
+    const boundary = createBuildingFootprint(g.seed);
+    for (const f of g.floors) f.boundary = structuredClone(boundary);
+  }
   for (const a of g.survivors) {
     a.inventory = [];
     a.keys = 0;
@@ -152,8 +165,10 @@ export function redesign(g: Game, roadmap?: Roadmap) {
   }
   // The roof's arrival staircase is carved like the ordinary floors' wells.
   const roof = g.floors[CONFIG.floors];
-  if (roof && g.floors.some((f) => f.generation?.version === 2))
-    carveStairwells(roof);
+  if (roof && g.floors.some((f) => f.generation?.version === 2)) {
+    if (roof.boundary) buildingRoof(roof);
+    else carveStairwells(roof);
+  }
   for (const floor of g.floors)
     if (floor.generation?.version === 2) {
       pursuitLayout(g, floor);
@@ -168,6 +183,10 @@ export function redesign(g: Game, roadmap?: Roadmap) {
         floor.furniture.filter((o) => /-room\d-door$/.test(o.id)),
       );
     }
+  if (options.randomized) {
+    const errors = buildingLayoutErrors(g);
+    if (errors.length) throw Error(`Invalid building: ${errors.join("; ")}`);
+  }
   const used = new Set(
     g.floors.flatMap((f) => f.stations.map((s) => s.encounter)),
   );
