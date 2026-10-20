@@ -36,7 +36,7 @@ test("earned shields and real keyboard controls extract from a crowded rooftop a
   await page.waitForFunction(
     () => (window as any).__deadAir?.game.survivors[0].floor === 4,
   );
-  await expect(page.locator("#access")).toHaveText("ROOFTOP");
+  await expect(page.locator("#next-title")).toHaveText("Hold for extraction.");
   await page.locator("#world").focus();
   let held = new Set<string>();
   const release = async () => {
@@ -130,7 +130,6 @@ test("earned shields and real keyboard controls extract from a crowded rooftop a
   await expect(
     page.getByRole("heading", { name: "You made it." }),
   ).toBeVisible();
-  await expect(page.locator("#access")).toHaveText("EXTRACTED");
   await expect(page.locator("#next-title")).toHaveText("Extraction confirmed.");
   await expect(page.locator("#pickup")).toContainText("EXTRACTED");
   await expect(page.locator("#start-card")).toHaveClass(/finished/);

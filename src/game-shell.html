@@ -39,20 +39,24 @@
         tabindex="0"
       ></canvas>
       <div id="start-card" class="overlay"></div>
+      <div id="spectator" class="spectator" hidden>
+        <span class="eyebrow">SPECTATING</span>
+        <div id="spectator-floors" role="group" aria-label="Floor"></div>
+        <button id="spectator-summary" class="quiet">Run summary</button>
+        <span class="spectator-hint">WASD / drag to pan · scroll to zoom</span>
+      </div>
       <div
         id="world-caption"
         role="status"
         aria-live="polite"
         aria-atomic="true"
       ></div>
-      <div class="north">N ↑</div>
       <div id="hud" class="hud" aria-label="Survivor status">
         <div class="hud-health">
           <div class="hud-track"><div id="hud-health-fill"></div></div>
           <strong id="hud-health">100</strong>
         </div>
         <span id="hud-keys" class="hud-item">0 keys</span
-        ><span id="hud-access" class="hud-chip"></span
         ><span id="hud-pickup" class="hud-item" hidden></span>
       </div>
       <div
@@ -80,8 +84,7 @@
     <section class="vitals">
       <div class="eyebrow">SURVIVOR / YOU</div>
       <div class="vital-row">
-        <strong id="health">100</strong><span>HEALTH</span
-        ><span id="access" class="chip"></span>
+        <strong id="health">100</strong><span>HEALTH</span>
       </div>
       <div class="health-track"><div id="health-fill"></div></div>
       <div class="population">

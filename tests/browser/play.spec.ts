@@ -409,7 +409,6 @@ test("development partial work survives actual outside combat death and a fresh 
   await expect(
     page.getByRole("button", { name: "Begin another run" }),
   ).toBeVisible({ timeout: 10000 });
-  await expect(page.locator("#access")).toHaveText("RUN ENDED");
   await expect(page.locator("#next-title")).toHaveText("Escape attempt ended.");
   await expect(page.locator("#start-card")).toHaveClass(/finished/);
   const archivedRun = await page.evaluate(
@@ -426,7 +425,6 @@ test("development partial work survives actual outside combat death and a fresh 
     };
   });
   expect(state.id).not.toBe(archivedRun);
-  await expect(page.locator("#access")).toHaveText("ACCESS LOCKED");
   await expect(page.locator("#start-card")).toBeHidden();
   await expect(page.locator("#next-title")).toHaveText("Make it inside.");
   expect(

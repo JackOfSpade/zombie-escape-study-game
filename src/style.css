@@ -182,13 +182,6 @@ canvas {
   display: block;
   outline: none;
 }
-.north {
-  position: absolute;
-  right: 15px;
-  top: 15px;
-  color: var(--muted);
-  font: 11px monospace;
-}
 .controls {
   display: flex;
   gap: 16px;
@@ -258,7 +251,6 @@ kbd {
   background: var(--accent);
 }
 .hud > *,
-.hud-chip,
 .hud-item {
   white-space: nowrap;
 }
@@ -374,19 +366,62 @@ kbd {
 .inventory:empty {
   display: none;
 }
+/* After the run ends the frozen building can be watched floor by floor; the
+   bar replaces the survivor HUD at the same corner and sits under the card. */
+body.spectating .hud,
+body.spectating .inventory {
+  display: none;
+}
+.spectator {
+  position: absolute;
+  left: 15px;
+  top: 15px;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  padding: 8px 12px;
+  background: rgba(11, 20, 24, 0.82);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  font: 12px monospace;
+  color: var(--ink);
+}
+.spectator[hidden] {
+  display: none;
+}
+#spectator-floors {
+  display: flex;
+  gap: 4px;
+}
+#spectator-floors button {
+  min-width: 34px;
+  padding: 4px 8px;
+  font: 11px monospace;
+}
+#spectator-floors button.active {
+  background: var(--accent);
+  color: #0b1418;
+}
+.spectator-hint {
+  color: var(--muted);
+  font-size: 10px;
+}
+body.spectating .controls {
+  visibility: hidden;
+}
+body.spectating canvas {
+  cursor: grab;
+}
+body.spectating canvas.dragging {
+  cursor: grabbing;
+}
 /* Narrow viewports (terminal open, phones): stack the HUD rows. */
 .terminal-open .hud {
   flex-direction: column;
   align-items: flex-start;
   gap: 6px;
-}
-.hud-chip {
-  color: var(--accent);
-  border: 1px solid var(--line);
-  border-radius: 4px;
-  padding: 3px 6px;
-  font-size: 9px;
-  letter-spacing: 0.5px;
 }
 @media (max-width: 600px) {
   .hud {
@@ -418,14 +453,6 @@ kbd {
 .vital-row > span {
   font-size: 9px;
   color: var(--muted);
-}
-.vital-row .chip {
-  margin-left: auto;
-  color: var(--accent);
-  border: 1px solid var(--line);
-  border-radius: 4px;
-  padding: 5px;
-  font-size: 8px;
 }
 .health-track {
   height: 3px;

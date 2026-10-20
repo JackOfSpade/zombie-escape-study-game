@@ -10,6 +10,7 @@ import {
   drawWorkstation,
   terrainCanvas,
 } from "./office-art";
+import type { SpectatorView } from "./spectator";
 import { type Stairwell, stairwell } from "./stairwell";
 import { playerCanSee, sightRadius, visibilityPolygon } from "./visibility";
 import { stairContactCues } from "./zombie-stairs";
@@ -40,7 +41,13 @@ const mutation = {
   dim: "#20162e",
 };
 let lightCanvas: HTMLCanvasElement | undefined;
-export function render(canvas: HTMLCanvasElement, g: Game) {
+/** Draw the player's view, or, with a spectator view after the run ends, the
+ * whole of one floor: no fog, no light mask, no interaction prompts. */
+export function render(
+  canvas: HTMLCanvasElement,
+  g: Game,
+  view?: SpectatorView,
+) {
   const ctx = canvas.getContext("2d")!,
     dpr = Math.min(devicePixelRatio || 1, 2),
     rect = canvas.getBoundingClientRect();
@@ -57,36 +64,50 @@ export function render(canvas: HTMLCanvasElement, g: Game) {
   ctx.fillStyle = p.sky;
   ctx.fillRect(0, 0, rect.width, rect.height);
   const a = human(g),
-    { scale, ox, oy } = camera(rect.width, rect.height, a);
+    spectator = !!view,
+    floorIndex = view?.floor ?? a.floor,
+    { scale, ox, oy } = camera(
+      rect.width,
+      rect.height,
+      view ? view.focus : a,
+      view?.zoom ?? 1,
+    );
   ctx.translate(ox, oy);
   ctx.scale(scale, scale);
-  const f = g.floors[a.floor],
+  const f = g.floors[floorIndex],
     radius = sightRadius(f);
-  const visible = (pt: Point) => playerCanSee(f, a, pt, radius);
-  const polygon = visibilityPolygon(f, a, radius);
-  // Clip world geometry and effects. Labels for visible sources are drawn in a
-  // separate overlay so their glyphs are not cut off at the visibility boundary.
-  // Previously explored geometry is remembered internally but never drawn as
-  // current vision through a wall or beyond the finite viewing radius.
+  const visible = spectator
+    ? () => true
+    : (pt: Point) => playerCanSee(f, a, pt, radius);
+  const sees = (pt: Point) => spectator || playerCanSee(f, a, pt, radius);
+  // The player's sight polygon clips the world and lights it; the spectator
+  // view has neither.
+  const polygon = spectator ? [] : visibilityPolygon(f, a, radius);
   ctx.save();
-  ctx.beginPath();
-  polygon.forEach((p, i) =>
-    i === 0 ? ctx.moveTo(p.x, p.y) : ctx.lineTo(p.x, p.y),
-  );
-  ctx.closePath();
-  ctx.clip();
-  const seen = new Set(a.seen);
-  const theme = g.surge.state === "active" ? "mutation" : "normal";
-  // Terrain memory does not expose live occupants. Perception is identical in both palettes.
-  for (let y = 0; y < H; y++)
-    for (let x = 0; x < W; x++) {
-      const pt = { x: x + 0.5, y: y + 0.5 },
-        id = `tile-${a.floor}-${x}-${y}`;
-      if (!seen.has(id) && visible(pt)) {
-        a.seen.push(id);
-        seen.add(id);
+  if (!spectator) {
+    // Clip world geometry and effects. Labels for visible sources are drawn in a
+    // separate overlay so their glyphs are not cut off at the visibility boundary.
+    // Previously explored geometry is remembered internally but never drawn as
+    // current vision through a wall or beyond the finite viewing radius.
+    ctx.beginPath();
+    polygon.forEach((p, i) =>
+      i === 0 ? ctx.moveTo(p.x, p.y) : ctx.lineTo(p.x, p.y),
+    );
+    ctx.closePath();
+    ctx.clip();
+    const seen = new Set(a.seen);
+    // Terrain memory does not expose live occupants. Perception is identical in both palettes.
+    for (let y = 0; y < H; y++)
+      for (let x = 0; x < W; x++) {
+        const pt = { x: x + 0.5, y: y + 0.5 },
+          id = `tile-${a.floor}-${x}-${y}`;
+        if (!seen.has(id) && visible(pt)) {
+          a.seen.push(id);
+          seen.add(id);
+        }
       }
-    }
+  }
+  const theme = g.surge.state === "active" ? "mutation" : "normal";
   // Carpet, vinyl and wall textures are one cached image; the clip limits it to sight.
   ctx.drawImage(terrainCanvas(f, theme, g.seed), 0, 0, W, H);
   ctx.globalAlpha = 1;
@@ -147,7 +168,7 @@ export function render(canvas: HTMLCanvasElement, g: Game) {
   };
   const wellVisible = (well: Stairwell) =>
     visible(well.mouth) || visible(well.marker);
-  if (a.floor === CONFIG.floors) {
+  if (floorIndex === CONFIG.floors) {
     if (visible({ x: 21.5, y: 10.5 })) {
       ctx.strokeStyle = p.accent;
       ctx.lineWidth = 0.15;
@@ -167,7 +188,7 @@ export function render(canvas: HTMLCanvasElement, g: Game) {
     const well = stairwell(f, "up");
     if (wellVisible(well)) {
       drawStairs(well);
-      if (!a.access.includes(a.floor))
+      if (!spectator && !a.access.includes(a.floor))
         label(
           "ACCESS REQUIRED",
           well.mouth.x,
@@ -177,7 +198,7 @@ export function render(canvas: HTMLCanvasElement, g: Game) {
         );
     }
   }
-  if (a.floor > 0) {
+  if (floorIndex > 0) {
     const well = stairwell(f, "down");
     if (wellVisible(well)) drawStairs(well);
   }
@@ -205,7 +226,7 @@ export function render(canvas: HTMLCanvasElement, g: Game) {
     ctx.shadowBlur = 0;
     ctx.fillStyle = p.furniture;
     ctx.fillRect(s.x - 0.48, s.y + 0.25, 0.96, 0.14);
-    if (distance(a, s) < 2)
+    if (!spectator && distance(a, s) < 2)
       label(
         e.state === "consumed"
           ? "E · RECORD"
@@ -217,7 +238,7 @@ export function render(canvas: HTMLCanvasElement, g: Game) {
       );
   }
   for (const o of f.furniture) {
-    if (!playerCanSee(f, a, o, radius)) continue;
+    if (!sees(o)) continue;
     if (o.kind === "gate" && o.turning < 0) continue;
     const x = o.x - o.w / 2,
       y = o.y - o.h / 2;
@@ -259,7 +280,7 @@ export function render(canvas: HTMLCanvasElement, g: Game) {
         }
       }
       ctx.restore();
-      if (health < 1 || distance(a, o) < 3)
+      if (health < 1 || (!spectator && distance(a, o) < 3))
         healthBars.push({
           x: o.x,
           y: y + o.h + 0.18,
@@ -269,7 +290,7 @@ export function render(canvas: HTMLCanvasElement, g: Game) {
         });
       // The bar is the field's only status. Text appears only when the field
       // is red for the player and no key could open it.
-      if (!green && !(a.keys ?? 0))
+      if (!spectator && !green && !(a.keys ?? 0))
         label("KEY REQUIRED", o.x, y - 0.4, color, 0.32);
       continue;
     }
@@ -312,7 +333,7 @@ export function render(canvas: HTMLCanvasElement, g: Game) {
     ctx.restore();
   }
   for (const e of g.effects) {
-    if (e.until <= g.time || e.floor !== a.floor || !visible(e)) continue;
+    if (e.until <= g.time || e.floor !== floorIndex || !visible(e)) continue;
     ctx.strokeStyle = e.kind === "bubble" ? p.terminal : p.accent;
     ctx.globalAlpha = g.settings.reducedFlash
       ? 0.3
@@ -324,7 +345,7 @@ export function render(canvas: HTMLCanvasElement, g: Game) {
     ctx.globalAlpha = 1;
   }
   for (const s of g.survivors) {
-    if (s.floor !== a.floor || s.escaped || !visible(s)) continue;
+    if (s.floor !== floorIndex || s.escaped || !visible(s)) continue;
     ctx.save();
     ctx.translate(s.x, s.y);
     ctx.fillStyle = s.alive
@@ -341,7 +362,7 @@ export function render(canvas: HTMLCanvasElement, g: Game) {
     ctx.moveTo(s.heading.x * 0.1, s.heading.y * 0.1);
     ctx.lineTo(s.heading.x * 0.55, s.heading.y * 0.55);
     ctx.stroke();
-    if (s.id === "human") {
+    if (s.id === "human" && s.alive) {
       ctx.strokeStyle = p.accent;
       ctx.lineWidth = 0.04;
       ctx.beginPath();
@@ -355,11 +376,11 @@ export function render(canvas: HTMLCanvasElement, g: Game) {
       ctx.stroke();
     }
     ctx.restore();
-    if (s.id !== "human" && distance(a, s) < 5)
+    if (s.id !== "human" && (spectator || distance(a, s) < 5))
       label(s.name, s.x, s.y - 0.6, p.ink, 0.4);
   }
   for (const z of g.zombies) {
-    if (z.floor !== a.floor || z.hp <= 0 || !visible(z)) continue;
+    if (z.floor !== floorIndex || z.hp <= 0 || !visible(z)) continue;
     ctx.fillStyle = "#96a534";
     ctx.beginPath();
     ctx.arc(z.x, z.y, BODY_RADIUS, 0, Math.PI * 2);
@@ -375,7 +396,7 @@ export function render(canvas: HTMLCanvasElement, g: Game) {
     ctx.lineTo(z.x + Math.cos(heading) * 0.55, z.y + Math.sin(heading) * 0.55);
     ctx.stroke();
   }
-  for (const contact of stairContactCues(g, a, radius)) {
+  for (const contact of spectator ? [] : stairContactCues(g, a, radius)) {
     ctx.strokeStyle = p.danger;
     ctx.lineWidth = 0.08;
     ctx.globalAlpha = g.settings.reducedFlash ? 0.55 : 0.9;
@@ -387,64 +408,14 @@ export function render(canvas: HTMLCanvasElement, g: Game) {
     }
     ctx.globalAlpha = 1;
   }
-  // Ray-cast player light stops only at walls; dark floors stay dark during mutation.
-  lightCanvas ??= document.createElement("canvas");
-  if (
-    lightCanvas.width !== canvas.width ||
-    lightCanvas.height !== canvas.height
-  ) {
-    lightCanvas.width = canvas.width;
-    lightCanvas.height = canvas.height;
+  if (!spectator) {
+    drawLight();
+    // The held or nearest reachable object shows only its name.
+    const ob =
+      f.furniture.find((o) => o.id === a.grip?.object) ?? nearestGrip(g, a);
+    if (ob && distance(a, ob) < 2.8 && playerCanSee(f, a, ob, radius))
+      label(objectName(ob.kind), ob.x, ob.y - ob.h / 2 - 0.4, p.ink, 0.38);
   }
-  const lc = lightCanvas.getContext("2d")!;
-  lc.setTransform(dpr, 0, 0, dpr, 0, 0);
-  lc.globalCompositeOperation = "source-over";
-  lc.clearRect(0, 0, rect.width, rect.height);
-  lc.fillStyle = `rgba(0,0,0,${f.dark > 0.8 ? 0.78 : 0.47})`;
-  lc.fillRect(0, 0, rect.width, rect.height);
-  lc.translate(ox, oy);
-  lc.scale(scale, scale);
-  lc.globalCompositeOperation = "destination-out";
-  const lights = [
-    { x: a.x, y: a.y, r: radius },
-    ...g.effects
-      .filter(
-        (e) => e.kind === "flare" && e.until > g.time && e.floor === a.floor,
-      )
-      .map((e) => ({ x: e.x, y: e.y, r: e.radius })),
-  ];
-  for (const light of lights) {
-    lc.beginPath();
-    const points =
-      light === lights[0] ? polygon : visibilityPolygon(f, light, light.r);
-    points.forEach((p, i) =>
-      i === 0 ? lc.moveTo(p.x, p.y) : lc.lineTo(p.x, p.y),
-    );
-    lc.closePath();
-    const grad = lc.createRadialGradient(
-      light.x,
-      light.y,
-      0,
-      light.x,
-      light.y,
-      light.r,
-    );
-    grad.addColorStop(0, "rgba(255,255,255,.98)");
-    grad.addColorStop(0.45, "rgba(255,255,255,.9)");
-    grad.addColorStop(1, "rgba(255,255,255,0)");
-    lc.fillStyle = grad;
-    lc.fill();
-  }
-  ctx.setTransform(1, 0, 0, 1, 0, 0);
-  ctx.drawImage(lightCanvas, 0, 0);
-  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-  ctx.translate(ox, oy);
-  ctx.scale(scale, scale);
-  // The held or nearest reachable object shows only its name.
-  const ob =
-    f.furniture.find((o) => o.id === a.grip?.object) ?? nearestGrip(g, a);
-  if (ob && distance(a, ob) < 2.8 && playerCanSee(f, a, ob, radius))
-    label(objectName(ob.kind), ob.x, ob.y - ob.h / 2 - 0.4, p.ink, 0.38);
   ctx.restore();
   // Visibility was checked at each source before queuing. Only text extends
   // beyond the fog mask; unseen entities still contribute no labels.
@@ -475,4 +446,60 @@ export function render(canvas: HTMLCanvasElement, g: Game) {
     ctx.fillText(text, x, y);
   }
   ctx.restore();
+  /** Ray-cast player light stops only at walls; dark floors stay dark during
+   * mutation. The spectator view skips it: the whole floor is lit. */
+  function drawLight() {
+    lightCanvas ??= document.createElement("canvas");
+    if (
+      lightCanvas.width !== canvas.width ||
+      lightCanvas.height !== canvas.height
+    ) {
+      lightCanvas.width = canvas.width;
+      lightCanvas.height = canvas.height;
+    }
+    const lc = lightCanvas.getContext("2d")!;
+    lc.setTransform(dpr, 0, 0, dpr, 0, 0);
+    lc.globalCompositeOperation = "source-over";
+    lc.clearRect(0, 0, rect.width, rect.height);
+    lc.fillStyle = `rgba(0,0,0,${f.dark > 0.8 ? 0.78 : 0.47})`;
+    lc.fillRect(0, 0, rect.width, rect.height);
+    lc.translate(ox, oy);
+    lc.scale(scale, scale);
+    lc.globalCompositeOperation = "destination-out";
+    const lights = [
+      { x: a.x, y: a.y, r: radius },
+      ...g.effects
+        .filter(
+          (e) => e.kind === "flare" && e.until > g.time && e.floor === a.floor,
+        )
+        .map((e) => ({ x: e.x, y: e.y, r: e.radius })),
+    ];
+    for (const light of lights) {
+      lc.beginPath();
+      const points =
+        light === lights[0] ? polygon : visibilityPolygon(f, light, light.r);
+      points.forEach((p, i) =>
+        i === 0 ? lc.moveTo(p.x, p.y) : lc.lineTo(p.x, p.y),
+      );
+      lc.closePath();
+      const grad = lc.createRadialGradient(
+        light.x,
+        light.y,
+        0,
+        light.x,
+        light.y,
+        light.r,
+      );
+      grad.addColorStop(0, "rgba(255,255,255,.98)");
+      grad.addColorStop(0.45, "rgba(255,255,255,.9)");
+      grad.addColorStop(1, "rgba(255,255,255,0)");
+      lc.fillStyle = grad;
+      lc.fill();
+    }
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.drawImage(lightCanvas, 0, 0);
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.translate(ox, oy);
+    ctx.scale(scale, scale);
+  }
 }

@@ -67,10 +67,22 @@ import {
   type Roadmap,
   CONFIG,
   distance,
+  H,
+  W,
 } from "./model";
 import { outcomeIsVisible, presentNpcOutcome } from "./npc-outcome";
 import { decode, download, encode, load, recover, save } from "./persistence";
+import { camera } from "./camera";
 import { render } from "./render";
+import {
+  type SpectatorView,
+  SPECTATOR_ZOOM,
+  clampView,
+  floorTitle,
+  initialView,
+  spectating,
+  spectatorFloors,
+} from "./spectator";
 import { renderRoadmapAdoption } from "./roadmap-adoption-ui";
 import { prepareRoadmapExport } from "./roadmap-export";
 import { presentRoadmapReview } from "./roadmap-exposure";
@@ -99,7 +111,9 @@ let game: Game,
   acc = 0,
   lastUI = 0,
   lastSave = 0,
-  editorRevision = 0;
+  editorRevision = 0,
+  // Free-look over the frozen building after the run ends. Page state only.
+  view: SpectatorView | undefined;
 const audio = new AudioDirector();
 try {
   game = recover(
@@ -253,6 +267,7 @@ function begin() {
   game.status = "playing";
   game.paused = false;
   running = true;
+  leaveSpectator();
   audio.start();
   audio.update(game);
   canvas.focus();
@@ -299,15 +314,111 @@ function startCard() {
   if (game.status === "ready")
     card.innerHTML = `<span class="eyebrow">A REAL-TIME STUDY ESCAPE</span><h2>The dead are<br>on your heels.</h2><p>Twenty survivors. Four floors. Four seats.<br>Choose your route. Learn your way out.</p><button id="start">Enter the building ↗</button><small>${escape(status().detail)}</small>`;
   else
-    card.innerHTML = `<span class="eyebrow">${game.status === "escaped" ? "TRANSMISSION RECEIVED" : "SIGNAL LOST"}</span><h2>${game.status === "escaped" ? "You made it." : "Your work survives."}</h2><p>${escape(game.notice)}<br>${game.stats.rescued} extracted · ${game.stats.deaths} lost · ${Math.floor(game.time)} seconds</p><button id="again">Begin another run ↗</button><button id="backup" class="quiet">Export work & evidence</button>`;
+    card.innerHTML = `<span class="eyebrow">${game.status === "escaped" ? "TRANSMISSION RECEIVED" : "SIGNAL LOST"}</span><h2>${game.status === "escaped" ? "You made it." : "Your work survives."}</h2><p>${escape(game.notice)}<br>${game.stats.rescued} extracted · ${game.stats.deaths} lost · ${Math.floor(game.time)} seconds</p><button id="again">Begin another run ↗</button><button id="backup" class="quiet">Export work & evidence</button><button id="spectate" class="quiet">Watch the building ↗</button>`;
   document.getElementById("start")?.addEventListener("click", begin);
   document.getElementById("again")?.addEventListener("click", fresh);
+  document.getElementById("spectate")?.addEventListener("click", () => {
+    card.hidden = true;
+    syncSpectatorBar();
+    canvas.focus();
+  });
+  syncSpectatorBar();
   document
     .getElementById("backup")
     ?.addEventListener("click", () =>
       download("zombie-escape-study-game-run.json", encode(game)),
     );
 }
+/** The run is over: the whole building can be watched, floor by floor. */
+function enterSpectator() {
+  view = initialView(game);
+  document.body.classList.add("spectating");
+  renderSpectatorBar();
+  syncSpectatorBar();
+}
+function leaveSpectator() {
+  view = undefined;
+  document.body.classList.remove("spectating");
+  canvas.classList.remove("dragging");
+  syncSpectatorBar();
+}
+/** The floor bar shows only while the building is watched without the card. */
+function syncSpectatorBar() {
+  $("#spectator").hidden = !view || !$("#start-card").hidden;
+}
+function setView(next: SpectatorView) {
+  const changedFloor = next.floor !== view?.floor;
+  view = clampView(next);
+  if (changedFloor) {
+    renderSpectatorBar();
+    ui();
+  }
+}
+function renderSpectatorBar() {
+  if (!view) return;
+  const floors = $("#spectator-floors"),
+    current = view.floor;
+  if (!floors.childElementCount)
+    floors.innerHTML = spectatorFloors()
+      .map(
+        (f) =>
+          `<button type="button" class="quiet" data-floor="${f.floor}" title="${escape(f.title)}">${escape(f.label)}</button>`,
+      )
+      .join("");
+  for (const b of floors.querySelectorAll<HTMLButtonElement>("[data-floor]")) {
+    const active = Number(b.dataset.floor) === current;
+    b.classList.toggle("active", active);
+    b.setAttribute("aria-pressed", String(active));
+    b.onclick = () => {
+      if (!view) return;
+      // Another floor opens on its centre; the player's floor on the player.
+      setView({
+        ...view,
+        floor: Number(b.dataset.floor),
+        focus: { x: W / 2, y: H / 2 },
+      });
+      canvas.focus();
+    };
+  }
+}
+$("#spectator-summary").onclick = () => startCard();
+// Dragging the frozen world pans it; the wheel zooms. Both are inert while a
+// run is playing.
+let dragging: number | undefined;
+canvas.addEventListener("pointerdown", (ev) => {
+  if (!view || !spectating(game) || ev.button !== 0) return;
+  dragging = ev.pointerId;
+  canvas.setPointerCapture(ev.pointerId);
+  canvas.classList.add("dragging");
+});
+canvas.addEventListener("pointermove", (ev) => {
+  if (dragging !== ev.pointerId || !view) return;
+  const rect = canvas.getBoundingClientRect(),
+    { scale } = camera(rect.width, rect.height, view.focus, view.zoom);
+  setView({
+    ...view,
+    focus: {
+      x: view.focus.x - ev.movementX / scale,
+      y: view.focus.y - ev.movementY / scale,
+    },
+  });
+});
+for (const type of ["pointerup", "pointercancel"] as const)
+  canvas.addEventListener(type, (ev) => {
+    if (dragging !== ev.pointerId) return;
+    dragging = undefined;
+    canvas.classList.remove("dragging");
+  });
+canvas.addEventListener(
+  "wheel",
+  (ev) => {
+    if (!view || !spectating(game)) return;
+    ev.preventDefault();
+    const step = ev.deltaY < 0 ? SPECTATOR_ZOOM.step : 1 / SPECTATOR_ZOOM.step;
+    setView({ ...view, zoom: view.zoom * step });
+  },
+  { passive: false },
+);
 function closeTerminal() {
   if (active) {
     const e = game.encounters[active];
@@ -1596,10 +1707,36 @@ $("#import").onchange = async () => {
     game.notice = `Import rejected: ${String(err)}`;
   }
 };
+const PAN_KEYS = [
+  "ArrowUp",
+  "ArrowDown",
+  "ArrowLeft",
+  "ArrowRight",
+  "KeyW",
+  "KeyA",
+  "KeyS",
+  "KeyD",
+];
 window.addEventListener("keydown", (ev) => {
   if (ev.code === "Escape") {
     ev.preventDefault();
-    if (!ev.repeat) setPaused(!game.paused);
+    if (ev.repeat) return;
+    if (spectating(game) && view) {
+      // Esc toggles the run summary over the watched building.
+      const card = $("#start-card");
+      if (card.hidden) startCard();
+      else {
+        card.hidden = true;
+        syncSpectatorBar();
+        canvas.focus();
+      }
+    } else setPaused(!game.paused);
+    return;
+  }
+  if (spectating(game) && view) {
+    if (ownsKeyboard(ev.target) || !PAN_KEYS.includes(ev.code)) return;
+    ev.preventDefault();
+    keys.add(ev.code);
     return;
   }
   if (game.status !== "playing" || game.paused || ownsKeyboard(ev.target))
@@ -1719,18 +1856,15 @@ function ui() {
     "Logs stay on this browser: newest 3 games, at most 256 KB each. Older diagnostics are deleted automatically; learning is retained.";
   syncLearningView(game.study);
   if (!game.paused) completionAssessments();
-  const a = human(game),
-    f = game.floors[a.floor];
+  const a = human(game);
   watchReward(a);
   document.body.classList.toggle("surge", game.surge.state === "active");
   document.body.classList.toggle("reduced", game.settings.reducedFlash);
   $("#bridge-label").textContent =
     `${status().label} · ${game.study.profile ?? "development"} profile`;
-  $("#floor-label").textContent =
-    a.floor === CONFIG.floors
-      ? "ROOFTOP / EXTRACTION"
-      : `FLOOR ${String(a.floor + 1).padStart(2, "0")} / ${CONFIG.floors}`;
-  $("#floor-name").textContent = f.name;
+  const shown = spectating(game) && view ? view.floor : a.floor;
+  $("#floor-label").textContent = floorTitle(shown);
+  $("#floor-name").textContent = game.floors[shown].name;
   $("#health").textContent = String(Math.ceil(a.hp));
   $("#health-fill").style.width = `${a.hp}%`;
   // The HUD overlays the canvas; write to it only when a value changes so the
@@ -1743,18 +1877,6 @@ function ui() {
     "#hud-keys",
     `${a.keys ?? 0} ${(a.keys ?? 0) === 1 ? "key" : "keys"}`,
   );
-  const accessLabel =
-    game.status === "escaped"
-      ? "EXTRACTED"
-      : game.status === "dead"
-        ? "RUN ENDED"
-        : a.floor === CONFIG.floors
-          ? "ROOFTOP"
-          : a.access.includes(a.floor)
-            ? "STAIRS OPEN"
-            : "ACCESS LOCKED";
-  $("#access").textContent = accessLabel;
-  setText("#hud-access", accessLabel);
   $("#alive").textContent = String(
     game.survivors.filter((a) => a.alive && !a.escaped).length,
   );
@@ -1906,6 +2028,7 @@ function ui() {
     closeTerminal();
     persist();
     startCard();
+    enterSpectator();
   }
 }
 const framePerformance = new FramePerformance();
@@ -1948,8 +2071,23 @@ function frame(time: number) {
     audio.update(game);
     if (game.time - lastSave > 3) persist();
   }
+  if (view && spectating(game)) {
+    // Held keys pan the free camera over the frozen floor.
+    const pan = (16 * elapsed) / view.zoom,
+      x =
+        Number(keys.has("KeyD") || keys.has("ArrowRight")) -
+        Number(keys.has("KeyA") || keys.has("ArrowLeft")),
+      y =
+        Number(keys.has("KeyS") || keys.has("ArrowDown")) -
+        Number(keys.has("KeyW") || keys.has("ArrowUp"));
+    if (x || y)
+      setView({
+        ...view,
+        focus: { x: view.focus.x + x * pan, y: view.focus.y + y * pan },
+      });
+  }
   const renderStarted = performance.now();
-  render(canvas, game);
+  render(canvas, game, spectating(game) ? view : undefined);
   const renderMs = performance.now() - renderStarted;
   if (time - lastUI > 200) {
     ui();
@@ -1977,11 +2115,15 @@ Object.assign(window, {
     get game() {
       return game;
     },
+    get view() {
+      return view;
+    },
     roadmap,
     interact,
   },
 });
 startCard();
 if (game.paused) setPaused(true);
+if (spectating(game)) enterSpectator();
 ui();
 requestAnimationFrame(frame);
