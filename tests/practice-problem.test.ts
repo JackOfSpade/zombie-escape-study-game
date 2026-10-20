@@ -47,21 +47,107 @@ test("state classification supplies the actual items and their behavior without 
   assert.deepEqual(p.contract, contract);
 });
 
-test("other product practice asks for an explicit learner-chosen example before applying its scope", () => {
-  const contract = productContract("PE:T12.1");
-  const p = devProblem(createPlayableGame(9, r), r, contract);
-  assert.match(p.prompt, /open-ended (?:example|design) exercise/i);
-  assert.match(p.prompt, /First, (?:choose|state)/);
-  assert.match(p.prompt, /concrete facts/);
+const caseFacts: Record<string, { fact: RegExp; title: string }> = {
+  share: { fact: /share_links table/, title: "Share link revocation" },
+  list: { fact: /cursor pagination/, title: "Project list" },
+  invite: { fact: /10 invites per hour/, title: "Invite collaborator form" },
+  pro: { fact: /webhook events/, title: "Pro plan and integrations" },
+};
+const familyCase: Record<string, keyof typeof caseFacts> = {
+  T04: "list",
+  T05: "list",
+  T09: "list",
+  T10: "list",
+  T06: "invite",
+  T08: "invite",
+  T18: "invite",
+  T12: "pro",
+};
+
+test("other product practice supplies a fixed feature case instead of a learner-chosen example", () => {
+  const g = createPlayableGame(9, r);
+  const fallback = r.tracks.PE.objectives.filter(
+    (o) => !/^PE:(?:T01|T07|X09)\./.test(o.id),
+  );
+  assert.ok(fallback.length > 80);
+  for (const objective of fallback) {
+    const p = devProblem({ ...g, rng: 3 }, r, productContract(objective.id));
+    const family = objective.id.slice(3, 6);
+    const expected = caseFacts[familyCase[family] ?? "share"];
+    assert.ok(p.prompt.includes(objective.scope), objective.id);
+    assert.ok(
+      p.prompt.includes(`\n\nYour task: ${objective.scope}\n\n`),
+      objective.id,
+    );
+    assert.doesNotMatch(
+      p.prompt,
+      /choose a small|choose .*example|open-ended/i,
+      objective.id,
+    );
+    assert.match(p.prompt, expected.fact, objective.id);
+    for (const other of Object.values(caseFacts))
+      if (other !== expected)
+        assert.doesNotMatch(p.prompt, other.fact, objective.id);
+    assert.equal(p.title, `${expected.title} / applied design`, objective.id);
+    assert.ok(p.title.endsWith("/ applied design"), objective.id);
+    assert.equal(p.rubric.length, 2, objective.id);
+    for (const item of p.rubric)
+      assert.doesNotMatch(
+        item,
+        /State a concrete product example/,
+        objective.id,
+      );
+    assert.ok(p.rubric[0].includes(objective.scope), objective.id);
+  }
+});
+
+test("evidence-based scopes include their supplied artifact and others do not", () => {
+  const g = createPlayableGame(9, r);
+  const addenda: { ids: RegExp; fact: RegExp }[] = [
+    { ids: /^PE:T15\./, fact: /POST \/links\/:id\/revoke/ },
+    { ids: /^PE:T17\./, fact: /from 0 to about 4%/ },
+    { ids: /^PE:T14\./, fact: /returning 410 within a second/ },
+    { ids: /^PE:T20\./, fact: /microservice with its own message queue/ },
+    { ids: /^PE:T02\.3$/, fact: /collaborator_email/ },
+    { ids: /^PE:T02\.5$/, fact: /95% confidence interval/ },
+    { ids: /^PE:T08\.5$/, fact: /hard-coded pattern "MM\/DD\/YYYY"/ },
+    { ids: /^PE:T09\.1$/, fact: /main thread is busy for 2\.3 seconds/ },
+    { ids: /^PE:T13\.4$/, fact: /waits a fixed 500 ms/ },
+  ];
+  const ids = r.tracks.PE.objectives.map((o) => o.id);
+  for (const { ids: pattern, fact } of addenda) {
+    const matching = ids.filter((id) => pattern.test(id));
+    assert.ok(matching.length > 0, String(pattern));
+    for (const id of matching) {
+      const p = devProblem({ ...g, rng: 3 }, r, productContract(id));
+      assert.match(p.prompt, fact, id);
+      for (const other of addenda)
+        if (other.fact !== fact) assert.doesNotMatch(p.prompt, other.fact, id);
+    }
+  }
+  for (const id of ["PE:T19.1", "PE:T06.1", "PE:T02.1", "PE:T12.1"]) {
+    const p = devProblem({ ...g, rng: 3 }, r, productContract(id));
+    for (const { fact } of addenda) assert.doesNotMatch(p.prompt, fact, id);
+  }
+  // Evidence is described, not pre-labelled with its answer.
+  for (const id of ids.filter((x) => /^PE:T1[457]\./.test(x))) {
+    const p = devProblem({ ...g, rng: 3 }, r, productContract(id));
+    assert.doesNotMatch(
+      p.prompt,
+      /root cause is|security (?:bug|issue|hole)|race condition|caching bug/i,
+      id,
+    );
+  }
+  const scope = devProblem({ ...g, rng: 3 }, r, productContract("PE:T19.1"));
   assert.match(
-    p.prompt,
-    new RegExp(contract.scopes[0].replace(/[.*+?^${}()|[\]\\]/g, "\\$&")),
+    scope.prompt,
+    /no email, push or real-time channel, and no separate permissions service/,
   );
-  assert.doesNotMatch(p.prompt, /creative tool|collaborator|revok|Email/);
-  assert.doesNotMatch(
-    p.rubric.join(" "),
-    /personal history|edge case|boundary/,
+  assert.match(
+    scope.prompt,
+    /id, project_id, token, created_by and created_at/,
   );
+  assert.match(scope.prompt, /no revocation field/);
 });
 
 test("state-management practice gives facts and a bounded task for each other objective", () => {
@@ -131,8 +217,8 @@ test("only product-framing practice reuses the proposed revocation email story",
       assert.doesNotMatch(p.prompt, /proposes: "Email/, objective.id);
     }
     if (!/^PE:(?:T01|T07|X09)\./.test(objective.id)) {
-      assert.match(p.prompt, /open-ended design exercise/, objective.id);
-      assert.match(p.prompt, /concrete facts/, objective.id);
+      assert.ok(p.title.endsWith("/ applied design"), objective.id);
+      assert.doesNotMatch(p.prompt, /open-ended|choose a small/i, objective.id);
       assert.ok(p.prompt.includes(objective.scope), objective.id);
     }
   }

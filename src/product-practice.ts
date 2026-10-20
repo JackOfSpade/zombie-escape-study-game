@@ -62,6 +62,105 @@ Choose a reconciliation strategy for these overlapping requests. Walk through wh
   },
 };
 
+/** A fixed feature in the shared product world, supplied as facts. */
+type FeatureCase = {
+  title: string;
+  facts: (dailyUsers: number) => string;
+};
+
+const shareLinkRevocation: FeatureCase = {
+  title: "Share link revocation",
+  facts: (dailyUsers) =>
+    `A web-based creative tool is used by about ${dailyUsers} people a day. Owners can already create read-only share links for a project. The team has been asked to let an owner revoke a share link from the project's Share dialog. After revocation, opening the link shows a "This link is no longer active" page, and the owner's dialog marks that link as revoked.
+
+The existing system: a React single-page app calls a JSON REST API. Each link is a row in a share_links table with the columns id, project_id, token, created_by and created_at; there is no revocation field yet. On every shared-project request, the server checks the link's token against that table. Only the project's owner may create or manage its links. The codebase has unit tests, API integration tests and one end-to-end smoke test. Deploys go through a pipeline, and a feature-flag service can enable a feature for targeted accounts. Product events are sent to an analytics tool. There is no email, push or real-time channel, and no separate permissions service.`,
+};
+
+const projectList: FeatureCase = {
+  title: "Project list",
+  facts: (dailyUsers) =>
+    `A web-based creative tool is used by about ${dailyUsers} people a day. Its project list page shows the signed-in user's projects in the current workspace. The page has a search box, a status filter (active or archived), a sort control (name or newest), and cursor pagination that loads 20 projects per page. Each row offers inline rename and archive actions. Each row shows a thumbnail loaded from a CDN; thumbnails are typically 400×300 JPEG images of about 80 KB.
+
+A typical user has about 200 projects. The GET /projects API responds in about 150 ms at the median and 900 ms at the 95th percentile. The page is a React single-page app, and about 30% of sessions come from mid-range laptops on home Wi-Fi.`,
+};
+
+const inviteForm: FeatureCase = {
+  title: "Invite collaborator form",
+  facts: (dailyUsers) =>
+    `A web-based creative tool is used by about ${dailyUsers} people a day. Project owners invite collaborators through a modal form with an email field, a role choice (viewer or editor) and an optional message. The server validates the email format, rejects people who are already members, and enforces a limit of 10 invites per hour per owner. A submit can take up to 2 seconds to respond.
+
+Below the form, a pending-invites list shows each invited address, its role and the date it was sent. The dialog must be fully usable by keyboard and with a screen reader. The product is offered in English, German and Japanese; dates in the pending-invites list and all strings are translated for the user's locale.`,
+};
+
+const proPlan: FeatureCase = {
+  title: "Pro plan and integrations",
+  facts: (dailyUsers) =>
+    `A web-based creative tool is used by about ${dailyUsers} people a day. A paid Pro plan is billed through an external payment provider. The provider sends webhook events about payments and subscription changes; the same event can arrive more than once, and events can arrive out of order. Free projects allow at most 3 collaborators; Pro unlocks more than 3 collaborators per project.
+
+Pro also unlocks a cloud-storage integration for importing and exporting project files. The user connects their cloud-storage account through OAuth. The user can disconnect it from settings, and the storage provider can also revoke the app's access at any time.`,
+};
+
+/** Each fallback topic family uses exactly one supplied case. */
+const casesByFamily: Record<string, FeatureCase> = {
+  "PE:T02": shareLinkRevocation,
+  "PE:T03": shareLinkRevocation,
+  "PE:T04": projectList,
+  "PE:T05": projectList,
+  "PE:T06": inviteForm,
+  "PE:T08": inviteForm,
+  "PE:T09": projectList,
+  "PE:T10": projectList,
+  "PE:T11": shareLinkRevocation,
+  "PE:T12": proPlan,
+  "PE:T13": shareLinkRevocation,
+  "PE:T14": shareLinkRevocation,
+  "PE:T15": shareLinkRevocation,
+  "PE:T16": shareLinkRevocation,
+  "PE:T17": shareLinkRevocation,
+  "PE:T18": inviteForm,
+  "PE:T19": shareLinkRevocation,
+  "PE:T20": shareLinkRevocation,
+};
+
+/** Supplied artifacts for scopes that work from given evidence. */
+const addendaByFamily: Record<string, string> = {
+  "PE:T15": `A pull request for share link revocation makes these changes:
+- Adds a nullable revoked_at column to share_links.
+- Adds a POST /links/:id/revoke endpoint that sets revoked_at for the given link id; it requires a signed-in user but does not look up who owns the link's project.
+- Leaves the token check on shared-project requests unchanged.
+- Adds a red Revoke button to each link row in the Share dialog; the button shows only a trash icon and has no text or label.
+- Adds one snapshot test of the Share dialog.
+- Renames the class ShareModal to ShareDialog across 23 files.
+- Names a new local variable "x2" in the endpoint handler.`,
+  "PE:T17": `Evidence: the revocation feature flag was raised to 50% of owners two hours ago. Since then the 5xx rate of the revoke endpoint has risen from 0 to about 4%. The failures are concentrated in projects created more than two years ago. A typical error log line reads: "TypeError: cannot read property 'id' of null (column workspace_id) in revokeLink". The endpoint receives about 300 revocation attempts per hour. Dashboards for page loads, sign-ins and shared-project requests are unchanged.`,
+  "PE:T14": `Defect report, a week after revocation shipped: after an owner revokes a link, some collaborators who had it open can still load the project for a short time, while others are blocked immediately. The behavior has been reproduced in production intermittently and never locally. API logs show requests with the revoked token returning 410 within a second of the revocation.`,
+  "PE:T20": `An AI assistant proposed this design for the feature:
+- Add a revoked boolean to share_links.
+- Create a new link-revocation microservice with its own message queue.
+- In the React app, filter revoked links out of the Share dialog so they are hidden.
+- It states that the existing token check "already handles revoked links", without citing code or a test.`,
+};
+
+const addendaByObjective: Record<string, string> = {
+  "PE:T02.3": `A draft event list for the feature:
+- link_revoke_clicked, sent from the browser on every click of Revoke, including repeated clicks while the request is pending.
+- link_revoked, with the property owner_display_name used as the user key.
+- revoked_link_viewer, with the property collaborator_email.
+- share_dialog_opened.`,
+  "PE:T02.5": `Experiment summary: arm A (current Share dialog) had 4,812 owners; arm B (dialog with revocation) had 4,790 owners. The share-creation rate was 18.2% in A and 18.9% in B, a difference of +0.7 percentage points with a 95% confidence interval of −0.4 to +1.8. Support tickets about broken links per 1,000 owners went from 3.1 in A to 2.4 in B. Median Share dialog load time went from 210 ms in A to 260 ms in B.`,
+  "PE:T08.5": `The invite form component under review:
+- The email field shows the placeholder "Email" and has no visible or programmatic label.
+- The role choice is two clickable div elements styled as buttons; they cannot receive keyboard focus.
+- When the dialog opens, focus stays on the page behind it.
+- Server errors appear as red text below the form with no announcement to assistive technology.
+- The dialog has a fixed width of 560 px.
+- Pending-invite dates are formatted with the hard-coded pattern "MM/DD/YYYY", and the sentence "Invited by " + name + " on " + date is built by string concatenation.
+- The submit button uses the product's standard primary color and rounded corners.
+- The optional message field accepts up to 500 characters and shows a character counter.`,
+  "PE:T09.1": `Slow-experience report: users say the project list takes several seconds to become usable after a filter change. A trace from a mid-range laptop shows the GET /projects request completing in 160 ms and thumbnails finishing within 400 ms. After the response arrives, the main thread is busy for 2.3 seconds in one task, mostly in re-rendering the 180 rows the user has already scrolled through and recomputing search matches on each of them. Clicks and typing during that time are not handled until it ends.`,
+  "PE:T13.4": `A flaky end-to-end test: it opens a seeded project, clicks the third button in the Share dialog by position, waits a fixed 500 ms, and then asserts that the text "This link is no longer active" appears for the link. The seeded project is shared with other tests that run in parallel. The test fails in about 1 of 15 CI runs and passes when rerun.`,
+};
+
 export function productPractice(
   contract: Contract,
   dailyUsers: number,
@@ -97,12 +196,16 @@ export function productPractice(
       ],
     };
   }
+  const family = objectiveId.slice(0, 6);
+  const featureCase = casesByFamily[family] ?? shareLinkRevocation;
+  const addendum = addendaByObjective[objectiveId] ?? addendaByFamily[family];
+  const evidence = addendum ? `\n\n${addendum}` : "";
   return {
-    title: "Product design / chosen example",
-    prompt: `This is an open-ended design exercise. First, choose a small, concrete product example that fits the task below. State the concrete facts needed to answer it, including any relevant behavior or constraints you choose. Treat these as your proposed example, not as facts about an unspecified existing implementation.\n\nYour task: ${scope}\n\nApply the task to the example you stated and explain your reasoning. Several designs may be valid; only the stated task and the facts you supply are being assessed.`,
+    title: `${featureCase.title} / applied design`,
+    prompt: `${featureCase.facts(dailyUsers)}${evidence}\n\nYour task: ${scope}\n\nIf you need an assumption beyond these facts, state it explicitly. Several answers can be valid. No code is needed.`,
     rubric: [
-      "State a concrete product example and the relevant facts or chosen constraints needed for the task",
-      `Apply the stated task to that example with supporting reasoning: ${scope}`,
+      `Apply the task to the supplied ${featureCase.title.toLowerCase()} facts: ${scope}`,
+      "Ground each choice in the stated facts and name any assumption added beyond them",
     ],
   };
 }
