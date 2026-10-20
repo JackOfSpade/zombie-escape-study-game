@@ -7,6 +7,7 @@ import {
   W,
   rand,
 } from "./model";
+import { carveStairwells } from "./stairwell";
 /** Fresh force-field floors have no corridor around their study rooms.
  * Each complete transverse room is a cut between the rear entry and front stairs. */
 export function pursuitLayout(g: Game, f: Floor) {
@@ -49,6 +50,8 @@ export function pursuitLayout(g: Game, f: Floor) {
         if (x < bounds[i].left || x >= bounds[i].right) f.tiles[y][x] = 1;
   f.entry = { x: 21.5, y: 26.5 };
   f.stairs = { x: 21.5, y: 3.5 };
+  // Staircases are real wells in the north and south boundary walls.
+  carveStairwells(f);
   f.rooms = [0, 1, 2, 3].map((index) => ({
     index,
     side: index % 2 === 0 ? ("left" as const) : ("right" as const),

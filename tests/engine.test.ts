@@ -638,7 +638,8 @@ test("integrated escape at 30 Hz: legal human movement, four puzzle snapshots, i
     assert.equal(e.state, "consumed");
     assert.ok(a.access.includes(floor));
     walkTo(g.floors[floor].stairs);
-    assert.equal(stairs(g, a), true);
+    // Walking into the staircase starts the flight by itself.
+    assert.equal(!!a.stairTravel || stairs(g, a), true);
     for (let i = 0; i < 90 && a.stairTravel; i++) step(g, 1 / 30);
     assert.equal(a.floor, floor + 1);
   }

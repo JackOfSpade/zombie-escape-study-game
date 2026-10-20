@@ -29,6 +29,10 @@ export const BODY_RADIUS = 0.26;
 /** Largest force one zombie applies while pressing furniture or a crowd that
  * touches it. Free zombies keep direct velocity control. */
 export const ZOMBIE_PUSH = 30;
+/** Largest force a walking survivor applies to furniture it walks into. Light
+ * office pieces (chairs, plants, boxes, an armchair) slide aside on contact;
+ * a desk, sofa or fridge holds until it is deliberately gripped. */
+export const SURVIVOR_PUSH = 100;
 /** Static floor friction of an unheld object. Unknown kinds keep the old mass rule. */
 const floorResist = (o: Furniture) =>
   FURNITURE[o.kind]?.resist ?? (20 / Math.max(0.05, o.speed)) * 6;
@@ -69,6 +73,8 @@ interface RecordBody {
   motor?: Point;
   /** Contact impulse received from moving bodies during the current solver step. */
   push?: number;
+  /** Solver substep in which the body last left its static rest. */
+  slidAt?: number;
 }
 interface FloorPhysics {
   world: World;
@@ -136,6 +142,8 @@ class PhysicsLayer {
   private movedBy = new Map<Furniture, Set<string>>();
   /** Furniture ids held by a living survivor (grip or handling), per frame. */
   private held = new Set<string>();
+  /** Running solver substep count, for the rest hysteresis in stickOrSlip. */
+  private substep = 0;
   constructor(private g: Game) {}
   private floor(index: number, refresh = false) {
     const f = this.g.floors[index];
@@ -622,6 +630,10 @@ class PhysicsLayer {
       } else if (
         !held &&
         !pushed &&
+        // Changing the body type drops its contacts until the next solve has
+        // run, so a freshly slipped object keeps moving for a few substeps
+        // rather than snapping back to rest before the push can reach it.
+        this.substep - (r.slidAt ?? -Infinity) > 3 &&
         r.body.getLinearVelocity().length() < 0.03 &&
         Math.abs(r.body.getAngularVelocity()) < 0.03
       )
@@ -632,6 +644,7 @@ class PhysicsLayer {
   private slide(r: RecordBody, o: Furniture) {
     if (!r.body.isStatic() || o.speed <= 0) return;
     r.body.setType("dynamic");
+    r.slidAt = this.substep;
     this.setFurnitureMass(r.body, o);
     r.body.setAwake(true);
   }
@@ -643,26 +656,39 @@ class PhysicsLayer {
       I: (mass * (e.w * e.w + e.h * e.h)) / 12,
     });
   }
-  /** Zombies touching (or about to touch) movable furniture, directly or through other zombies. */
+  /** Bodies pressing movable furniture: zombies touching (or about to touch)
+   * it directly or through other zombies, and survivors walking into it.
+   * Survivors press only by direct contact and only while not carrying,
+   * vaulting or bracing, which keep their own velocity control. */
   private pressing() {
     const found = new Set<RecordBody>(),
       queue: RecordBody[] = [];
-    const visit = (body: Body) => {
+    const visit = (body: Body, direct: boolean) => {
       // Broad-phase contacts include bodies about to touch, so a zombie at the
       // back of a crowd cannot flicker in and out and re-inject its momentum.
       for (let edge = body.getContactList(); edge; edge = edge.next) {
         const other = edge.other?.getUserData() as Entity | undefined,
           r = other && this.records.get(other);
-        if (!r || !other || furniture(other) || actor(other) || found.has(r))
+        if (!r || !other || furniture(other) || found.has(r)) continue;
+        if (actor(other)) {
+          if (
+            direct &&
+            !other.grip &&
+            !other.handling &&
+            !other.vault &&
+            !r.start.vault
+          )
+            found.add(r);
           continue;
+        }
         found.add(r);
         queue.push(r);
       }
     };
     for (const r of this.records.values())
       if (furniture(r.entity) && r.entity.speed > 0 && !r.entity.door)
-        visit(r.body);
-    for (let i = 0; i < queue.length; i++) visit(queue[i].body);
+        visit(r.body, true);
+    for (let i = 0; i < queue.length; i++) visit(queue[i].body, false);
     return found;
   }
   finish(dt: number): Furniture[] {
@@ -717,8 +743,8 @@ class PhysicsLayer {
           v = { x: (v.x * max) / speed, y: (v.y * max) / speed };
         }
         r.motor = undefined;
-        if (!actor(e) && pressing.has(r)) {
-          if (e.stagger <= 0) r.motor = v;
+        if (pressing.has(r)) {
+          if (actor(e) || e.stagger <= 0) r.motor = v;
         } else if (actor(e) || e.stagger <= 0) r.body.setLinearVelocity(v);
         if (Math.hypot(v.x, v.y) > 0) r.body.setAwake(true);
       } else if (
@@ -812,14 +838,18 @@ class PhysicsLayer {
         )
       : [];
     for (let i = 0; i < steps; i++) {
-      // Resetting a pressing zombie's velocity every frame would inject m·v of
+      this.substep++;
+      // Resetting a pressing body's velocity every frame would inject m·v of
       // momentum per frame: an unbounded, frame-rate dependent shove. A bounded
-      // motor gives the same free-space walk and a fixed push per zombie.
+      // motor gives the same free-space walk and a fixed push per zombie or
+      // walking survivor, so an object slides only when that push beats its
+      // floor friction.
       for (const r of motors)
         if (r.motor) {
           const v = r.body.getLinearVelocity(),
             m = r.body.getMass(),
-            limit = (ZOMBIE_PUSH * dt) / steps;
+            limit =
+              ((actor(r.entity) ? SURVIVOR_PUSH : ZOMBIE_PUSH) * dt) / steps;
           let jx = m * (r.motor.x - v.x),
             jy = m * (r.motor.y - v.y);
           const n = Math.hypot(jx, jy);

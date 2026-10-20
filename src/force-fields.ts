@@ -1,4 +1,5 @@
 import { pursuitLayout } from "./pursuit-layout";
+import { carveStairwells } from "./stairwell";
 import {
   fieldClearance,
   furnishOffice,
@@ -126,6 +127,10 @@ export function redesign(g: Game, roadmap?: Roadmap) {
       s.encounter = id;
     }
   }
+  // The roof's arrival staircase is carved like the ordinary floors' wells.
+  const roof = g.floors[CONFIG.floors];
+  if (roof && g.floors.some((f) => f.generation?.version === 2))
+    carveStairwells(roof);
   for (const floor of g.floors)
     if (floor.generation?.version === 2) {
       pursuitLayout(g, floor);

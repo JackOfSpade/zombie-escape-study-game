@@ -94,8 +94,13 @@ for (const color of ["green", "red"])
     expect(result.critical.bars[0].color).toBe("#ffd166");
     expect(result.half.cracks).toBeGreaterThan(result.full.cracks);
     expect(result.critical.cracks).toBeGreaterThan(result.half.cracks);
-    expect(result.half.labels).toContain("FIELD 50%");
-    expect(result.critical.labels).toContain("FIELD 10%");
+    // The bar alone reports health: no percentage or status text above a field.
+    for (const frame of [result.full, result.half, result.critical])
+      expect(frame.labels.some((l: string) => l.startsWith("FIELD"))).toBe(
+        false,
+      );
+    // Text appears only when the field is red for a keyless player.
+    expect(result.full.labels.includes("KEY REQUIRED")).toBe(color === "red");
     expect(result.health).toBeGreaterThan(0);
     expect(result.health).toBeLessThan(1);
     expect(
@@ -103,7 +108,11 @@ for (const color of ["green", "red"])
     ).toBeCloseTo(result.health, 5);
     expect(result.stable).toBe(true);
     expect(result.broken.bars).toEqual([]);
-    expect(result.broken.labels).toContain("FIELD BROKEN");
+    expect(
+      result.broken.labels.some(
+        (l: string) => l.startsWith("FIELD") || l === "KEY REQUIRED",
+      ),
+    ).toBe(false);
     await page
       .locator("#field-damage")
       .screenshot({ path: `.artifacts/force-field-${color}-damage.png` });

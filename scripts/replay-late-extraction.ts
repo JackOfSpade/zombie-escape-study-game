@@ -315,7 +315,9 @@ try {
     }
     phase = `stairs-${floor}`;
     walk(g.floors[floor].stairs);
-    if (!stairs(g, a))
+    // Walking into the staircase starts the flight; the explicit call covers
+    // a landing reached without crossing the well boundary.
+    if (!a.stairTravel && !stairs(g, a))
       throw Error(`Own credential/timed flight unavailable on ${floor}`);
     while (a.stairTravel && a.alive) tick();
     if (a.floor !== floor + 1)

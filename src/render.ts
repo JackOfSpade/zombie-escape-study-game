@@ -1,7 +1,6 @@
 import { fieldAllows } from "./force-fields";
 import { drawBlood } from "./blood";
 import { camera } from "./camera";
-import { doorFrame } from "./doors";
 import { human, nearestGrip } from "./engine";
 import { CONFIG, distance, type Game, H, type Point, W } from "./model";
 import { BODY_RADIUS } from "./physics";
@@ -11,8 +10,13 @@ import {
   drawWorkstation,
   terrainCanvas,
 } from "./office-art";
+import { type Stairwell, stairwell } from "./stairwell";
 import { playerCanSee, sightRadius, visibilityPolygon } from "./visibility";
 import { stairContactCues } from "./zombie-stairs";
+/** In-world object names: the furniture kind, spaced and upper-cased. */
+export function objectName(kind: string) {
+  return kind.replace(/([a-z])([A-Z])/g, "$1 $2").toUpperCase();
+}
 const normal = {
   wall: "#354547",
   edge: "#536361",
@@ -110,6 +114,39 @@ export function render(canvas: HTMLCanvasElement, g: Game) {
   ) => {
     labels.push({ text, x, y, color, size });
   };
+  /** A staircase: treads between two strings, lit toward the open side. An
+   * ascending flight brightens as it climbs; a descending one sinks into shade. */
+  const drawStairs = (well: Stairwell) => {
+    const { x, y, w, h, open } = well,
+      treads = 6,
+      depth = h / treads;
+    ctx.save();
+    ctx.fillStyle = p.sky;
+    ctx.fillRect(x, y, w, h);
+    for (let i = 0; i < treads; i++) {
+      const ty = open > 0 ? y + h - (i + 1) * depth : y + i * depth,
+        t = i / (treads - 1),
+        shade = well.kind === "up" ? 0.5 + 0.5 * t : 0.9 - 0.7 * t;
+      ctx.globalAlpha = shade;
+      ctx.fillStyle = p.edge;
+      ctx.fillRect(x + 0.14, ty + 0.02, w - 0.28, depth - 0.04);
+      ctx.globalAlpha = Math.min(1, shade + 0.25);
+      ctx.fillStyle = p.ink;
+      ctx.fillRect(
+        x + 0.14,
+        open > 0 ? ty + depth - 0.08 : ty + 0.02,
+        w - 0.28,
+        0.06,
+      );
+    }
+    ctx.globalAlpha = 1;
+    ctx.fillStyle = p.wall;
+    ctx.fillRect(x, y, 0.14, h);
+    ctx.fillRect(x + w - 0.14, y, 0.14, h);
+    ctx.restore();
+  };
+  const wellVisible = (well: Stairwell) =>
+    visible(well.mouth) || visible(well.marker);
   if (a.floor === CONFIG.floors) {
     if (visible({ x: 21.5, y: 10.5 })) {
       ctx.strokeStyle = p.accent;
@@ -126,23 +163,23 @@ export function render(canvas: HTMLCanvasElement, g: Game) {
         label(`${4 - g.helicopter.passengers.length} SEATS`, 21.5, 14.7);
       }
     }
-  } else if (visible(f.stairs)) {
-    ctx.fillStyle = p.edge;
-    for (let i = 0; i < 5; i++)
-      ctx.fillRect(f.stairs.x - 1, f.stairs.y - 1 + i * 0.33, 2, 0.14);
-    label(
-      a.access.includes(a.floor) ? "↑ ACCESS GRANTED" : "↑ PERSONAL ACCESS",
-      f.stairs.x,
-      f.stairs.y + 1.6,
-      a.access.includes(a.floor) ? p.accent : p.danger,
-      0.42,
-    );
+  } else {
+    const well = stairwell(f, "up");
+    if (wellVisible(well)) {
+      drawStairs(well);
+      if (!a.access.includes(a.floor))
+        label(
+          "ACCESS REQUIRED",
+          well.mouth.x,
+          well.mouth.y + 0.6,
+          p.danger,
+          0.3,
+        );
+    }
   }
-  if (a.floor > 0 && visible(f.entry)) {
-    ctx.fillStyle = p.edge;
-    for (let i = 0; i < 5; i++)
-      ctx.fillRect(f.entry.x - 1, f.entry.y - 1 + i * 0.33, 2, 0.14);
-    label("↓ RETURN", f.entry.x, f.entry.y + 1.6, p.ink, 0.38);
+  if (a.floor > 0) {
+    const well = stairwell(f, "down");
+    if (wellVisible(well)) drawStairs(well);
   }
   for (const room of f.rooms ?? []) {
     const mouth = room.innerMouth;
@@ -186,8 +223,6 @@ export function render(canvas: HTMLCanvasElement, g: Game) {
       y = o.y - o.h / 2;
     if (o.destroyed) {
       drawDebris(ctx, o, theme);
-      if (o.field && distance(a, o) < 3)
-        label("FIELD BROKEN", o.x, y + o.h + 0.65, p.ink, 0.3);
       continue;
     }
     if (o.field) {
@@ -224,7 +259,7 @@ export function render(canvas: HTMLCanvasElement, g: Game) {
         }
       }
       ctx.restore();
-      if (health < 1 || distance(a, o) < 3) {
+      if (health < 1 || distance(a, o) < 3)
         healthBars.push({
           x: o.x,
           y: y + o.h + 0.18,
@@ -232,33 +267,10 @@ export function render(canvas: HTMLCanvasElement, g: Game) {
           health,
           color: health <= 0.3 ? "#ffd166" : color,
         });
-        label(
-          `FIELD ${Math.ceil(health * 100)}%`,
-          o.x,
-          y + o.h + 0.8,
-          color,
-          0.28,
-        );
-      }
-      if (distance(a, o) < 3) {
-        const quota =
-          o.field.limit === undefined
-            ? ""
-            : ` · ${Math.max(0, o.field.limit - o.field.used)} FREE ENTRIES`;
-        label(
-          green
-            ? o.field.publicEntry
-              ? f.generation?.version === 3
-                ? "REAR STUDY HALL · FREE ENTRY"
-                : "OPEN STUDY LAB · FREE ENTRY"
-              : `PASS${quota}`
-            : `RED FOR YOU · E: ${(a.keys ?? 0) > 0 ? "1 KEY" : "KEY REQUIRED"}${quota}`,
-          o.x,
-          y - 0.4,
-          color,
-          0.32,
-        );
-      }
+      // The bar is the field's only status. Text appears only when the field
+      // is red for the player and no key could open it.
+      if (!green && !(a.keys ?? 0))
+        label("KEY REQUIRED", o.x, y - 0.4, color, 0.32);
       continue;
     }
     if (o.kind === "door" && o.open && !o.door) {
@@ -268,8 +280,6 @@ export function render(canvas: HTMLCanvasElement, g: Game) {
       ctx.moveTo(o.x - 0.45, o.y - o.h / 2);
       ctx.lineTo(o.x + 1.2, o.y - o.h / 2);
       ctx.stroke();
-      if (distance(a, o) < 1.9)
-        label("E · CLOSE DOOR", a.x, a.y - 0.9, p.ink, 0.35);
       continue;
     }
     const damage = 1 - o.hp / o.maxHp;
@@ -300,19 +310,6 @@ export function render(canvas: HTMLCanvasElement, g: Game) {
       ctx.stroke();
     }
     ctx.restore();
-    if (
-      (o.kind === "door" || (o.id === "main-gate" && o.turning === 0)) &&
-      distance(a, doorFrame(o)) < 1.9
-    )
-      label(
-        o.door && !o.door.latched
-          ? "PUSH · E GRIP/PULL · SHUT TO LATCH"
-          : "E · RELEASE LATCH",
-        a.x,
-        a.y - 0.9,
-        p.ink,
-        0.35,
-      );
   }
   for (const e of g.effects) {
     if (e.until <= g.time || e.floor !== a.floor || !visible(e)) continue;
@@ -443,37 +440,11 @@ export function render(canvas: HTMLCanvasElement, g: Game) {
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.translate(ox, oy);
   ctx.scale(scale, scale);
+  // The held or nearest reachable object shows only its name.
   const ob =
     f.furniture.find((o) => o.id === a.grip?.object) ?? nearestGrip(g, a);
-  if (ob && distance(a, ob) < 2.8 && playerCanSee(f, a, ob, radius)) {
-    ctx.strokeStyle = p.accent;
-    ctx.lineWidth = 0.06;
-    ctx.save();
-    ctx.translate(ob.x, ob.y);
-    ctx.rotate(ob.angle ?? 0);
-    ctx.strokeRect(-ob.w / 2 - 0.1, -ob.h / 2 - 0.1, ob.w + 0.2, ob.h + 0.2);
-    ctx.restore();
-    label(
-      `${ob.kind.toUpperCase()} · ${ob.hp / ob.maxHp < 0.3 ? "CRACKING" : ob.hp < ob.maxHp ? "DAMAGED" : "INTACT"}`,
-      ob.x,
-      ob.y - ob.h / 2 - 0.4,
-      p.ink,
-      0.38,
-    );
-    label(
-      a.grip
-        ? "E · RELEASE / WASD · DRAG"
-        : ob.kind === "door"
-          ? ob.door?.latched
-            ? "E · RELEASE LATCH"
-            : "PUSH · E GRIP/PULL · SHUT TO LATCH"
-          : "E · GRIP / SPACE · JUMP",
-      ob.x,
-      ob.y + ob.h / 2 + 0.6,
-      p.accent,
-      0.35,
-    );
-  }
+  if (ob && distance(a, ob) < 2.8 && playerCanSee(f, a, ob, radius))
+    label(objectName(ob.kind), ob.x, ob.y - ob.h / 2 - 0.4, p.ink, 0.38);
   ctx.restore();
   // Visibility was checked at each source before queuing. Only text extends
   // beyond the fog mask; unseen entities still contribute no labels.

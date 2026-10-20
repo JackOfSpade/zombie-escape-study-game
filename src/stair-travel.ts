@@ -8,6 +8,7 @@ import {
 } from "./model";
 import { walkSegment } from "./navigation";
 import { solid } from "./spatial";
+import { inStairwell } from "./stairwell";
 
 export interface StairTravel {
   fromFloor: number;
@@ -16,12 +17,31 @@ export interface StairTravel {
   destination: Point;
   until: number;
 }
+/** Which staircase on its floor the survivor is standing in, if any. */
+export function stairwellAt(g: Game, a: Actor): "up" | "down" | undefined {
+  const f = g.floors[a.floor];
+  if (!f) return undefined;
+  if (a.floor < CONFIG.floors && inStairwell(a, f.stairs)) return "up";
+  if (a.floor > 0 && inStairwell(a, f.entry)) return "down";
+  return undefined;
+}
+/** Walking into a staircase starts its flight. Standing in one, or arriving
+ * in one from another floor, does not start another; the survivor must step
+ * out and back in. A locked staircase refuses the entry and says why. */
+export function enterStairs(g: Game, a: Actor) {
+  const well = a.alive && !a.escaped ? stairwellAt(g, a) : undefined;
+  if (well === a.stairwell) return false;
+  if (well) a.stairwell = well;
+  else delete a.stairwell;
+  if (!well || a.stairTravel || a.vault) return false;
+  return beginStairs(g, a, well === "down");
+}
 export function cancelStairs(g: Game, a: Actor) {
   if (!a.stairTravel) return;
   delete a.stairTravel;
   a.activity = "exploring";
   if (a.id === "human")
-    g.notice = "Stair traversal cancelled. You are still on this floor.";
+    g.notice = "You left the staircase. You are still on this floor.";
 }
 export function beginStairs(g: Game, a: Actor, down = false) {
   if (!a.alive || a.escaped || a.vault || a.stairTravel) return false;
@@ -30,14 +50,22 @@ export function beginStairs(g: Game, a: Actor, down = false) {
   if (
     (down && a.floor === 0) ||
     (!down && a.floor >= CONFIG.floors) ||
-    distance(a, marker) > 1.8 ||
+    !inStairwell(a, marker) ||
     !walkSegment(source, a, marker)
   )
     return false;
   if (!down && !a.access.includes(a.floor)) {
-    if (a.id === "human")
+    if (a.id === "human") {
       g.notice =
-        "Personal stair access required. Complete a terminal or meaningfully defend a shared room.";
+        "This staircase is locked for you. Solve a solo terminal on this floor for personal stair access.";
+      event(
+        g,
+        "stairs-locked",
+        "The staircase refused a survivor without personal access.",
+        a.floor,
+        a.id,
+      );
+    }
     return false;
   }
   const toFloor = a.floor + (down ? -1 : 1),
@@ -52,6 +80,7 @@ export function beginStairs(g: Game, a: Actor, down = false) {
   };
   delete a.station;
   delete a.handling;
+  delete a.grip;
   delete a.defensePlan;
   delete a.exploringDoor;
   delete a.fleeTarget;
@@ -70,18 +99,24 @@ export function beginStairs(g: Game, a: Actor, down = false) {
     a.id,
   );
   if (a.id === "human")
-    g.notice = "Climbing the stairs. Move to cancel and stay on this floor.";
+    g.notice = down
+      ? "Taking the stairs down. Step back out to stay on this floor."
+      : "Climbing the stairs. Step back out to stay on this floor.";
   return true;
 }
-/** The survivor stays exposed at the departure until a clear connected landing is available. */
+/** The survivor stays exposed inside the staircase until a clear connected
+ * landing is available. Leaving the well, or being pushed out, cancels. */
 export function advanceStairs(g: Game, a: Actor) {
   const travel = a.stairTravel;
   if (!travel) return false;
+  const source = g.floors[travel.fromFloor],
+    marker = travel.toFloor > travel.fromFloor ? source?.stairs : source?.entry;
   if (
     !a.alive ||
     a.escaped ||
     a.floor !== travel.fromFloor ||
-    distance(a, travel.origin) > 0.15
+    !marker ||
+    !inStairwell(a, marker)
   ) {
     cancelStairs(g, a);
     return false;
@@ -116,8 +151,7 @@ export function advanceStairs(g: Game, a: Actor) {
   );
   if (!landing) {
     if (a.id === "human")
-      g.notice =
-        "Stair landing blocked. Move to cancel and stay on this floor.";
+      g.notice = "Stair landing blocked. Step back out to stay on this floor.";
     return true;
   }
   a.floor = travel.toFloor;
@@ -128,6 +162,10 @@ export function advanceStairs(g: Game, a: Actor) {
   delete a.navTarget;
   a.repath = 0;
   a.activity = "exploring";
+  // Arriving inside the other well must not immediately start the return flight.
+  const arrivedIn = stairwellAt(g, a);
+  if (arrivedIn) a.stairwell = arrivedIn;
+  else delete a.stairwell;
   const text = `${a.name} reached ${a.floor === CONFIG.floors ? "the rooftop" : `Floor ${a.floor + 1}`}.`;
   event(g, "climb", text, a.floor, a.id);
   if (a.id === "human") g.notice = text;

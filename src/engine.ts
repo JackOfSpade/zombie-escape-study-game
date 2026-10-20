@@ -79,7 +79,12 @@ import {
   endFurnitureIndex,
   furnitureNear,
 } from "./spatial";
-import { advanceStairs, beginStairs, cancelStairs } from "./stair-travel";
+import {
+  advanceStairs,
+  beginStairs,
+  cancelStairs,
+  enterStairs,
+} from "./stair-travel";
 import {
   chooseRetreat,
   routeContacts,
@@ -2385,9 +2390,11 @@ function advanceStep(
     }
   if (a.alive && !a.escaped) {
     a.cooldown = Math.max(0, a.cooldown - dt);
-    if (a.stairTravel && (input.x || input.y)) cancelStairs(g, a);
-    if (advanceStairs(g, a)) {
-      /* A committed flight cannot move or interact remotely. */
+    enterStairs(g, a);
+    // Walking out of the staircase cancels a flight; walking inside it does not.
+    const landed = advanceStairs(g, a) && !a.stairTravel;
+    if (landed) {
+      /* Settle on the new floor's landing before taking input again. */
     } else if (a.vault) advanceVault(a, dt);
     else if (input.x || input.y) {
       const n = Math.hypot(input.x, input.y);
@@ -2428,6 +2435,7 @@ function advanceStep(
       )
     )
       cancelStairs(g, b);
+    enterStairs(g, b);
     if (advanceStairs(g, b)) {
       if (
         b.intent &&

@@ -1,4 +1,5 @@
 import {
+  CONFIG,
   FURNITURE,
   H,
   W,
@@ -11,6 +12,7 @@ import {
 } from "./model";
 import { boxesOverlap } from "./furniture-geometry";
 import { canPlace, inFurniture, wall } from "./spatial";
+import { stairwellApproach } from "./stairwell";
 
 /** Office rooms for freshly generated floors. Each room gets a function
  * (break room, open-plan cubicles, meeting room, storage, reception or
@@ -644,9 +646,15 @@ export function pursuitOfficeZones(f: Floor): OfficeZone[] {
  * opening, the stairs and the entry, so furniture can never seal a field. */
 export function fieldClearance(f: Floor): Point[] {
   const points: Point[] = [f.stairs, f.entry];
-  // The arrival lane in front of the entry stays open for arriving crowds.
+  // The arrival lane in front of the entry stays open for arriving crowds. A
+  // carved entry well sits in the south wall, so the lane is the floor rows
+  // in front of its mouth.
+  const lane = Math.min(f.entry.y, 26.5);
   for (let x = f.entry.x - 5; x <= f.entry.x + 5; x++)
-    points.push({ x, y: f.entry.y }, { x, y: f.entry.y + 1 });
+    points.push({ x, y: lane }, { x, y: lane + 1 });
+  // Nothing may narrow the approach into either staircase.
+  if (f.index < CONFIG.floors) points.push(...stairwellApproach(f, "up"));
+  if (f.index > 0) points.push(...stairwellApproach(f, "down"));
   for (const o of f.furniture)
     if (o.field)
       for (let d = -o.w / 2 + 0.5; d <= o.w / 2 - 0.5; d++)

@@ -3,10 +3,10 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 import { claimStation, stairs, step, vault } from "../src/engine";
 import { canGrip } from "../src/handling";
-import { type Roadmap, CONFIG, distance } from "../src/model";
+import { type Game, type Roadmap, CONFIG, distance } from "../src/model";
 import { decode, encode, recover } from "../src/persistence";
 import { advanceStairs } from "../src/stair-travel";
-import { actor, createGame } from "../src/world";
+import { actor, createGame, createPlayableGame } from "../src/world";
 const r: Roadmap = JSON.parse(readFileSync("public/curriculum.json", "utf8"));
 function fixture() {
   const g = createGame(2026, r),
@@ -18,18 +18,27 @@ function fixture() {
   Object.assign(a, g.floors[0].stairs);
   return { g, a };
 }
-function tick(g: ReturnType<typeof createGame>, n: number) {
+function tick(g: Game, n: number) {
   for (let i = 0; i < n; i++) step(g, 1 / 30);
+}
+function lockedEvents(g: Game) {
+  return g.events.filter(
+    (e) => e.type === "stairs-locked" && e.actor === "human",
+  ).length;
 }
 test("survivors require personal access and a full saved stair flight in either direction", () => {
   const { g, a } = fixture(),
     learning = JSON.stringify(g.study);
   assert.equal(stairs(g, a), false);
+  tick(g, 1);
+  assert.equal(a.stairTravel, undefined);
+  assert.equal(a.floor, 0);
   a.access.push(0);
+  const start = g.time;
   assert.ok(stairs(g, a));
   const until = a.stairTravel!.until;
   assert.equal(a.floor, 0);
-  assert.equal(until, g.time + CONFIG.stairSeconds);
+  assert.equal(until, start + CONFIG.stairSeconds);
   tick(g, 29);
   assert.equal(a.floor, 0);
   assert.equal(stairs(g, a), false);
@@ -42,12 +51,27 @@ test("survivors require personal access and a full saved stair flight in either 
   tick(restored, 1);
   assert.equal(b.floor, 1);
   assert.equal(b.stairTravel, undefined);
-  assert.ok(distance(b, restored.floors[1].entry) < 0.01);
+  const entry = restored.floors[1].entry;
+  assert.ok(distance(b, entry) < 0.01);
   assert.equal(b.access.includes(1), false);
-  assert.ok(stairs(restored, b, true));
+  // Arriving inside the down well does not start the return flight by itself.
+  tick(restored, 5);
   assert.equal(b.floor, 1);
-  tick(restored, 60);
+  assert.equal(b.stairTravel, undefined);
+  // Walk out of the well, then back in.
+  Object.assign(b, { x: entry.x, y: entry.y - 2 });
+  tick(restored, 1);
+  assert.equal(b.stairwell, undefined);
+  assert.equal(b.stairTravel, undefined);
+  Object.assign(b, { x: entry.x, y: entry.y });
+  tick(restored, 1);
+  const descent = restored.survivors[0].stairTravel;
+  assert.ok(descent);
+  assert.equal(descent.toFloor, 0);
+  assert.equal(b.floor, 1);
+  tick(restored, 61);
   assert.equal(b.floor, 0);
+  assert.equal(b.stairTravel, undefined);
   assert.ok(
     distance(b, { x: g.floors[0].stairs.x, y: g.floors[0].stairs.y + 1 }) <
       0.01,
@@ -58,27 +82,61 @@ test("survivors require personal access and a full saved stair flight in either 
       e.actor === "human" &&
       (e.type === "survivor-stairs" || e.type === "climb"),
   );
-  assert.equal(events.length, 4);
+  assert.deepEqual(
+    events.map((e) => e.type),
+    ["survivor-stairs", "climb", "survivor-stairs", "climb"],
+  );
   assert.ok(events[1].at - events[0].at >= CONFIG.stairSeconds - 1e-8);
+  assert.ok(events[3].at - events[2].at >= CONFIG.stairSeconds - 1e-8);
 });
-test("movement cancels a flight on the original floor; climbing cannot remotely use a terminal, vault or grip furniture", () => {
-  const { g, a } = fixture();
+test("walking inside the well keeps the flight, leaving the well cancels it, and climbing cannot remotely use a terminal, vault or grip furniture", () => {
+  const { g, a } = fixture(),
+    f = g.floors[0];
   a.access.push(0);
   assert.ok(stairs(g, a));
-  assert.equal(claimStation(g, a, g.floors[0].stations[0].id), false);
+  assert.equal(claimStation(g, a, f.stations[0].id), false);
   assert.equal(vault(g, a), false);
-  assert.equal(canGrip(g.floors[0], a, g.floors[0].furniture[0]), false);
-  const y = a.y;
+  assert.equal(canGrip(f, a, f.furniture[0]), false);
   step(g, 1 / 30, { x: 0, y: 1, grab: false });
+  assert.ok(a.stairTravel);
+  assert.equal(a.floor, 0);
+  assert.ok(distance(a, f.stairs) < 1.15);
+  Object.assign(a, { x: f.stairs.x, y: f.stairs.y + 1.3 });
+  tick(g, 1);
   assert.equal(a.stairTravel, undefined);
   assert.equal(a.floor, 0);
-  assert.ok(a.y > y);
+  assert.match(g.notice, /You left the staircase/);
   tick(g, 90);
   assert.equal(a.floor, 0);
   assert.equal(
     g.events.some((e) => e.type === "climb" && e.actor === a.id),
     false,
   );
+});
+test("a locked staircase refuses a walking survivor and says why", () => {
+  const { g, a } = fixture(),
+    f = g.floors[0];
+  Object.assign(a, { x: f.stairs.x, y: f.stairs.y + 2.5 });
+  tick(g, 1);
+  assert.equal(lockedEvents(g), 0);
+  for (let i = 0; i < 120 && distance(a, f.stairs) >= 1.15; i++)
+    step(g, 1 / 30, { x: 0, y: -1, grab: false });
+  assert.ok(distance(a, f.stairs) < 1.15);
+  tick(g, 10);
+  assert.equal(a.floor, 0);
+  assert.equal(a.stairTravel, undefined);
+  assert.match(g.notice, /locked for you/);
+  assert.equal(lockedEvents(g), 1);
+  tick(g, 20);
+  assert.equal(lockedEvents(g), 1);
+  Object.assign(a, { x: f.stairs.x, y: f.stairs.y + 2.5 });
+  tick(g, 1);
+  for (let i = 0; i < 120 && distance(a, f.stairs) >= 1.15; i++)
+    step(g, 1 / 30, { x: 0, y: -1, grab: false });
+  tick(g, 2);
+  assert.equal(lockedEvents(g), 2);
+  assert.equal(a.floor, 0);
+  assert.equal(a.stairTravel, undefined);
 });
 test("blocked landing furniture delays arrival without clipping, clock reset or durability changes", () => {
   const { g, a } = fixture(),
@@ -176,4 +234,44 @@ test("NPCs also traverse the timed flight through the normal engine rather than 
   assert.equal(npc.floor, 0);
   tick(g, 2);
   assert.equal(npc.floor, 1);
+});
+test("a fresh force-field floor carves the well into the north wall and a survivor walks in to climb", () => {
+  const probe = createPlayableGame(11, r),
+    f0 = probe.floors[0],
+    f1 = probe.floors[1];
+  assert.deepEqual({ x: f0.stairs.x, y: f0.stairs.y }, { x: 22, y: 1 });
+  for (const [y, x] of [
+    [0, 21],
+    [0, 22],
+    [1, 21],
+    [1, 22],
+  ])
+    assert.equal(f0.tiles[y][x], 0, `floor 0 tile ${x},${y}`);
+  assert.equal(f1.tiles[28][21], 0);
+  assert.equal(f1.tiles[29][22], 0);
+  assert.deepEqual({ x: f1.entry.x, y: f1.entry.y }, { x: 22, y: 29 });
+  assert.deepEqual({ x: f0.entry.x, y: f0.entry.y }, { x: 21.5, y: 26.5 });
+  function walk(access: number[]) {
+    const g = createPlayableGame(11, r),
+      a = g.survivors.find((s) => s.id === "human")!;
+    g.status = "playing";
+    g.survivors = [a];
+    g.nextSpawn = 999999;
+    g.surge.anchor = 999999;
+    g.zombies = [];
+    Object.assign(a, { x: 22, y: 4, floor: 0, access });
+    delete a.stairwell;
+    for (let i = 0; i < 150 && a.floor === 0; i++)
+      step(g, 1 / 30, { x: 0, y: -1, grab: false });
+    return { g, a };
+  }
+  const up = walk([0]);
+  assert.equal(up.a.floor, 1);
+  assert.ok(distance(up.a, { x: 22, y: 29 }) < 0.8);
+  assert.equal(lockedEvents(up.g), 0);
+  const locked = walk([]);
+  assert.equal(locked.a.floor, 0);
+  assert.equal(locked.a.stairTravel, undefined);
+  assert.ok(distance(locked.a, locked.g.floors[0].stairs) < 1.15);
+  assert.equal(lockedEvents(locked.g), 1);
 });

@@ -232,6 +232,8 @@ export interface Actor extends Point {
   exploreProgress?: { target: Point; best: number };
   failedExplore?: { point: Point; floor: number; until: number }[];
   stairTravel?: import("./stair-travel").StairTravel;
+  /** The staircase the survivor currently stands in; a flight starts only on walking in. */
+  stairwell?: "up" | "down";
   vault?: {
     from: Point;
     to: Point;

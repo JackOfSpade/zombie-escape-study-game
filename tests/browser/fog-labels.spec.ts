@@ -23,7 +23,9 @@ test("visible field captions and names stay complete above fog without revealing
     const g = new TestRunner(s, roadmap).game;
     g.survivors[1].name = "Sora";
     g.survivors[2].name = "Secret";
-    g.floors[0].furniture[0].field.publicEntry = true;
+    // Red for a keyless player: the one caption a field may carry.
+    g.floors[0].furniture[0].field.limit = 0;
+    g.survivors[0].keys = 0;
     const c = document.createElement("canvas");
     c.id = "fog-label-regression";
     c.style.width = "1600px";
@@ -49,7 +51,7 @@ test("visible field captions and names stay complete above fog without revealing
     ref.height = c.height;
     const rc = ref.getContext("2d")!;
     const selected = labels.filter(
-      (l) => l.text === "Sora" || l.text.startsWith("OPEN STUDY LAB"),
+      (l) => l.text === "Sora" || l.text === "KEY REQUIRED",
     );
     for (const l of selected) {
       rc.setTransform(l.transform);

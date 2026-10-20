@@ -46,7 +46,6 @@ import {
   nearestGrip,
   nearestStation,
   releaseStation,
-  stairs,
   step,
   takeLoot,
   toggleDoor,
@@ -343,34 +342,19 @@ async function interact() {
   const object = nearestGrip(game, a),
     station = nearestStation(game, a),
     door = nearbyDoor(game, a);
+  // Staircases are entered by walking in; E never starts a flight.
   if (
     object &&
     distance(a, surfacePoint(a, object)) <
       Math.min(
         station ? distance(a, station) : Infinity,
         door ? distance(a, doorFrame(door)) : Infinity,
-        a.floor < CONFIG.floors &&
-          distance(a, game.floors[a.floor].stairs) < 1.8
-          ? distance(a, game.floors[a.floor].stairs)
-          : Infinity,
-        a.floor > 0 && distance(a, game.floors[a.floor].entry) < 1.8
-          ? distance(a, game.floors[a.floor].entry)
-          : Infinity,
       )
   ) {
     if (toggleGrip(game, a)) {
       game.notice = `Gripping ${object.kind}. Move to drag and pivot; E releases.`;
       runLogs.record(game, "grip", { object: object.id });
     }
-    return;
-  }
-  if (distance(a, game.floors[a.floor].stairs) < 1.8) {
-    if (stairs(game, a)) closeTerminal();
-    return;
-  }
-  if (a.floor > 0 && distance(a, game.floors[a.floor].entry) < 1.8) {
-    stairs(game, a, true);
-    closeTerminal();
     return;
   }
   const st = nearestStation(game, a);
@@ -1792,10 +1776,10 @@ function ui() {
         : a.floor === CONFIG.floors
           ? "Reach the helipad and press E while a helicopter is boarding. Four seats per trip."
           : a.access.includes(a.floor)
-            ? "Your credential is personal. The stairs are at the north end of the central corridor."
+            ? "Your credential is personal. Walk into the staircase at the north edge of the floor."
             : game.rules === "force-fields"
               ? "Solve a solo terminal for personal stair access and one key. Other entrance passes run out; the rear study hall stays open. E uses a key on red fields. Green fields still block zombies."
-              : "Find a glowing terminal. Solo work or meaningful shared-room defense can earn your credential. Press E to grip furniture, move to drag and pivot, then E to release. Space jumps over barricades.";
+              : "Find a glowing terminal. Solo work or meaningful shared-room defense can earn your credential. Walk into light furniture to push it; E grips heavier pieces to drag and pivot. Space jumps over barricades.";
   $("#pickup").textContent =
     game.status === "escaped"
       ? `PICKUP ${game.helicopter.trip} · EXTRACTED`
