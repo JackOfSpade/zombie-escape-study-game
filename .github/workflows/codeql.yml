@@ -18,6 +18,11 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Identify the local CodeQL analysis
+        if: ${{ env.ACT }}
+        # SARIF post-processing needs this even when uploads are disabled.
+        # A local act run has no GitHub workflow-run metadata to query.
+        run: printf '%s\n' 'CODEQL_ACTION_ANALYSIS_KEY=.github/workflows/codeql.yml:analyze' >> "$GITHUB_ENV"
       - uses: github/codeql-action/init@24c54180a607b1449ed407dd24f251e4e9147c8d # v4
         with:
           languages: javascript-typescript
