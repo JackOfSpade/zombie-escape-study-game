@@ -97,6 +97,7 @@ import { chooseTaskStation } from "./task-strategy";
 import { canSee, rayBodyDistance, sightRadius } from "./visibility";
 import { ZombieIndex } from "./zombie-index";
 import { zombieStairArrival } from "./zombie-stairs";
+import { sectorAt } from "./floor-plan";
 export interface Input {
   x: number;
   y: number;
@@ -1196,6 +1197,7 @@ function followFurniturePlan(g: Game, a: Actor, dt: number) {
 }
 
 function roomAt(p: Point, f?: Floor) {
+  if (f?.generation?.sectors) return sectorAt(f, p)?.room ?? -1;
   if (f?.generation?.stages)
     return (
       f.generation.stages.find((s) => p.y > s.front + 1 && p.y < s.rear)

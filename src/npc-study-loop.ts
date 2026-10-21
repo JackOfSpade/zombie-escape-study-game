@@ -10,6 +10,7 @@ import {
 import { npcReasoningAvailable, npcThinkingRate } from "./npc-cognition";
 import { walkSegment } from "./navigation";
 import { solid } from "./spatial";
+import { sectorBounds } from "./floor-plan";
 
 export interface StudyLoop {
   floor: number;
@@ -270,20 +271,25 @@ export function studyLoopDecision(
       ? 0.2
       : Math.min(1.25, Math.max(0.65, remaining));
   // Direct and two-leg loops, clockwise and counterclockwise, around the remembered terminal.
-  const bounds = f.generation?.stages?.find(
+  // Version 3/4 stages and version 5 sector blocks: a rect of interior cells.
+  const stage = f.generation?.stages?.find(
     (stage) => s.y > stage.front + 1 && s.y < stage.rear,
   );
+  const block = f.generation?.sectors ? sectorBounds(f, s) : undefined;
   const candidates: Point[][] = [[s]];
   for (let i = 0; i < STUDY_LOOP.candidates; i++) {
     const angle = ((i % 8) * Math.PI) / 4,
       radius = i < 8 ? 5 : 8;
-    const y = s.y + Math.sin(angle) * radius;
+    const y = s.y + Math.sin(angle) * radius,
+      x = s.x + Math.cos(angle) * radius;
     candidates.push([
       {
-        x: s.x + Math.cos(angle) * radius,
-        y: bounds
-          ? Math.max(bounds.front + 1.4, Math.min(bounds.rear - 0.4, y))
-          : y,
+        x: block ? Math.max(block.x1 + 0.4, Math.min(block.x2 + 0.6, x)) : x,
+        y: stage
+          ? Math.max(stage.front + 1.4, Math.min(stage.rear - 0.4, y))
+          : block
+            ? Math.max(block.y1 + 0.4, Math.min(block.y2 + 0.6, y))
+            : y,
       },
       s,
     ]);

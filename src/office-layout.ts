@@ -13,6 +13,7 @@ import {
 import { boxesOverlap } from "./furniture-geometry";
 import { canPlace, inFurniture, wall } from "./spatial";
 import { stairwellApproach } from "./stairwell";
+import { floorSectors, inRect, type Rect } from "./floor-plan";
 
 /** Office rooms for freshly generated floors. Each room gets a function
  * (break room, open-plan cubicles, meeting room, storage, reception or
@@ -61,7 +62,13 @@ export interface OfficeZone {
   y2: number;
   /** Functions this zone may be given; one is chosen per run. */
   types: OfficeRoomType[];
+  /** Version 5: rects (sub-rooms with their walls) this zone must not use. */
+  exclude?: Rect[];
+  /** Version 5: id of the field through which this zone's sector is entered. */
+  gate?: string;
 }
+const excluded = (zone: OfficeZone, p: Point) =>
+  !!zone.exclude?.some((r) => inRect(r, Math.floor(p.x), Math.floor(p.y)));
 
 /** A piece in a group's local frame. For wall groups +y points into the room
  * and y = 0 is the wall face; free groups are centred on their anchor. */
@@ -342,7 +349,8 @@ function terminalBays(
       s.x < zone.x1 ||
       s.x > zone.x2 + 1 ||
       s.y < zone.y1 ||
-      s.y > zone.y2 + 1
+      s.y > zone.y2 + 1 ||
+      excluded(zone, s)
     )
       continue;
     for (const d of FACES) {
@@ -352,8 +360,16 @@ function terminalBays(
         : Math.floor(s.y) + (d.dy > 0 ? 1 : 0);
       if (!wall(f, s.x + d.dx, s.y + d.dy)) continue;
       // Arrivals fan out along the wall they enter this room through: no bays there.
-      const wallRow = Math.floor(s.y + d.dy);
-      if (!d.dx && entrances.some((o) => Math.floor(o.y) === wallRow)) continue;
+      const wallRow = Math.floor(s.y + d.dy),
+        wallColumn = Math.floor(s.x + d.dx);
+      if (
+        entrances.some((o) =>
+          o.h > o.w
+            ? d.dx && Math.floor(o.x) === wallColumn
+            : !d.dx && Math.floor(o.y) === wallRow,
+        )
+      )
+        continue;
       for (const side of [-1, 1]) {
         const along = d.dx ? s.y + side * 1.5 : s.x + side * 1.5,
           key = `${d.dx},${d.dy},${face},${along.toFixed(2)}`;
@@ -454,7 +470,7 @@ function anchors(f: Floor, zone: OfficeZone, group: Group, r: Rng) {
   const out: { x: number; y: number; angle: number }[] = [];
   for (let y = zone.y1; y <= zone.y2; y++)
     for (let x = zone.x1; x <= zone.x2; x++) {
-      if (wall(f, x + 0.5, y + 0.5)) continue;
+      if (wall(f, x + 0.5, y + 0.5) || excluded(zone, { x, y })) continue;
       if (!group.wall) {
         for (const angle of [0, Math.PI / 2, Math.PI, -Math.PI / 2])
           out.push({ x: x + 0.5, y: y + 0.5, angle });
@@ -554,6 +570,7 @@ export function furnishOffice(
               o.x < zone.x2 + 1 &&
               o.y > zone.y1 &&
               o.y < zone.y2 + 1 &&
+              !excluded(zone, o) &&
               // Pieces inside one group may stand close but never overlap.
               pieces
                 .slice(0, i)
@@ -595,7 +612,9 @@ export function furnishOffice(
       for (const bay of terminalBays(
         f,
         zone,
-        sealed.filter((o) => o.id === `f${f.index}-${zone.id}-door`),
+        sealed.filter(
+          (o) => o.id === (zone.gate ?? `f${f.index}-${zone.id}-door`),
+        ),
       ))
         tryPlace(bay);
     for (const variants of plan(type, r, small))
@@ -614,6 +633,7 @@ const ROOMS: OfficeRoomType[] = [
  * random functions. */
 export function pursuitOfficeZones(f: Floor): OfficeZone[] {
   const stages = f.generation?.stages;
+  if (f.index < 4 && f.generation?.sectors) return sectorOfficeZones(f);
   if (f.index >= 4 || !stages) return [];
   const bounds = (y1: number, y2: number) => {
     if (!f.boundary) return { x1: 2, y1, x2: 41, y2 };
@@ -660,9 +680,92 @@ export function fieldClearance(f: Floor): Point[] {
   // Nothing may narrow the approach into either staircase.
   if (f.index < CONFIG.floors) points.push(...stairwellApproach(f, "up"));
   if (f.index > 0) points.push(...stairwellApproach(f, "down"));
+  if (f.generation?.sectors) {
+    // Version 5: every field cell in either orientation plus two cells in
+    // front of it on both sides, and every sub-room doorway with its approach.
+    for (const o of f.furniture)
+      if (o.field) {
+        const vertical = o.h > o.w,
+          half = (vertical ? o.h : o.w) / 2;
+        for (let d = -half + 0.5; d <= half - 0.5; d++)
+          for (const t of [-2, -1, 0, 1, 2])
+            points.push(
+              vertical
+                ? { x: o.x + t, y: o.y + d }
+                : { x: o.x + d, y: o.y + t },
+            );
+      }
+    for (const s of floorSectors(f))
+      for (const room of s.rooms) {
+        const { doorway: d, rect } = room;
+        const dx = d.x1 === d.x2 ? (d.x1 > rect.x2 ? 1 : -1) : 0,
+          dy = d.y1 === d.y2 ? (d.y1 > rect.y2 ? 1 : -1) : 0;
+        for (let y = d.y1; y <= d.y2; y++)
+          for (let x = d.x1; x <= d.x2; x++)
+            points.push(
+              { x: x + 0.5, y: y + 0.5 },
+              { x: x + dx + 0.5, y: y + dy + 0.5 },
+            );
+      }
+    return points;
+  }
   for (const o of f.furniture)
     if (o.field)
       for (let d = -o.w / 2 + 0.5; d <= o.w / 2 - 0.5; d++)
         points.push({ x: o.x + d, y: o.y });
   return points;
+}
+
+const SUB_ROOM_TYPES: Record<string, OfficeRoomType> = {
+  office: "manager",
+  meeting: "meeting",
+  storage: "storage",
+  break: "break",
+};
+/** Version 5 zones: one per sector block (room3, room3b, room3c) with the
+ * sector's sub-rooms excluded, then one per sub-room (room3r1, ...). The free
+ * hall's circulation is always open-plan cubicles. */
+function sectorOfficeZones(f: Floor): OfficeZone[] {
+  const sectors = floorSectors(f);
+  const study = sectors.filter((s) => s.room !== undefined);
+  const zones: OfficeZone[] = [];
+  for (const s of [...study, ...sectors.filter((s) => s.room === undefined)]) {
+    const previous = sectors[s.order - 1];
+    const gate =
+      s.order === 0
+        ? undefined
+        : s.order === 1
+          ? `f${f.index}-room2-door`
+          : `f${f.index}-${previous.id}-forward`;
+    const exclude = s.rooms.map(({ rect: r }) => ({
+      x1: r.x1 - 1,
+      y1: r.y1 - 1,
+      x2: r.x2 + 1,
+      y2: r.y2 + 1,
+    }));
+    const types: OfficeRoomType[] =
+      s.id === "room2"
+        ? ["cubicles"]
+        : s.id === "entry"
+          ? ["reception"]
+          : s.id === "lobby"
+            ? ["break", "reception"]
+            : ROOMS;
+    s.blocks.forEach((b, i) =>
+      zones.push({
+        id: `${s.id}${i ? String.fromCharCode(97 + i) : ""}`,
+        ...b,
+        types,
+        ...(exclude.length ? { exclude } : {}),
+        ...(gate ? { gate } : {}),
+      }),
+    );
+    for (const room of s.rooms)
+      zones.push({
+        id: room.id,
+        ...room.rect,
+        types: [SUB_ROOM_TYPES[room.kind]],
+      });
+  }
+  return zones;
 }

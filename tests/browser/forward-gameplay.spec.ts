@@ -36,7 +36,7 @@ test("new runs share one randomized boundary on every floor and retain it after 
       .slice(0, 4)
       .every(
         (f: any) =>
-          f.generation.version === 4 &&
+          f.generation.version === 5 &&
           f.rooms.every((r: any) => r.forwardExit),
       ),
   ).toBe(true);

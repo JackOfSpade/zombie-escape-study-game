@@ -1,4 +1,5 @@
 import type { LearnerLedger, ScopeDefinition } from "./learning-model";
+import type { Sector } from "./floor-plan";
 export type Track = "PY" | "PE";
 /** A connected AI provider; development practice has no provider. */
 export type Provider = "study-mode" | "chatgpt-handoff";
@@ -356,10 +357,14 @@ export interface Floor {
     forwardEntry?: Point;
   }[];
   generation?: {
-    version: 2 | 3 | 4;
+    version: 2 | 3 | 4 | 5;
     upperDivider: number;
     lowerDivider: number;
     stages?: { room: number; rear: number; front: number }[];
+    /** Version 5 office floor plans: six chain sectors, entry to lobby. */
+    sectors?: Sector[];
+    /** Version 5 plan family chosen for this floor. */
+    family?: "stack" | "columns" | "serpentine";
   };
   index: number;
   tiles: number[][];
