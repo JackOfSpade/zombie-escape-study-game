@@ -10,6 +10,7 @@ import { doorwayGoal } from "../src/exploration";
 import { survivorPath } from "../src/navigation";
 import { decode, encode } from "../src/persistence";
 import { CONFIG, type Roadmap } from "../src/model";
+import { sectorAt } from "../src/floor-plan";
 const roadmap: Roadmap = JSON.parse(
   readFileSync("public/curriculum.json", "utf8"),
 );
@@ -26,7 +27,10 @@ test("fresh worlds have fields, movable office furniture clear of every opening,
       const fields = f.furniture.filter((o) => o.field);
       assert.ok(fields.every((o) => !o.door));
       for (const o of f.furniture.filter((o) => !o.field)) {
-        assert.match(o.id, /^f\d-(room\d|entry|lobby)-[a-z]+\d+-/);
+        assert.match(
+          o.id,
+          /^f\d-(room\d(?:[bc]|r\d+)?|(?:entry|lobby)[bc]?)-[a-z]+\d+-/,
+        );
         assert.ok(o.speed > 0 && o.hp === o.maxHp, o.id);
         // No piece can seal or crowd a field opening.
         for (const field of fields)
@@ -77,14 +81,20 @@ test("merged forward opening consumes free passes on first touch, closes permane
     a = g.survivors[0];
   const o = g.floors[0].furniture.find((o) => o.id === "f0-room2-forward")!;
   assert.equal(o.field!.exit, true);
-  assert.equal(o.field!.direction, -1);
+  assert.ok([-1, 1].includes(o.field!.direction!));
   assert.ok(o.field!.limit! >= 3);
   o.field!.limit = 1;
   const f = o.field!;
+  // Vertical openings cross along x, horizontal ones along y; the free pass is
+  // granted to arrivals from the side opposite the field's direction.
+  const axis = o.h >= o.w ? "x" : "y",
+    d = f.direction!;
+  const at = (offset: number) =>
+    Object.assign(a, { x: o.x, y: o.y, [axis]: o[axis] + offset });
   assert.equal(fieldAllows(o, a), true, "free passes remain");
-  Object.assign(a, { x: o.x, y: o.y + 1.2 });
+  at(-d * 1.2);
   updateFields(g);
-  Object.assign(a, { x: o.x, y: o.y });
+  at(0);
   updateFields(g);
   assert.ok(f.crossing.includes(a.id));
   assert.equal(
@@ -92,13 +102,13 @@ test("merged forward opening consumes free passes on first touch, closes permane
     1,
     "The pass must be consumed before the survivor finishes crossing",
   );
-  a.y = o.y - 1.2;
+  at(d * 1.2);
   updateFields(g);
   assert.equal(f.used, 1);
   assert.equal(fieldAllows(o, a), false);
-  a.y = o.y + 1.2;
+  at(-d * 1.2);
   updateFields(g);
-  a.y = o.y - 1.2;
+  at(d * 1.2);
   updateFields(g);
   assert.equal(f.used, 1);
   assert.ok(
@@ -106,12 +116,25 @@ test("merged forward opening consumes free passes on first touch, closes permane
     "Reaching the quota seals the opening",
   );
   assert.equal(fieldAllows(o, a), false);
+  // No alternate opening joins the same two sectors.
+  const fl = g.floors[0];
+  const joins = (other: typeof o) => {
+    const ox = other.h >= other.w ? 1 : 0,
+      oy = 1 - ox;
+    return [-1, 1]
+      .map(
+        (s) =>
+          sectorAt(fl, { x: other.x + s * ox, y: other.y + s * oy })?.order ??
+          -1,
+      )
+      .sort()
+      .join();
+  };
   assert.equal(
-    g.floors[0].furniture.filter(
-      (other) => other.field && Math.floor(other.y) === Math.floor(o.y),
-    ).length,
+    fl.furniture.filter((other) => other.field && joins(other) === joins(o))
+      .length,
     1,
-    "No alternate opening in the same wall",
+    "No alternate opening between the same sectors",
   );
   a.access.push(0);
   assert.ok(fieldAllows(o, a));

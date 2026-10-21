@@ -9,7 +9,28 @@ import { pursuitLayoutErrors } from "../src/pursuit-layout";
 import { redesign } from "../src/force-fields";
 import { survivorPath } from "../src/navigation";
 import { createGame, createPlayableGame } from "../src/world";
-import { type Floor, type Point, type Roadmap, W, H } from "../src/model";
+import {
+  type Floor,
+  type Furniture,
+  type Game,
+  type Point,
+  type Roadmap,
+  W,
+  H,
+} from "../src/model";
+import {
+  SUB_ROOM_SIZES,
+  floorSectors,
+  inRect,
+  sectorAt,
+  sizeFits,
+  type Sector,
+} from "../src/floor-plan";
+import {
+  fieldClearance,
+  furnishOffice,
+  pursuitOfficeZones,
+} from "../src/office-layout";
 const roadmap: Roadmap = JSON.parse(
   readFileSync("public/curriculum.json", "utf8"),
 );
@@ -51,112 +72,131 @@ function reachable(
   }
   return false;
 }
+/** Sector order owning a cell inside the shell, or -1 (walls and gates). */
+function owner(f: Floor, x: number, y: number) {
+  const b = f.boundary!;
+  if (y < b.top || y >= b.bottom || x < b.rows[y].left || x >= b.rows[y].right)
+    return -1;
+  return sectorAt(f, { x: x + 0.5, y: y + 0.5 })?.order ?? -1;
+}
+const covers = (o: Furniture, x: number, y: number) =>
+  Math.abs(x + 0.5 - o.x) < o.w / 2 && Math.abs(y + 0.5 - o.y) < o.h / 2;
+/** Sector orders on the two sides of a field's middle cell (minus side first). */
+function sides(f: Floor, o: Furniture) {
+  const x = Math.floor(o.x),
+    y = Math.floor(o.y);
+  return o.h > o.w
+    ? [owner(f, x - 1, y), owner(f, x + 1, y)]
+    : [owner(f, x, y - 1), owner(f, x, y + 1)];
+}
+const chainFields = (f: Floor) =>
+  f.furniture.filter((o) => o.field && o.id !== "main-gate");
+function freshFloors(seeds: number) {
+  const out: { g: Game; f: Floor; seed: number }[] = [];
+  for (let seed = 0; seed < seeds; seed++) {
+    const g = createPlayableGame(seed, roadmap);
+    for (const f of g.floors.slice(0, 4)) out.push({ g, f, seed });
+  }
+  return out;
+}
+const floors64 = freshFloors(64);
+
 test("no main-door-to-stairs bypass around the first occupied study hall", () => {
   for (const seed of [2219683494, 42, 3245246807]) {
     const g = createPlayableGame(seed, roadmap);
     for (const f of g.floors.slice(0, 4)) {
-      const stages = (
-        f.generation as
-          | { stages?: { room: number; front: number; rear: number }[] }
-          | undefined
-      )?.stages;
-      const stage = stages?.find((s) => s.room === 2);
-      const left = f.boundary
-          ? Math.min(
-              ...f.boundary.rows
-                .filter((r) => r.left < r.right)
-                .map((r) => r.left),
-            )
-          : 2,
-        right = stage
-          ? f.boundary
-            ? Math.max(...f.boundary.rows.map((r) => r.right)) - 1
-            : 41
-          : 16,
-        top = stage ? stage.front + 1 : (f.generation?.lowerDivider ?? 16) + 1,
-        bottom = stage ? stage.rear - 1 : 27;
+      const hall = floorSectors(f).find((s) => s.id === "room2")!;
       assert.equal(
-        reachable(
-          f,
-          f.entry,
-          f.stairs,
-          (x, y) => x >= left && x <= right && y >= top && y <= bottom,
-        ),
+        reachable(f, f.entry, f.stairs, (x, y) => owner(f, x, y) === 1),
         false,
         `seed ${seed} floor ${f.index}: swarm has a hallway around the study hall`,
       );
+      assert.equal(hall.order, 1);
+      assert.ok(reachable(f, f.entry, f.stairs, () => false));
     }
   }
 });
 
-test("every study boundary spans the floor with all gaps covered by distinct force fields", () => {
+test("every consecutive sector pair shares one 3-cell opening covered by one field", () => {
   const orders = new Set<string>();
-  for (let seed = 0; seed < 64; seed++)
-    for (const f of createPlayableGame(seed, roadmap).floors.slice(0, 4)) {
-      const stages = f.generation!.stages!;
-      assert.equal(f.generation!.version, 4);
-      assert.equal(stages[0].room, 2, "the free study hall is first");
-      assert.deepEqual(
-        stages
-          .slice(1)
-          .map((s) => s.room)
-          .sort(),
-        [0, 1, 3],
-      );
-      orders.add(stages.map((s) => s.room).join(","));
-      for (const row of [stages[0].rear, ...stages.map((s) => s.front)]) {
-        const fields = f.furniture.filter(
-          (o) => o.field && Math.floor(o.y) === row,
-        );
-        // One opening per wall: a red field has no neighbour to walk around to.
-        assert.equal(
-          fields.length,
-          1,
-          `seed ${seed} floor ${f.index}: ${fields.length} openings in wall ${row}`,
-        );
-        assert.equal(
-          fields[0].id,
-          row === stages[0].rear
-            ? `f${f.index}-room2-door`
-            : `f${f.index}-room${stages.find((s) => s.front === row)!.room}-forward`,
-        );
-        let gaps = 0;
-        const boundary = f.boundary!.rows[row];
-        for (let x = boundary.left; x < boundary.right; x++)
-          if (!f.tiles[row][x]) gaps++;
-        assert.equal(gaps, 3, `seed ${seed} floor ${f.index}: wall ${row}`);
-        for (let x = boundary.left; x < boundary.right; x++)
-          if (!f.tiles[row][x]) {
-            const covering = fields.filter(
-              (o) => x + 0.5 > o.x - o.w / 2 && x + 0.5 < o.x + o.w / 2,
-            );
-            assert.equal(
-              covering.length,
-              1,
-              `seed ${seed} floor ${f.index}: uncovered or stacked field at ${x},${row}`,
-            );
-          }
-        assert.equal(
-          reachable(
-            f,
-            f.entry,
-            f.stairs,
-            (x, y) =>
-              y === row &&
-              fields.some(
-                (o) => x + 0.5 > o.x - o.w / 2 && x + 0.5 < o.x + o.w / 2,
-              ),
-          ),
-          false,
-          `seed ${seed} floor ${f.index}: bypass at ${row}`,
-        );
+  for (const { f, seed } of floors64) {
+    const where = `seed ${seed} floor ${f.index}`;
+    const sectors = floorSectors(f);
+    assert.equal(f.generation!.version, 5, where);
+    assert.deepEqual(
+      sectors.map((s) => s.order),
+      [0, 1, 2, 3, 4, 5],
+    );
+    assert.equal(sectors[0].id, "entry");
+    assert.equal(sectors[1].id, "room2", "the free study hall is first");
+    assert.equal(sectors[5].id, "lobby");
+    assert.deepEqual(
+      sectors
+        .slice(2, 5)
+        .map((s) => s.room)
+        .sort(),
+      [0, 1, 3],
+    );
+    orders.add(sectors.map((s) => s.id).join(","));
+    // Openings: open shell cells in no sector, grouped by the pair they join.
+    const openings = new Map<string, Point[]>();
+    const b = f.boundary!;
+    for (let y = b.top; y < b.bottom; y++)
+      for (let x = b.rows[y].left; x < b.rows[y].right; x++) {
+        if (f.tiles[y][x] || owner(f, x, y) >= 0) continue;
+        const pairs = [
+          [owner(f, x - 1, y), owner(f, x + 1, y)],
+          [owner(f, x, y - 1), owner(f, x, y + 1)],
+        ].filter(([a, c]) => a >= 0 && c >= 0);
+        assert.equal(pairs.length, 1, `${where}: odd opening at ${x},${y}`);
+        const [a, c] = pairs[0].sort();
+        assert.equal(c - a, 1, `${where}: sectors ${a}/${c} share an opening`);
+        const key = `${a}/${c}`;
+        openings.set(key, [...(openings.get(key) ?? []), { x, y }]);
       }
+    const fields = chainFields(f);
+    assert.equal(fields.length, 5, where);
+    for (let k = 0; k < 5; k++) {
+      const cells = openings.get(`${k}/${k + 1}`) ?? [];
+      assert.equal(cells.length, 3, `${where}: opening ${k}/${k + 1}`);
+      const field = fields.filter(
+        (o) => [...sides(f, o)].sort().join() === `${k},${k + 1}`,
+      );
+      assert.equal(field.length, 1, `${where}: fields for ${k}/${k + 1}`);
+      for (const c of cells)
+        assert.equal(
+          fields.filter((o) => covers(o, c.x, c.y)).length,
+          1,
+          `${where}: uncovered or stacked field at ${c.x},${c.y}`,
+        );
+      assert.equal(
+        field[0].id,
+        k === 0
+          ? `f${f.index}-room2-door`
+          : `f${f.index}-${sectors[k].id}-forward`,
+      );
+      assert.equal(
+        reachable(f, f.entry, f.stairs, (x, y) => covers(field[0], x, y)),
+        false,
+        `${where}: bypass around field ${field[0].id}`,
+      );
     }
+  }
   assert.equal(
     orders.size,
     6,
     "all orders of the later rooms occur across seeds",
   );
+});
+
+test("blocking any study sector severs the entry from the stairs", () => {
+  for (const { f, seed } of floors64)
+    for (let order = 1; order <= 4; order++)
+      assert.equal(
+        reachable(f, f.entry, f.stairs, (x, y) => owner(f, x, y) === order),
+        false,
+        `seed ${seed} floor ${f.index}: walk-around past sector ${order}`,
+      );
 });
 
 test("completed zero-key solvers can reach stairs from every room with all entrance quotas exhausted", () => {
@@ -169,23 +209,27 @@ test("completed zero-key solvers can reach stairs from every room with all entra
       a.access = [f.index];
       for (const o of f.furniture)
         if (o.field?.limit !== undefined) o.field.used = o.field.limit;
-      for (const stage of f.generation!.stages!) {
-        const s = f.stations.find(
+      for (const sector of floorSectors(f)) {
+        if (sector.room === undefined) continue;
+        const stations = f.stations.filter(
           (s) =>
             g.encounters[s.encounter].questionRoom ===
-            `f${f.index}-room${stage.room}`,
-        )!;
-        Object.assign(a, { x: s.x, y: s.y });
-        const path = survivorPath(f, a, f.stairs);
-        assert.ok(
-          path.length,
-          `seed ${seed} floor ${f.index} room ${stage.room}`,
+            `f${f.index}-room${sector.room}`,
         );
-        // Vaulting office furniture is free; only a field interaction costs a key.
-        assert.ok(
-          path.every((p) => p.action !== "door"),
-          "Credentialed exits must not cost another key",
-        );
+        assert.ok(stations.length > 0);
+        for (const s of stations) {
+          Object.assign(a, { x: s.x, y: s.y });
+          const path = survivorPath(f, a, f.stairs);
+          assert.ok(
+            path.length,
+            `seed ${seed} floor ${f.index} room ${sector.room} ${s.id}`,
+          );
+          // Vaulting office furniture is free; only a field interaction costs a key.
+          assert.ok(
+            path.every((p) => p.action !== "door"),
+            "Credentialed exits must not cost another key",
+          );
+        }
       }
     }
   }
@@ -202,7 +246,7 @@ test("loading older forward worlds preserves their existing geometry and ongoing
   }
   assert.equal(
     createPlayableGame(42, roadmap).floors[0].generation?.version,
-    4,
+    5,
   );
 });
 
@@ -266,91 +310,412 @@ test("a blank arena remains a valid synthetic world when forward force-field rul
   assert.equal(r.game.floors[0].furniture.length, 0);
 });
 
-test("seeds vary room proportions, silhouettes, gates and terminal positions without breaking layout contracts", () => {
-  const depths = new Set<string>(),
+test("seeds vary plan families, proportions, silhouettes, gates and terminal positions without breaking layout contracts", () => {
+  const families = new Set<string>(),
+    proportions = new Set<string>(),
     silhouettes = new Set<string>(),
     terminals = new Set<string>();
-  for (let seed = 0; seed < 64; seed++) {
-    const g = createPlayableGame(seed, roadmap);
-    for (const f of g.floors.slice(0, 4)) {
-      assert.deepEqual(
-        pursuitLayoutErrors(g, f),
-        [],
-        `seed ${seed}/${f.index}`,
+  let vertical = 0,
+    horizontal = 0;
+  for (const { g, f, seed } of floors64) {
+    assert.deepEqual(pursuitLayoutErrors(g, f), [], `seed ${seed}/${f.index}`);
+    families.add(f.generation!.family!);
+    const sectors = floorSectors(f);
+    proportions.add(
+      JSON.stringify(
+        sectors.map((s) => s.blocks.map((b) => [b.x2 - b.x1, b.y2 - b.y1])),
+      ),
+    );
+    silhouettes.add(JSON.stringify(f.tiles));
+    terminals.add(JSON.stringify(f.stations.map((s) => [s.x, s.y])));
+    for (const o of chainFields(f)) {
+      const upright = o.h === 3 && o.w === 1;
+      assert.ok(
+        upright || (o.w === 3 && o.h === 1),
+        `${o.id} is not a 3-cell field`,
       );
-      const stages = f.generation!.stages!;
-      depths.add(JSON.stringify(stages.map((s) => s.rear - s.front)));
-      // Ignore the transverse gates so gate positions alone cannot satisfy shape variation.
-      silhouettes.add(JSON.stringify(stages.map((s) => f.tiles[s.front + 1])));
-      terminals.add(JSON.stringify(f.stations.map((s) => [s.x, s.y])));
-      assert.equal(stages[0].rear, f.boundary!.bottom - 3);
-      assert.equal(stages.at(-1)!.front, f.boundary!.top + 3);
-      for (const stage of stages) {
-        assert.ok(stage.rear - stage.front >= (stage.room === 2 ? 5 : 4));
-        const stations = f.stations.filter(
-          (s) =>
-            g.encounters[s.encounter].questionRoom ===
-            `f${f.index}-room${stage.room}`,
-        );
-        for (let i = 0; i < stations.length; i++) {
-          const a = stations[i];
-          assert.ok(a.y > stage.front + 1 && a.y < stage.rear);
-          for (const b of stations.slice(i + 1))
-            assert.ok(
-              Math.hypot(a.x - b.x, a.y - b.y) >= 1.4,
-              "usable spacing between solo terminals",
-            );
-        }
+      if (!o.field!.exit) continue;
+      if (upright) vertical++;
+      else horizontal++;
+    }
+    for (const sector of sectors.slice(1, 5)) {
+      const stations = f.stations.filter(
+        (s) =>
+          g.encounters[s.encounter].questionRoom === `f${f.index}-${sector.id}`,
+      );
+      for (let i = 0; i < stations.length; i++) {
+        const a = stations[i];
+        assert.equal(sectorAt(f, a)?.id, sector.id, `${a.id} in its sector`);
+        for (const b of stations.slice(i + 1))
+          assert.ok(
+            Math.hypot(a.x - b.x, a.y - b.y) >= 1.4,
+            "usable spacing between solo terminals",
+          );
       }
     }
   }
-  assert.ok(depths.size >= 10, `only ${depths.size} room proportions`);
-  assert.ok(silhouettes.size >= 32, `only ${silhouettes.size} silhouettes`);
+  assert.deepEqual(
+    [...families].sort(),
+    ["columns", "serpentine", "stack"],
+    "all three plan families occur",
+  );
+  assert.ok(vertical > 0, "no vertical forward gate");
+  assert.ok(horizontal > 0, "no horizontal forward gate");
+  assert.ok(proportions.size >= 100, `only ${proportions.size} proportions`);
+  assert.ok(silhouettes.size >= 200, `only ${silhouettes.size} silhouettes`);
   assert.ok(
     terminals.size >= 200,
     `only ${terminals.size} terminal arrangements`,
   );
 });
 
-test("generation validation rejects bypasses, inaccessible terminals and insufficient free study capacity", () => {
+test("forward fields carry exit rules, their quota and a free pass facing the previous sector", () => {
+  for (const { f, seed } of floors64) {
+    const sectors = floorSectors(f);
+    for (const o of chainFields(f)) {
+      const [minus, plus] = sides(f, o),
+        previous = Math.min(minus, plus);
+      if (previous === 0) {
+        assert.equal(o.field!.publicEntry, true);
+        continue;
+      }
+      const room = sectors[previous].room!;
+      assert.equal(o.id, `f${f.index}-room${room}-forward`);
+      assert.equal(o.field!.exit, true);
+      assert.equal(o.field!.limit, 3 + ((seed + f.index + room) % 3));
+      const axis = o.h >= o.w ? "x" : "y";
+      // The cell one step against the free-pass direction is the previous sector.
+      const behind = { x: o.x, y: o.y };
+      behind[axis] -= o.field!.direction ?? 0;
+      assert.equal(
+        sectorAt(f, behind)?.order,
+        previous,
+        `seed ${seed} floor ${f.index}: ${o.id} free pass faces away`,
+      );
+      assert.equal(o.field!.direction, minus === previous ? 1 : -1);
+      assert.deepEqual(sectors[previous].gate, { x: o.x, y: o.y });
+      assert.deepEqual(f.rooms![room].forwardExit, { x: o.x, y: o.y });
+    }
+  }
+});
+
+test("sub-rooms are walled dead ends with one 2-cell doorway and a catalogued size", () => {
+  const kinds = new Set<string>();
+  let study = 0,
+    furnished = 0;
+  for (const { f, seed } of floors64)
+    for (const sector of floorSectors(f)) {
+      if (sector.room === undefined) {
+        assert.equal(sector.rooms.length, 0, `${sector.id} has no sub-rooms`);
+        continue;
+      }
+      study++;
+      if (sector.rooms.length) furnished++;
+      if (sector.id === "room2") assert.ok(sector.rooms.length <= 2);
+      for (const room of sector.rooms) {
+        const where = `seed ${seed} floor ${f.index} ${room.id}`;
+        const { rect, doorway } = room;
+        kinds.add(room.kind);
+        assert.ok(room.kind in SUB_ROOM_SIZES);
+        assert.ok(
+          sizeFits(room.kind, rect.x2 - rect.x1 + 1, rect.y2 - rect.y1 + 1),
+          `${where}: size`,
+        );
+        assert.equal(
+          (doorway.x2 - doorway.x1 + 1) * (doorway.y2 - doorway.y1 + 1),
+          2,
+        );
+        const openRing: Point[] = [];
+        for (let y = rect.y1 - 1; y <= rect.y2 + 1; y++)
+          for (let x = rect.x1 - 1; x <= rect.x2 + 1; x++) {
+            if (inRect(rect, x, y))
+              assert.equal(f.tiles[y][x], 0, `${where}: interior ${x},${y}`);
+            else if (!f.tiles[y][x]) openRing.push({ x, y });
+          }
+        assert.deepEqual(
+          openRing,
+          [
+            { x: doorway.x1, y: doorway.y1 },
+            { x: doorway.x2, y: doorway.y2 },
+          ],
+          `${where}: walls other than the doorway`,
+        );
+      }
+    }
+  assert.deepEqual([...kinds].sort(), [
+    "break",
+    "meeting",
+    "office",
+    "storage",
+  ]);
+  assert.ok(
+    furnished >= 0.4 * study,
+    `only ${furnished}/${study} study sectors have sub-rooms`,
+  );
+});
+
+/** A cell inside some fully open 2x2 square: a body can pass with room. */
+function wide(f: Floor, x: number, y: number) {
+  const open = (cx: number, cy: number) => f.tiles[cy]?.[cx] === 0;
+  return [
+    [-1, -1],
+    [-1, 0],
+    [0, -1],
+    [0, 0],
+  ].some(
+    ([dx, dy]) =>
+      open(x + dx, y + dy) &&
+      open(x + dx + 1, y + dy) &&
+      open(x + dx, y + dy + 1) &&
+      open(x + dx + 1, y + dy + 1),
+  );
+}
+test("each sector's gates, doorways and terminals are joined by wide circulation", () => {
+  for (const { g, f, seed } of floors64) {
+    const b = f.boundary!,
+      fields = chainFields(f);
+    const gate = (k: number) =>
+      fields.find((o) => [...sides(f, o)].sort().join() === `${k},${k + 1}`)!;
+    const front = (o: Furniture, order: number): Point => {
+      const x = Math.floor(o.x),
+        y = Math.floor(o.y);
+      const options =
+        o.h > o.w
+          ? [
+              { x: x - 1, y },
+              { x: x + 1, y },
+            ]
+          : [
+              { x, y: y - 1 },
+              { x, y: y + 1 },
+            ];
+      return options.find((p) => owner(f, p.x, p.y) === order)!;
+    };
+    for (const sector of floorSectors(f)) {
+      const k = sector.order,
+        where = `seed ${seed} floor ${f.index} ${sector.id}`;
+      const start =
+        k === 0 ? { x: 21, y: b.bottom - 1 } : front(gate(k - 1), k);
+      const seen = new Set<number>(),
+        queue = [start];
+      for (let i = 0; i < queue.length; i++) {
+        const { x, y } = queue[i];
+        if (seen.has(y * W + x) || owner(f, x, y) !== k || !wide(f, x, y))
+          continue;
+        seen.add(y * W + x);
+        queue.push(
+          { x: x + 1, y },
+          { x: x - 1, y },
+          { x, y: y + 1 },
+          { x, y: y - 1 },
+        );
+      }
+      const at = (p: Point) => seen.has(Math.floor(p.y) * W + Math.floor(p.x));
+      assert.ok(at(k === 5 ? { x: 21, y: b.top } : front(gate(k), k)), where);
+      for (const room of sector.rooms)
+        assert.ok(
+          at({ x: room.doorway.x1, y: room.doorway.y1 }) &&
+            at({ x: room.doorway.x2, y: room.doorway.y2 }),
+          `${where}: doorway of ${room.id}`,
+        );
+      for (const s of f.stations)
+        if (
+          g.encounters[s.encounter].questionRoom === `f${f.index}-${sector.id}`
+        )
+          assert.ok(at(s), `${where}: terminal ${s.id}`);
+    }
+  }
+});
+
+test("historical stage floors are read as four band sectors plus two lobbies with gates", () => {
+  const g = createGame(42, roadmap, undefined, { layout: "forward" });
+  redesign(g, roadmap);
+  const f = g.floors[1],
+    stages = f.generation!.stages!;
+  const sectors = floorSectors(f);
+  assert.deepEqual(
+    sectors.map((s) => s.id),
+    ["entry", ...stages.map((s) => `room${s.room}`), "lobby"],
+  );
+  assert.deepEqual(sectors[0].gate, f.doors[2]);
+  for (const [i, stage] of stages.entries()) {
+    const s = sectors[i + 1];
+    assert.equal(s.room, stage.room);
+    assert.deepEqual(s.blocks, [
+      { x1: 2, y1: stage.front + 1, x2: 41, y2: stage.rear - 1 },
+    ]);
+    // Every band, including the last one, carries its gate into the next sector.
+    assert.deepEqual(s.gate, f.rooms![stage.room].forwardExit);
+    assert.ok(s.gate);
+  }
+  assert.equal(sectors[5].gate, undefined);
+  assert.equal(sectors[5].blocks[0].y2, stages.at(-1)!.front - 1);
+  const st = f.stations[0];
+  assert.equal(sectorAt(f, st)?.blocks[0].y1, sectorBoundsY(f, st));
+});
+function sectorBoundsY(f: Floor, p: Point) {
+  const y = Math.floor(p.y);
+  return (
+    f.generation!.stages!.find((s) => y > s.front && y < s.rear)!.front + 1
+  );
+}
+
+test("office furniture replays from the seed alone", () => {
+  for (const seed of [3, 42]) {
+    const g = createPlayableGame(seed, roadmap);
+    for (const f of g.floors.slice(0, 4)) {
+      const copy = structuredClone(f);
+      copy.furniture = copy.furniture.filter((o) => o.field);
+      furnishOffice(
+        copy,
+        pursuitOfficeZones(copy),
+        fieldClearance(copy),
+        copy.entry,
+        g.seed,
+        copy.furniture.filter((o) => /-room\d-door$/.test(o.id)),
+      );
+      assert.deepEqual(copy.furniture, f.furniture, `seed ${seed}`);
+      assert.deepEqual(copy.office, f.office);
+      assert.ok(f.furniture.length > 20, "floors are furnished");
+    }
+  }
+});
+
+/** Wall runs of n cells between sectors a and b, away from existing fields. */
+function wallRuns(f: Floor, a: number, b: number, n: number) {
+  const out: { x: number; y: number; vertical: boolean }[] = [];
+  const fields = chainFields(f);
+  const free = (x: number, y: number) =>
+    f.tiles[y]?.[x] === 1 &&
+    owner(f, x, y) < 0 &&
+    fields.every((o) => Math.hypot(x + 0.5 - o.x, y + 0.5 - o.y) > 4);
+  for (let y = 1; y < H - 1; y++)
+    for (let x = 1; x < W - 1; x++)
+      for (const vertical of [false, true]) {
+        let ok = true;
+        for (let i = 0; i < n && ok; i++) {
+          const cx = vertical ? x : x + i,
+            cy = vertical ? y + i : y;
+          const pair = vertical
+            ? [owner(f, cx - 1, cy), owner(f, cx + 1, cy)]
+            : [owner(f, cx, cy - 1), owner(f, cx, cy + 1)];
+          ok = free(cx, cy) && pair.sort().join() === `${a},${b}`;
+        }
+        if (ok) out.push({ x, y, vertical });
+      }
+  return out;
+}
+test("generation validation rejects bypasses, extra openings, broken rooms, inaccessible terminals and insufficient free study capacity", () => {
   const g = createPlayableGame(42, roadmap),
     f = g.floors[0];
   const saved = structuredClone(f);
-  const row = f.generation!.stages![0].front;
-  f.tiles[row][21] = 0;
-  assert.ok(pursuitLayoutErrors(g, f).some((s) => s.includes("opening")));
-  Object.assign(f, structuredClone(saved));
+  const restore = () => Object.assign(f, structuredClone(saved));
   assert.deepEqual(pursuitLayoutErrors(g, f), []);
-  // A second, covered opening in a front wall is a walk-around and is rejected.
+  // An uncovered hole in a sector wall.
+  const hole = wallRuns(f, 1, 2, 1)[0];
+  assert.ok(hole, "a plain wall between the hall and the next sector");
+  f.tiles[hole.y][hole.x] = 0;
+  assert.ok(pursuitLayoutErrors(g, f).some((s) => s.includes("opening")));
+  restore();
+  assert.deepEqual(pursuitLayoutErrors(g, f), []);
+  // A second, covered opening between the same sectors is a walk-around.
+  const run = wallRuns(f, 1, 2, 3)[0];
+  assert.ok(run, "a 3-cell wall run between the hall and the next sector");
+  for (let i = 0; i < 3; i++)
+    f.tiles[run.vertical ? run.y + i : run.y][
+      run.vertical ? run.x : run.x + i
+    ] = 0;
   const forward = f.furniture.find((o) => o.id === "f0-room2-forward")!;
-  const x = forward.x < 22 ? 35.5 : 8.5;
-  for (let dx = -1; dx <= 1; dx++) f.tiles[row][Math.floor(x) + dx] = 0;
   f.furniture.push({
     ...structuredClone(forward),
     id: "f0-room2-second",
-    x,
+    x: run.vertical ? run.x + 0.5 : run.x + 1.5,
+    y: run.vertical ? run.y + 1.5 : run.y + 0.5,
+    w: run.vertical ? 1 : 3,
+    h: run.vertical ? 3 : 1,
   });
-  assert.deepEqual(
-    pursuitLayoutErrors(g, f).filter((s) => s.startsWith("wall ")),
-    [`wall ${row} has 2 openings`],
+  assert.ok(
+    pursuitLayoutErrors(g, f).includes("sectors 1/2 share 2 fields"),
+    JSON.stringify(pursuitLayoutErrors(g, f)),
   );
-  Object.assign(f, structuredClone(saved));
+  restore();
+  // An opening between non-consecutive sectors or outside the shell.
   const boundary = f.boundary!;
   for (let y = boundary.top; y < boundary.bottom; y++) f.tiles[y][1] = 0;
   for (const y of [boundary.bottom - 2, boundary.top + 1])
     for (let x = 1; x <= boundary.rows[y].left; x++) f.tiles[y][x] = 0;
   assert.ok(pursuitLayoutErrors(g, f).some((s) => s.includes("bypass")));
-  Object.assign(f, structuredClone(saved));
+  restore();
+  // A forward field whose free pass faces the wrong way.
+  const flipped = f.furniture.find((o) => o.id === "f0-room2-forward")!;
+  flipped.field!.direction = -flipped.field!.direction!;
+  assert.ok(
+    pursuitLayoutErrors(g, f).includes(
+      "forward field f0-room2-forward has wrong rules",
+    ),
+  );
+  restore();
   Object.assign(f.stations[1], { x: f.stations[0].x, y: f.stations[0].y });
   assert.ok(
     pursuitLayoutErrors(g, f).some((s) => s.includes("overlapping study")),
   );
-  Object.assign(f, structuredClone(saved));
+  restore();
   f.stations[0].x = 0.5;
   assert.ok(pursuitLayoutErrors(g, f).some((s) => s.includes("egress")));
-  Object.assign(f, structuredClone(saved));
+  restore();
   f.stations = f.stations.filter(
     (s) => g.encounters[s.encounter].questionRoom !== "f0-room2",
   );
   assert.ok(pursuitLayoutErrors(g, f).some((s) => s.includes("zero-key")));
+  restore();
+  assert.deepEqual(pursuitLayoutErrors(g, f), []);
+});
+
+test("validation rejects a sub-room with a second doorway", () => {
+  const found = floors64.find(({ f }) =>
+    floorSectors(f).some((s: Sector) => s.rooms.length && s.room !== 2),
+  )!;
+  const g = structuredClone(found.g),
+    f = g.floors[found.f.index];
+  const room = floorSectors(f).find((s) => s.rooms.length && s.room !== 2)!
+    .rooms[0];
+  assert.deepEqual(pursuitLayoutErrors(g, f), []);
+  // Open the ring cell opposite the doorway's first cell.
+  const { rect, doorway } = room;
+  const cell =
+    doorway.y1 === doorway.y2
+      ? {
+          x: doorway.x1,
+          y: doorway.y1 > rect.y2 ? rect.y1 - 1 : rect.y2 + 1,
+        }
+      : {
+          x: doorway.x1 > rect.x2 ? rect.x1 - 1 : rect.x2 + 1,
+          y: doorway.y1,
+        };
+  f.tiles[cell.y][cell.x] = 0;
+  assert.ok(
+    pursuitLayoutErrors(g, f).some((s) =>
+      s.includes(`sub-room ${room.id} needs exactly one 2-cell doorway`),
+    ),
+    JSON.stringify(pursuitLayoutErrors(g, f)),
+  );
+});
+
+test("the vertical-gate lab fixture's ground floor really has a vertical forward gate", () => {
+  const r = new TestRunner(
+    JSON.parse(
+      readFileSync(
+        "tests/fixtures/gametest/office-plan-vertical-gate.json",
+        "utf8",
+      ),
+    ),
+    roadmap,
+  );
+  const f = r.game.floors[0];
+  assert.equal(f.generation?.version, 5);
+  const upright = f.furniture.filter(
+    (o) => o.field?.exit && o.w === 1 && o.h === 3,
+  );
+  assert.ok(upright.length >= 1, "no vertical forward gate on floor 0");
+  assert.deepEqual(pursuitLayoutErrors(r.game, f), []);
 });

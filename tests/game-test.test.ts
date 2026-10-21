@@ -184,7 +184,7 @@ test("randomized lab worlds preserve their footprint through checkpoints and rej
     actions: [{ tick: 2, type: "checkpoint" as const }],
   };
   const runner = new TestRunner(s, roadmap);
-  assert.equal(runner.game.floors[0].generation?.version, 4);
+  assert.equal(runner.game.floors[0].generation?.version, 5);
   const before = runner.game.floors.map((f) => structuredClone(f.boundary));
   assert.ok(before.every(Boolean));
   assert.equal(runner.run().status, "passed");

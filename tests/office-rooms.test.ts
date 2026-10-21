@@ -21,16 +21,43 @@ const world = (seed: number) => {
   if (!worlds.has(seed)) worlds.set(seed, createPlayableGame(seed, roadmap));
   return worlds.get(seed)!;
 };
-/** `f1-room3-break2-cafeTable0` → zone room3, type break. */
+/** `f1-room3-break2-cafeTable0` → zone room3, type break. Version 5 zones are
+ * sector blocks (room3, room3b, room3c, entry, lobby...) and sub-rooms
+ * (room3r1, room3r2...). */
 const parse = (id: string) =>
-  /^f\d-(room\d|entry|lobby)-([a-z]+)\d+-/.exec(id)?.slice(1) as
-    [string, string] | undefined;
+  /^f\d-(room\d(?:[bc]|r\d+)?|(?:entry|lobby)[bc]?)-([a-z]+)\d+-/
+    .exec(id)
+    ?.slice(1) as [string, string] | undefined;
 
 test("every furnished room holds only objects from its own category", () => {
   const where = new Map<string, Set<string>>();
   for (const seed of SEEDS)
     for (const f of world(seed).floors.slice(0, 4)) {
-      assert.equal(f.office?.length, 6, `seed ${seed} floor ${f.index}`);
+      const sectors = f.generation!.sectors!;
+      assert.deepEqual(
+        f.office?.map((z) => z.zone).sort(),
+        sectors
+          .flatMap((s) => [
+            ...s.blocks.map(
+              (_, i) => `${s.id}${i ? String.fromCharCode(97 + i) : ""}`,
+            ),
+            ...s.rooms.map((r) => r.id),
+          ])
+          .sort(),
+        `seed ${seed} floor ${f.index}`,
+      );
+      // Sub-rooms are furnished by their kind.
+      for (const s of sectors)
+        for (const r of s.rooms)
+          assert.equal(
+            f.office!.find((z) => z.zone === r.id)?.type,
+            {
+              office: "manager",
+              meeting: "meeting",
+              storage: "storage",
+              break: "break",
+            }[r.kind],
+          );
       const types = new Map(f.office!.map((z) => [z.zone, z.type]));
       for (const o of f.furniture.filter((o) => !o.field)) {
         const parsed = parse(o.id);
@@ -65,13 +92,21 @@ test("rooms are furnished densely with physical objects, as functional groups", 
         assert.equal(o.hp, spec.hp);
         assert.equal(o.maxHp, spec.hp);
       }
-      // Every typed study room (not the terminal-dense rear hall) gets
-      // something, and groups share an id: chairs come with their table.
-      for (const z of f.office!.filter((z) => /^room[013]$/.test(z.zone)))
+      // Every typed study department (not the terminal-dense rear hall) and
+      // every sub-room gets something, and groups share an id: chairs come
+      // with their table.
+      for (const s of f.generation!.sectors!) {
+        if (s.room === undefined || s.room === 2) continue;
         assert.ok(
-          pieces.some((o) => o.id.startsWith(`f${f.index}-${z.zone}-`)),
-          `seed ${seed} floor ${f.index} ${z.zone} (${z.type}) is empty`,
+          pieces.some((o) => parse(o.id)?.[0].startsWith(s.id)),
+          `seed ${seed} floor ${f.index} ${s.id} is empty`,
         );
+        for (const r of s.rooms)
+          assert.ok(
+            pieces.some((o) => o.id.startsWith(`f${f.index}-${r.id}-`)),
+            `seed ${seed} floor ${f.index} ${r.id} (${r.kind}) is empty`,
+          );
+      }
       for (const table of pieces.filter((o) => o.kind === "cafeTable")) {
         const group = table.id.replace(/-cafeTable\d+$/, "-");
         assert.ok(

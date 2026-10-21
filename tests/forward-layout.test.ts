@@ -17,10 +17,13 @@ function forwardPath(f: Floor, start: Point, blocked: Set<number>) {
     if (id === goal) return true;
     const x = id % W,
       y = Math.floor(id / W);
+    // Version 5 plans snake (columns, serpentine), so a forward route may turn
+    // south; with the entry field sealed it still cannot fall back a sector.
     for (const [nx, ny] of [
       [x - 1, y],
       [x + 1, y],
       [x, y - 1],
+      [x, y + 1],
     ])
       if (nx >= 0 && nx < W && ny >= 0 && ny < H) {
         const next = key(nx, ny);
@@ -37,7 +40,7 @@ test("randomized fresh floors give every terminal a forward route with its origi
   for (let seed = 0; seed < 64; seed++) {
     const g = createPlayableGame(seed, roadmap);
     for (const f of g.floors.slice(0, 4)) {
-      assert.equal(f.generation?.version, 4);
+      assert.equal(f.generation?.version, 5);
       const mouths = new Set<number>();
       for (const room of f.rooms ?? [])
         if (room.innerMouth)

@@ -90,8 +90,15 @@ test("a seeded building keeps its boundary on every floor while varying its inte
             `seed ${seed}, floor ${f.index}: furniture overlaps geometry: ${o.id}`,
           );
       if (f.index === CONFIG.floors) continue;
-      assert.equal(f.generation?.version, 4);
-      const order = f.generation!.stages!.map((stage) => stage.room);
+      assert.equal(f.generation?.version, 5);
+      const sectors = f.generation!.sectors!;
+      assert.deepEqual(
+        sectors.map((s) => s.order),
+        [0, 1, 2, 3, 4, 5],
+      );
+      assert.equal(sectors[0].id, "entry");
+      assert.equal(sectors[5].id, "lobby");
+      const order = sectors.slice(1, 5).map((s) => s.room!);
       assert.equal(order[0], 2, "the free study hall must remain first");
       assert.deepEqual([...order].sort(), [0, 1, 2, 3]);
       assert.deepEqual(

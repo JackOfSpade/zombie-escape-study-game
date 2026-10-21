@@ -1,5 +1,6 @@
 import type { Floor, Furniture, FurnitureKind } from "./model";
 import { H, W } from "./model";
+import { inRect, sectorAt } from "./floor-plan";
 
 /** Procedural top-down office art. Floors, walls and every furniture kind are
  * painted once into cached canvases and reused each frame, so the per-frame
@@ -112,6 +113,16 @@ export function floorZone(f: Floor, x: number, y: number): Zone {
   } else {
     if (f.index === 4) return "roof";
     if (x < 2 || x >= 42 || y < 2 || y >= 28) return "concrete";
+  }
+  if (f.generation?.sectors) {
+    // Version 5: vinyl reception, stair lobby and corridors; carpeted
+    // departments, with sub-rooms in a contrasting carpet.
+    const sector = sectorAt(f, { x: x + 0.5, y: y + 0.5 });
+    if (!sector || sector.room === undefined) return "lino";
+    if (sector.corridors.some((c) => inRect(c, x, y))) return "lino";
+    const room = sector.rooms.findIndex((r) => inRect(r.rect, x, y));
+    const alt = room >= 0 ? (sector.order + room + 1) % 2 : sector.order % 2;
+    return alt ? "carpetAlt" : "carpet";
   }
   const stages = f.generation?.stages;
   if (stages) {
