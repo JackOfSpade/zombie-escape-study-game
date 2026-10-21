@@ -23,6 +23,10 @@ jobs:
           languages: javascript-typescript
           build-mode: none
       - uses: github/codeql-action/analyze@24c54180a607b1449ed407dd24f251e4e9147c8d # v4
+        with:
+          # act has no GitHub workflow run to attach an upload to. Keep the
+          # analysis and required gate, and upload normally on GitHub.
+          upload: ${{ env.ACT == 'true' && 'never' || 'always' }}
 
   security-required:
     name: Security required
