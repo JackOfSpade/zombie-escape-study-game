@@ -125,6 +125,37 @@ test("demo data is OAuth-owner isolated and bounded; malformed input never mutat
   );
 });
 
+test("demo tool, stance and staged prompt ask one focused prerequisite question, never breadth inflation", () => {
+  const app = createTerminalMcpApp();
+  const tool = terminalAppTools().find(
+    (t) => t.name === "reply_study_terminal_turn",
+  );
+  let s = state(app.call("open_study_terminal_demo", {}, owner));
+  s = state(
+    app.call(
+      "stage_study_terminal_turn",
+      { demoId: s.demoId, revision: s.revision, answer: "The total is 5" },
+      owner,
+    ),
+  );
+  const focused =
+    /one focused question whose correct answer genuinely depends on its prerequisite facets/;
+  for (const [label, text] of [
+    ["tool description", tool.description],
+    ["probe stance", s.probe.stance],
+    ["staged prompt", s.pending.prompt],
+  ]) {
+    assert.match(text, focused, label);
+    assert.match(text, /never (?:widen the question|a wider question)/, label);
+    assert.doesNotMatch(text, /most facets at once/, label);
+  }
+  // Demo gap descent and the synthetic single key remain described.
+  assert.match(s.pending.prompt, /probe its parts next and re-ask it/);
+  assert.match(s.probe.stance, /re-ask the apex if the parts turn out known/);
+  assert.match(tool.description, /at most one synthetic demo key/);
+  assert.equal(s.keys, 0);
+});
+
 test("the demo carries the probe stance and records a conceded gap beside its single key", () => {
   const app = createTerminalMcpApp();
   let s = state(app.call("open_study_terminal_demo", {}, owner));

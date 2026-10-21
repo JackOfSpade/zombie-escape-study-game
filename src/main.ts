@@ -684,7 +684,7 @@ function renderTerminal(force = false) {
   setText(
     "#conversation-context",
     tab === "tutor"
-      ? "@study · Answer and reason here. Terminal AI assumes you already know this and starts from the question that establishes the most at once; one good answer can settle several facets. If you do not know something, say so: the gap is recorded for later study and the key is still granted. Access and a key are awarded when it marks the conversation complete."
+      ? "@study · Answer and reason here. Terminal AI assumes you already know this and asks one focused question at a time; a good answer can also settle the prerequisites it genuinely depends on. If you do not know something, say so: the gap is recorded for later study and the key is still granted. Access and a key are awarded when it marks the conversation complete."
       : "Discuss with your group. They can read the current answer draft. Chatting does not submit it.",
   );
   setText(

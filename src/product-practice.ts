@@ -1,4 +1,7 @@
 import type { Contract, Problem } from "./model";
+import { aiPracticeQuestions } from "./product-practice-ai";
+import { deliveryQuestions } from "./product-practice-delivery";
+import { foundationQuestions } from "./product-practice-foundations";
 
 type ProductQuestion = Pick<Problem, "title" | "prompt" | "rubric">;
 
@@ -62,150 +65,174 @@ Choose a reconciliation strategy for these overlapping requests. Walk through wh
   },
 };
 
-/** A fixed feature in the shared product world, supplied as facts. */
-type FeatureCase = {
-  title: string;
-  facts: (dailyUsers: number) => string;
+const truthRule =
+  "Use a real project you worked on. Do not invent facts, work or metrics; qualify uncertain numbers and say when an outcome is unknown. Separate your own work from the team's work.";
+
+/** Personal-history asks: bounded to one slice of one real project. */
+const narrativeQuestions: Record<string, ProductQuestion> = {
+  "PE:X09.1": {
+    title: "Real project / one decision",
+    prompt: `${truthRule}
+
+In about five sentences, describe one project: the user problem it addressed, your personal role, one decision you made and the trade-off it involved, the actual outcome (or that it is unknown), and one lesson you took from it.`,
+    rubric: [
+      "Name the user problem, personal role, one decision with its trade-off, the outcome, and a lesson",
+      "Use real project facts and personal history, distinguish your contribution from the team's, and qualify uncertain numbers",
+    ],
+  },
+  "PE:X09.2": {
+    title: "Real project / follow-up probes",
+    prompt: `${truthRule}
+
+Pick one real project and answer these three follow-ups briefly: what did you personally implement, which alternative did you consider and why did you choose differently, and what actually failed or was limited? If there was no known failure, say so rather than inventing one.`,
+    rubric: [
+      "Answer the implementation, alternative and failure follow-ups consistently with the same project",
+      "Use real project facts and personal history without inflating scope or ownership, and qualify uncertain numbers",
+    ],
+  },
+  "PE:X09.3": {
+    title: "Real project / product-audience retelling",
+    prompt: `${truthRule}
+
+Retell one real project as a 60-second interview answer for a team building a customer-facing product. Lead with the user problem, then your decisions and the outcome for users. Keep the facts and ownership exactly as they happened; only the emphasis changes.`,
+    rubric: [
+      "Adapt the story to a product audience, emphasizing users, decisions and outcome within about 60 seconds",
+      "Use real project facts and personal history, keep ownership accurate, and qualify uncertain numbers",
+    ],
+  },
 };
 
-const shareLinkRevocation: FeatureCase = {
-  title: "Share link revocation",
-  facts: (dailyUsers) =>
-    `A web-based creative tool is used by about ${dailyUsers} people a day. Owners can already create read-only share links for a project. The team has been asked to let an owner revoke a share link from the project's Share dialog. After revocation, opening the link shows a "This link is no longer active" page, and the owner's dialog marks that link as revoked.
+/**
+ * Depth-1 code-reading overrides: the bank's D2+ asks for X08.2/X08.3 are full
+ * implementations. At D1 the learner reads and traces a supplied snippet and
+ * describes a fix in words; nothing must be written or built.
+ */
+const depthOneQuestions: Record<string, ProductQuestion> = {
+  "PE:X08.2": {
+    title: "Debounce snippet / timer, this and cancel trace",
+    prompt: `This debounce runs in an ES module (strict mode):
 
-The existing system: a React single-page app calls a JSON REST API. Each link is a row in a share_links table with the columns id, project_id, token, created_by and created_at; there is no revocation field yet. On every shared-project request, the server checks the link's token against that table. Only the project's owner may create or manage its links. The codebase has unit tests, API integration tests and one end-to-end smoke test. Deploys go through a pipeline, and a feature-flag service can enable a feature for targeted accounts. Product events are sent to an analytics tool. There is no email, push or real-time channel, and no separate permissions service.`,
+\`\`\`js
+function debounce(fn, waitMs) {
+  let timer;
+  const debounced = function (...args) {
+    clearTimeout(timer);
+    timer = setTimeout(() => fn(...args), waitMs);
+  };
+  debounced.cancel = () => {};
+  return debounced;
+}
+const field = { value: "", log(n) { console.log(this.value, n); } };
+const onInput = debounce(field.log, 300);
+field.value = "c";  onInput.call(field, 1); // t = 0 ms
+field.value = "ca"; onInput.call(field, 2); // t = 100 ms
+onInput.cancel();                           // t = 200 ms
+\`\`\`
+
+Trace what happens: how many times log runs, at about what time, with which argument, and what \`this\` is inside it. Explain why cancel() does not stop the call. Then describe in words (no implementation needed) the two changes that would keep the caller's \`this\` and make cancel drop the pending call.`,
+    rubric: [
+      "Trace that only the second call survives: log is scheduled once for about t = 400 ms with argument 2",
+      "Explain that fn(...args) loses this (undefined in strict mode, so this.value throws a TypeError) and that cancel is a no-op that never clears the timer",
+      "Describe capturing the call's this and arguments for fn.apply, and clearing the stored timer in cancel",
+    ],
+  },
+  "PE:X08.3": {
+    title: "Tabs snippet / stale response and keyboard diagnosis",
+    prompt: `Read this React tabs component. loadPanel(id) returns a promise for the panel text after 100-1,000 ms.
+
+\`\`\`jsx
+function Tabs({ tabs, loadPanel }) {
+  const [selected, setSelected] = useState(tabs[0].id);
+  const [panel, setPanel] = useState("");
+  useEffect(() => {
+    loadPanel(selected).then(setPanel);
+  }, [selected]);
+  return (
+    <>
+      <div>
+        {tabs.map((t) => (
+          <div key={t.id} onClick={() => setSelected(t.id)}>{t.label}</div>
+        ))}
+      </div>
+      <div>{panel}</div>
+    </>
+  );
+}
+\`\`\`
+
+Starting state: tabs are A, B and C in that order, so A (tabs[0]) is the initially selected tab. A's initial request completed before t = 0 ms and the panel shows A's content; no other requests are outstanding. The user clicks tab B at t = 0 ms (its load takes 900 ms), then tab C at t = 100 ms (its load takes 200 ms). Trace what the panel shows at t = 300 ms and at t = 900 ms, and which tab is selected then. Explain why. Then describe in words one way to stop an older response from overwriting the current panel, and name one reason a keyboard or screen-reader user cannot operate these tabs. No implementation is needed.`,
+    rubric: [
+      "Trace that C's content appears at about 300 ms and B's late response replaces it at about 900 ms while C stays selected",
+      "Explain the missing stale-response guard and describe one fix, such as ignoring results whose id no longer matches the selection or an effect cleanup flag",
+      "Name a real keyboard or semantics problem: clickable divs are not focusable and lack tab/tablist roles and aria-selected",
+    ],
+  },
 };
 
-const projectList: FeatureCase = {
-  title: "Project list",
-  facts: (dailyUsers) =>
-    `A web-based creative tool is used by about ${dailyUsers} people a day. Its project list page shows the signed-in user's projects in the current workspace. The page has a search box, a status filter (active or archived), a sort control (name or newest), and cursor pagination that loads 20 projects per page. Each row offers inline rename and archive actions. Each row shows a thumbnail loaded from a CDN; thumbnails are typically 400×300 JPEG images of about 80 KB.
+/** At D1 the X08.1 runtime trace may describe its typing instead of writing it. */
+function depthOneTrace(question: ProductQuestion): ProductQuestion {
+  return {
+    title: question.title,
+    prompt: question.prompt.replace(
+      "Finally, write a TypeScript signature for a helper once(fn) that preserves fn's parameter and return types.",
+      "Finally, describe in words what a TypeScript type for a helper once(fn) must preserve about fn; writing the signature is optional.",
+    ),
+    rubric: question.rubric.map((item) =>
+      item.replace(
+        "give a correctly typed once signature",
+        "describe what a type for once must preserve",
+      ),
+    ),
+  };
+}
 
-A typical user has about 200 projects. The GET /projects API responds in about 150 ms at the median and 900 ms at the 95th percentile. The page is a React single-page app, and about 30% of sessions come from mid-range laptops on home Wi-Fi.`,
-};
+/** Every supported objective maps to exactly one question; no family fallback. */
+const banks: Record<string, ProductQuestion>[] = [
+  stateQuestions,
+  narrativeQuestions,
+  foundationQuestions,
+  deliveryQuestions,
+  aiPracticeQuestions,
+];
 
-const inviteForm: FeatureCase = {
-  title: "Invite collaborator form",
-  facts: (dailyUsers) =>
-    `A web-based creative tool is used by about ${dailyUsers} people a day. Project owners invite collaborators through a modal form with an email field, a role choice (viewer or editor) and an optional message. The server validates the email format, rejects people who are already members, and enforces a limit of 10 invites per hour per owner. A submit can take up to 2 seconds to respond.
+function own(
+  bank: Record<string, ProductQuestion>,
+  objectiveId: string,
+): ProductQuestion | undefined {
+  return Object.hasOwn(bank, objectiveId) ? bank[objectiveId] : undefined;
+}
 
-Below the form, a pending-invites list shows each invited address, its role and the date it was sent. The dialog must be fully usable by keyboard and with a screen reader. The product is offered in English, German and Japanese; dates in the pending-invites list and all strings are translated for the user's locale.`,
-};
+/** True when a concrete development question exists for this exact objective. */
+export function hasProductPractice(objectiveId: string): boolean {
+  return banks.some((bank) => own(bank, objectiveId) !== undefined);
+}
 
-const proPlan: FeatureCase = {
-  title: "Pro plan and integrations",
-  facts: (dailyUsers) =>
-    `A web-based creative tool is used by about ${dailyUsers} people a day. A paid Pro plan is billed through an external payment provider. The provider sends webhook events about payments and subscription changes; the same event can arrive more than once, and events can arrive out of order. Free projects allow at most 3 collaborators; Pro unlocks more than 3 collaborators per project.
-
-Pro also unlocks a cloud-storage integration for importing and exporting project files. The user connects their cloud-storage account through OAuth. The user can disconnect it from settings, and the storage provider can also revoke the app's access at any time.`,
-};
-
-/** Each fallback topic family uses exactly one supplied case. */
-const casesByFamily: Record<string, FeatureCase> = {
-  "PE:T02": shareLinkRevocation,
-  "PE:T03": shareLinkRevocation,
-  "PE:T04": projectList,
-  "PE:T05": projectList,
-  "PE:T06": inviteForm,
-  "PE:T08": inviteForm,
-  "PE:T09": projectList,
-  "PE:T10": projectList,
-  "PE:T11": shareLinkRevocation,
-  "PE:T12": proPlan,
-  "PE:T13": shareLinkRevocation,
-  "PE:T14": shareLinkRevocation,
-  "PE:T15": shareLinkRevocation,
-  "PE:T16": shareLinkRevocation,
-  "PE:T17": shareLinkRevocation,
-  "PE:T18": inviteForm,
-  "PE:T19": shareLinkRevocation,
-  "PE:T20": shareLinkRevocation,
-};
-
-/** Supplied artifacts for scopes that work from given evidence. */
-const addendaByFamily: Record<string, string> = {
-  "PE:T15": `A pull request for share link revocation makes these changes:
-- Adds a nullable revoked_at column to share_links.
-- Adds a POST /links/:id/revoke endpoint that sets revoked_at for the given link id; it requires a signed-in user but does not look up who owns the link's project.
-- Leaves the token check on shared-project requests unchanged.
-- Adds a red Revoke button to each link row in the Share dialog; the button shows only a trash icon and has no text or label.
-- Adds one snapshot test of the Share dialog.
-- Renames the class ShareModal to ShareDialog across 23 files.
-- Names a new local variable "x2" in the endpoint handler.`,
-  "PE:T17": `Evidence: the revocation feature flag was raised to 50% of owners two hours ago. Since then the 5xx rate of the revoke endpoint has risen from 0 to about 4%. The failures are concentrated in projects created more than two years ago. A typical error log line reads: "TypeError: cannot read property 'id' of null (column workspace_id) in revokeLink". The endpoint receives about 300 revocation attempts per hour. Dashboards for page loads, sign-ins and shared-project requests are unchanged.`,
-  "PE:T14": `Defect report, a week after revocation shipped: after an owner revokes a link, some collaborators who had it open can still load the project for a short time, while others are blocked immediately. The behavior has been reproduced in production intermittently and never locally. API logs show requests with the revoked token returning 410 within a second of the revocation.`,
-  "PE:T20": `An AI assistant proposed this design for the feature:
-- Add a revoked boolean to share_links.
-- Create a new link-revocation microservice with its own message queue.
-- In the React app, filter revoked links out of the Share dialog so they are hidden.
-- It states that the existing token check "already handles revoked links", without citing code or a test.`,
-};
-
-const addendaByObjective: Record<string, string> = {
-  "PE:T02.3": `A draft event list for the feature:
-- link_revoke_clicked, sent from the browser on every click of Revoke, including repeated clicks while the request is pending.
-- link_revoked, with the property owner_display_name used as the user key.
-- revoked_link_viewer, with the property collaborator_email.
-- share_dialog_opened.`,
-  "PE:T02.5": `Experiment summary: arm A (current Share dialog) had 4,812 owners; arm B (dialog with revocation) had 4,790 owners. The share-creation rate was 18.2% in A and 18.9% in B, a difference of +0.7 percentage points with a 95% confidence interval of −0.4 to +1.8. Support tickets about broken links per 1,000 owners went from 3.1 in A to 2.4 in B. Median Share dialog load time went from 210 ms in A to 260 ms in B.`,
-  "PE:T08.5": `The invite form component under review:
-- The email field shows the placeholder "Email" and has no visible or programmatic label.
-- The role choice is two clickable div elements styled as buttons; they cannot receive keyboard focus.
-- When the dialog opens, focus stays on the page behind it.
-- Server errors appear as red text below the form with no announcement to assistive technology.
-- The dialog has a fixed width of 560 px.
-- Pending-invite dates are formatted with the hard-coded pattern "MM/DD/YYYY", and the sentence "Invited by " + name + " on " + date is built by string concatenation.
-- The submit button uses the product's standard primary color and rounded corners.
-- The optional message field accepts up to 500 characters and shows a character counter.`,
-  "PE:T09.1": `Slow-experience report: users say the project list takes several seconds to become usable after a filter change. A trace from a mid-range laptop shows the GET /projects request completing in 160 ms and thumbnails finishing within 400 ms. After the response arrives, the main thread is busy for 2.3 seconds in one task, mostly in re-rendering the 180 rows the user has already scrolled through and recomputing search matches on each of them. Clicks and typing during that time are not handled until it ends.`,
-  "PE:T13.4": `A flaky end-to-end test: it opens a seeded project, clicks the third button in the Share dialog by position, waits a fixed 500 ms, and then asserts that the text "This link is no longer active" appears for the link. The seeded project is shared with other tests that run in parallel. The test fails in about 1 of 15 CI runs and passes when rerun.`,
-};
-
+/**
+ * Returns a fresh copy of the objective's own question. Rubric arrays are
+ * cloned so a caller's edits cannot change the shared bank. Unknown, missing
+ * or prototype ids throw instead of inventing a feature.
+ */
 export function productPractice(
   contract: Contract,
-  dailyUsers: number,
+  _dailyUsers?: number,
 ): ProductQuestion {
-  const objectiveId = contract.objectiveIds[0] ?? "";
-  const stateQuestion = stateQuestions[objectiveId];
-  if (stateQuestion)
-    return { ...stateQuestion, rubric: [...stateQuestion.rubric] };
-  const scope = contract.scopes.join("\n");
-  if (objectiveId.startsWith("PE:X09.")) {
-    const followup =
-      objectiveId === "PE:X09.2"
-        ? "\n\nAnswer these follow-ups using that project: what did you personally implement, which alternative did you consider and why did you choose differently, and what actually failed or was limited? If there was no known failure, say so."
-        : objectiveId === "PE:X09.3"
-          ? "\n\nUse a 60-second interview explanation for a team building a customer-facing product. Emphasize the user problem, your decisions, and the outcome while keeping the facts and ownership accurate."
-          : "";
-    return {
-      title: "Real project / narrative",
-      prompt: `Use a real project you worked on. Briefly state the user problem, your personal role, and one actual decision. Separate your own work from the team's work. Do not invent facts or metrics; qualify uncertain numbers and say when an outcome is unknown.${followup}\n\nWhat to cover: ${scope}`,
-      rubric: [
-        `Address the requested narrative task: ${scope}`,
-        "Use real project facts and personal history, distinguish your contribution from the team's, and qualify uncertain numbers",
-      ],
-    };
-  }
-  if (objectiveId.startsWith("PE:T01.")) {
-    return {
-      title: "Product decision / critique",
-      prompt: `A creative tool lets a signed-in owner share a project with a read-only collaborator through a link the owner can revoke at any time. About ${dailyUsers} people use it each day. Support reports that collaborators are confused when a link suddenly stops working, and a product manager proposes: "Email the collaborator every time a link is revoked."\n\nYour task: ${scope}\n\nName one assumption you are making and one failure or edge case. No code is needed, and several answers can be right.`,
-      rubric: [
-        `Address the product-framing task: ${scope}`,
-        "Name one assumption and one relevant failure or edge case",
-      ],
-    };
-  }
-  const family = objectiveId.slice(0, 6);
-  const featureCase = casesByFamily[family] ?? shareLinkRevocation;
-  const addendum = addendaByObjective[objectiveId] ?? addendaByFamily[family];
-  const evidence = addendum ? `\n\n${addendum}` : "";
+  const objectiveId = contract.objectiveIds[0];
+  if (typeof objectiveId !== "string" || !objectiveId)
+    throw new Error(
+      "Unsupported development question: the contract has no objective id",
+    );
+  let question =
+    contract.depth <= 1 ? own(depthOneQuestions, objectiveId) : undefined;
+  for (const bank of banks) question ??= own(bank, objectiveId);
+  if (!question)
+    throw new Error(
+      `Unsupported development question: no product practice question exists for ${objectiveId}`,
+    );
+  if (contract.depth <= 1 && objectiveId === "PE:X08.1")
+    question = depthOneTrace(question);
   return {
-    title: `${featureCase.title} / applied design`,
-    prompt: `${featureCase.facts(dailyUsers)}${evidence}\n\nYour task: ${scope}\n\nIf you need an assumption beyond these facts, state it explicitly. Several answers can be valid. No code is needed.`,
-    rubric: [
-      `Apply the task to the supplied ${featureCase.title.toLowerCase()} facts: ${scope}`,
-      "Ground each choice in the stated facts and name any assumption added beyond them",
-    ],
+    title: question.title,
+    prompt: question.prompt,
+    rubric: [...question.rubric],
   };
 }

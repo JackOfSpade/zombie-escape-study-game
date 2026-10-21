@@ -2,12 +2,14 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 import { eligible } from "../src/curriculum";
-import { rand, type Contract, type Roadmap } from "../src/model";
+import { rand, type Contract, type Game, type Roadmap } from "../src/model";
 import { devProblem } from "../src/practice-problem";
+import { aiPracticeQuestions } from "../src/product-practice-ai";
+import { deliveryQuestions } from "../src/product-practice-delivery";
 import { createPlayableGame } from "../src/world";
 const r: Roadmap = JSON.parse(readFileSync("public/curriculum.json", "utf8"));
 
-function productContract(objectiveId: string): Contract {
+function productContract(objectiveId: string, depth = 2): Contract {
   const g = createPlayableGame(9, r);
   const objective = r.tracks.PE.objectives.find((o) => o.id === objectiveId)!;
   return {
@@ -15,6 +17,7 @@ function productContract(objectiveId: string): Contract {
     track: "PE",
     objectiveIds: [objectiveId],
     scopes: [objective.scope],
+    depth,
   };
 }
 
@@ -45,109 +48,6 @@ test("state classification supplies the actual items and their behavior without 
     /^[ABC]\. .*\b(?:ephemeral|durable|cached)\b/gm,
   );
   assert.deepEqual(p.contract, contract);
-});
-
-const caseFacts: Record<string, { fact: RegExp; title: string }> = {
-  share: { fact: /share_links table/, title: "Share link revocation" },
-  list: { fact: /cursor pagination/, title: "Project list" },
-  invite: { fact: /10 invites per hour/, title: "Invite collaborator form" },
-  pro: { fact: /webhook events/, title: "Pro plan and integrations" },
-};
-const familyCase: Record<string, keyof typeof caseFacts> = {
-  T04: "list",
-  T05: "list",
-  T09: "list",
-  T10: "list",
-  T06: "invite",
-  T08: "invite",
-  T18: "invite",
-  T12: "pro",
-};
-
-test("other product practice supplies a fixed feature case instead of a learner-chosen example", () => {
-  const g = createPlayableGame(9, r);
-  const fallback = r.tracks.PE.objectives.filter(
-    (o) => !/^PE:(?:T01|T07|X09)\./.test(o.id),
-  );
-  assert.ok(fallback.length > 80);
-  for (const objective of fallback) {
-    const p = devProblem({ ...g, rng: 3 }, r, productContract(objective.id));
-    const family = objective.id.slice(3, 6);
-    const expected = caseFacts[familyCase[family] ?? "share"];
-    assert.ok(p.prompt.includes(objective.scope), objective.id);
-    assert.ok(
-      p.prompt.includes(`\n\nYour task: ${objective.scope}\n\n`),
-      objective.id,
-    );
-    assert.doesNotMatch(
-      p.prompt,
-      /choose a small|choose .*example|open-ended/i,
-      objective.id,
-    );
-    assert.match(p.prompt, expected.fact, objective.id);
-    for (const other of Object.values(caseFacts))
-      if (other !== expected)
-        assert.doesNotMatch(p.prompt, other.fact, objective.id);
-    assert.equal(p.title, `${expected.title} / applied design`, objective.id);
-    assert.ok(p.title.endsWith("/ applied design"), objective.id);
-    assert.equal(p.rubric.length, 2, objective.id);
-    for (const item of p.rubric)
-      assert.doesNotMatch(
-        item,
-        /State a concrete product example/,
-        objective.id,
-      );
-    assert.ok(p.rubric[0].includes(objective.scope), objective.id);
-  }
-});
-
-test("evidence-based scopes include their supplied artifact and others do not", () => {
-  const g = createPlayableGame(9, r);
-  const addenda: { ids: RegExp; fact: RegExp }[] = [
-    { ids: /^PE:T15\./, fact: /POST \/links\/:id\/revoke/ },
-    { ids: /^PE:T17\./, fact: /from 0 to about 4%/ },
-    { ids: /^PE:T14\./, fact: /returning 410 within a second/ },
-    { ids: /^PE:T20\./, fact: /microservice with its own message queue/ },
-    { ids: /^PE:T02\.3$/, fact: /collaborator_email/ },
-    { ids: /^PE:T02\.5$/, fact: /95% confidence interval/ },
-    { ids: /^PE:T08\.5$/, fact: /hard-coded pattern "MM\/DD\/YYYY"/ },
-    { ids: /^PE:T09\.1$/, fact: /main thread is busy for 2\.3 seconds/ },
-    { ids: /^PE:T13\.4$/, fact: /waits a fixed 500 ms/ },
-  ];
-  const ids = r.tracks.PE.objectives.map((o) => o.id);
-  for (const { ids: pattern, fact } of addenda) {
-    const matching = ids.filter((id) => pattern.test(id));
-    assert.ok(matching.length > 0, String(pattern));
-    for (const id of matching) {
-      const p = devProblem({ ...g, rng: 3 }, r, productContract(id));
-      assert.match(p.prompt, fact, id);
-      for (const other of addenda)
-        if (other.fact !== fact) assert.doesNotMatch(p.prompt, other.fact, id);
-    }
-  }
-  for (const id of ["PE:T19.1", "PE:T06.1", "PE:T02.1", "PE:T12.1"]) {
-    const p = devProblem({ ...g, rng: 3 }, r, productContract(id));
-    for (const { fact } of addenda) assert.doesNotMatch(p.prompt, fact, id);
-  }
-  // Evidence is described, not pre-labelled with its answer.
-  for (const id of ids.filter((x) => /^PE:T1[457]\./.test(x))) {
-    const p = devProblem({ ...g, rng: 3 }, r, productContract(id));
-    assert.doesNotMatch(
-      p.prompt,
-      /root cause is|security (?:bug|issue|hole)|race condition|caching bug/i,
-      id,
-    );
-  }
-  const scope = devProblem({ ...g, rng: 3 }, r, productContract("PE:T19.1"));
-  assert.match(
-    scope.prompt,
-    /no email, push or real-time channel, and no separate permissions service/,
-  );
-  assert.match(
-    scope.prompt,
-    /id, project_id, token, created_by and created_at/,
-  );
-  assert.match(scope.prompt, /no revocation field/);
 });
 
 test("state-management practice gives facts and a bounded task for each other objective", () => {
@@ -201,27 +101,263 @@ test("state-management practice gives facts and a bounded task for each other ob
   }
 });
 
-test("only product-framing practice reuses the proposed revocation email story", () => {
+test("every one of the 112 PE objectives gets its own concrete question at depths 1 and 2", () => {
   const g = createPlayableGame(9, r);
-  const base = eligible(r, g.study);
-  for (const objective of r.tracks.PE.objectives) {
-    const p = devProblem({ ...g, rng: 3 }, r, {
-      ...base,
-      track: "PE",
-      objectiveIds: [objective.id],
-      scopes: [objective.scope],
-    });
-    if (objective.id.startsWith("PE:T01.")) {
-      assert.match(p.prompt, /proposes: "Email/, objective.id);
-    } else {
-      assert.doesNotMatch(p.prompt, /proposes: "Email/, objective.id);
+  const objectives = r.tracks.PE.objectives;
+  assert.equal(objectives.length, 112);
+  for (const depth of [1, 2]) {
+    const prompts = new Set<string>();
+    const titles = new Set<string>();
+    for (const objective of objectives) {
+      const contract = productContract(objective.id, depth);
+      const p = devProblem({ ...g, rng: 3 }, r, contract);
+      const label = `${objective.id} D${depth}`;
+      assert.equal(p.provenance, "development", label);
+      assert.equal(p.starter, "", label);
+      assert.deepEqual(p.contract, contract, label);
+      assert.equal(p.validation, undefined, label);
+      assert.ok(p.title.length > 5, label);
+      assert.ok(p.prompt.length > 200, label);
+      assert.ok(p.rubric.length >= 2, label);
+      for (const item of p.rubric) assert.ok(item.trim().length > 10, label);
+      // No raw scope paste or obsolete family-wide boilerplate.
+      assert.ok(!p.prompt.includes(objective.scope), label);
+      assert.ok(!p.rubric.join(" ").includes(objective.scope), label);
+      assert.doesNotMatch(
+        p.prompt,
+        /Your task:|What to cover:|If you need an assumption beyond these facts|A web-based creative tool is used by about/,
+        label,
+      );
+      assert.doesNotMatch(p.title, /applied design/, label);
+      prompts.add(p.prompt);
+      titles.add(p.title);
     }
-    if (!/^PE:(?:T01|T07|X09)\./.test(objective.id)) {
-      assert.ok(p.title.endsWith("/ applied design"), objective.id);
-      assert.doesNotMatch(p.prompt, /open-ended|choose a small/i, objective.id);
-      assert.ok(p.prompt.includes(objective.scope), objective.id);
-    }
+    assert.equal(prompts.size, objectives.length, `distinct prompts D${depth}`);
+    assert.equal(titles.size, objectives.length, `distinct titles D${depth}`);
   }
+});
+
+test("AI-assisted engineering objectives each ask a distinct task with their bank rubric", () => {
+  const g = createPlayableGame(9, r);
+  const ids = ["PE:T20.1", "PE:T20.2", "PE:T20.3", "PE:T20.4", "PE:T20.5"];
+  const prompts = ids.map((id) => {
+    const p = devProblem({ ...g, rng: 3 }, r, productContract(id));
+    assert.equal(p.prompt, aiPracticeQuestions[id].prompt, id);
+    assert.deepEqual(p.rubric, aiPracticeQuestions[id].rubric, id);
+    return p.prompt;
+  });
+  assert.equal(new Set(prompts).size, ids.length);
+  // The old family-wide "microservice" addendum is no longer shared: only
+  // T20.5, whose task is explaining that rejected alternative, mentions it.
+  assert.deepEqual(
+    prompts.map((p) => /microservice with its own message queue/.test(p)),
+    [false, false, false, false, true],
+  );
+});
+
+test("T20.2's shown generated code really has the defects its rubric expects", async () => {
+  const p = devProblem(
+    createPlayableGame(9, r),
+    r,
+    productContract("PE:T20.2"),
+  );
+  const code = /```ts\n([\s\S]*?)```/.exec(p.prompt)?.[1];
+  assert.ok(code, "T20.2 shows its generated code");
+  // Strip the TypeScript-only syntax the snippet uses, then run it on stubs.
+  const js = code.replace(/^export /gm, "").replace(/: string/g, "");
+  const links = new Map([
+    ["l1", { id: "l1", projectId: "p1", token: "tok", revokedAt: null }],
+  ]) as Map<
+    string,
+    { id: string; projectId: string; token: string; revokedAt: Date | null }
+  >;
+  const project = { ownerId: "owner", memberIds: ["owner", "collab"] };
+  const helpers = {
+    getLink: async (id: string) => links.get(id) ?? null,
+    findLinkByToken: async (token: string) =>
+      [...links.values()].find((l) => l.token === token) ?? null,
+    getProject: async () => project,
+    isMember: (userId: string, p: typeof project) =>
+      p.memberIds.includes(userId),
+    setRevokedAt: async (id: string, at: Date) => {
+      links.get(id)!.revokedAt = at;
+    },
+  };
+  const make = new Function(
+    ...Object.keys(helpers),
+    `${js}\nreturn { revokeLink, authorizeProjectRead };`,
+  );
+  const { revokeLink, authorizeProjectRead } = make(
+    ...Object.values(helpers),
+  ) as {
+    revokeLink: (u: string, l: string) => Promise<{ status: number }>;
+    authorizeProjectRead: (t: string) => Promise<boolean>;
+  };
+  assert.deepEqual(await revokeLink("stranger", "l1"), { status: 403 });
+  assert.equal(links.get("l1")!.revokedAt, null);
+  // Defect 1: a non-owner collaborator can revoke.
+  assert.deepEqual(await revokeLink("collab", "l1"), { status: 200 });
+  assert.ok(links.get("l1")!.revokedAt instanceof Date);
+  // Defect 2: a revoked token still authorizes reads.
+  assert.equal(await authorizeProjectRead("tok"), true);
+  assert.match(p.rubric.join(" "), /isMember lets any collaborator revoke/);
+  assert.match(p.rubric.join(" "), /authorizeProjectRead ignores revokedAt/);
+});
+
+test("depth-1 X08 questions are code reading with no required implementation", () => {
+  const g = createPlayableGame(9, r);
+  for (const id of ["PE:X08.2", "PE:X08.3"]) {
+    const d1 = devProblem({ ...g, rng: 3 }, r, productContract(id, 1));
+    assert.equal(d1.starter, "", id);
+    assert.match(d1.prompt, /```(?:js|jsx)\n[\s\S]+```/, id);
+    assert.match(d1.prompt, /[Nn]o implementation (?:is )?needed/, id);
+    assert.match(d1.prompt, /Trace what/, id);
+    assert.doesNotMatch(
+      d1.prompt,
+      /Implement debounce|Write the implementation|In 45 minutes|build a Tabs component twice|write three or four small tests/i,
+      id,
+    );
+    assert.doesNotMatch(d1.rubric.join(" "), /^Implement|Write focused/m, id);
+    // D2+ keeps the bank's genuine implementation intent.
+    const d2 = devProblem({ ...g, rng: 3 }, r, productContract(id, 2));
+    assert.equal(d2.prompt, deliveryQuestions[id].prompt, id);
+    assert.notEqual(d1.prompt, d2.prompt, id);
+  }
+  const debounce = devProblem(
+    { ...g, rng: 3 },
+    r,
+    productContract("PE:X08.2", 1),
+  );
+  assert.match(debounce.prompt, /cancel/);
+  assert.match(debounce.rubric.join(" "), /400 ms with argument 2/);
+  assert.match(debounce.rubric.join(" "), /TypeError/);
+  const tabs = devProblem({ ...g, rng: 3 }, r, productContract("PE:X08.3", 1));
+  assert.match(tabs.rubric.join(" "), /B's late response replaces it/);
+  assert.match(tabs.rubric.join(" "), /aria-selected/);
+  // Starting-state premise: A is initial and settled, nothing else in flight.
+  assert.match(tabs.prompt, /A \(tabs\[0\]\) is the initially selected tab/);
+  assert.match(tabs.prompt, /A's initial request completed before t = 0 ms/);
+  assert.match(tabs.prompt, /no other requests are outstanding/);
+  // Derive the trace from the stated click/load timings.
+  const click = (tab: string) => {
+    const m = tabs.prompt.match(
+      new RegExp(`tab ${tab} at t = (\\d+) ms \\(its load takes (\\d+) ms\\)`),
+    );
+    assert.ok(m, tab);
+    return Number(m[1]) + Number(m[2]);
+  };
+  const arrivals = [
+    { tab: "C", at: click("C") },
+    { tab: "B", at: click("B") },
+  ].sort((x, y) => x.at - y.at);
+  assert.deepEqual(arrivals, [
+    { tab: "C", at: 300 },
+    { tab: "B", at: 900 },
+  ]);
+  const shownAt = (t: number) =>
+    arrivals.filter((a) => a.at <= t).pop()?.tab ?? "A";
+  assert.equal(shownAt(300), "C");
+  assert.equal(shownAt(900), "B");
+  assert.match(tabs.prompt, /at t = 300 ms and at t = 900 ms/);
+  const trace = devProblem({ ...g, rng: 3 }, r, productContract("PE:X08.1", 1));
+  assert.doesNotMatch(trace.prompt, /write a TypeScript signature/);
+  assert.doesNotMatch(trace.rubric.join(" "), /give a correctly typed once/);
+});
+
+test("unknown, prototype and missing objective ids fail clearly instead of inventing a feature", () => {
+  const g = createPlayableGame(9, r);
+  const base = productContract("PE:T01.1");
+  for (const id of [
+    "PE:T99.1",
+    "PE:T07",
+    "__proto__",
+    "constructor",
+    "toString",
+    "hasOwnProperty",
+  ])
+    for (const depth of [1, 2])
+      assert.throws(
+        () =>
+          devProblem({ ...g, rng: 3 }, r, {
+            ...base,
+            objectiveIds: [id],
+            depth,
+          }),
+        /Unsupported development question: no product practice question exists for/,
+        id,
+      );
+  assert.throws(
+    () => devProblem({ ...g, rng: 3 }, r, { ...base, objectiveIds: [] }),
+    /Unsupported development question: the contract has no objective id/,
+  );
+});
+
+test("editing one question's rubric cannot change a later question or the bank", () => {
+  const g = createPlayableGame(9, r);
+  for (const [id, depth] of [
+    ["PE:T07.1", 2],
+    ["PE:T20.2", 2],
+    ["PE:T01.1", 2],
+    ["PE:X09.1", 2],
+    ["PE:X08.2", 1],
+    ["PE:X08.1", 1],
+  ] as const) {
+    const contract = productContract(id, depth);
+    const first = devProblem({ ...g, rng: 3 }, r, contract);
+    const original = [...first.rubric];
+    first.rubric.splice(0, first.rubric.length, "Changed by one encounter");
+    const later = devProblem({ ...g, rng: 3 }, r, contract);
+    assert.deepEqual(later.rubric, original, id);
+    assert.notEqual(later.rubric, first.rubric, id);
+  }
+  assert.notEqual(
+    aiPracticeQuestions["PE:T20.2"].rubric[0],
+    "Changed by one encounter",
+  );
+});
+
+function withGap(game: Game, track: string, objectiveId: string): Game {
+  return {
+    ...game,
+    rng: 3,
+    study: {
+      ...game.study,
+      knowledgeGaps: [
+        {
+          track,
+          objectiveIds: [objectiveId],
+          resolved: false,
+          facet: { id: "chore", description: "Write a full migration plan" },
+        },
+      ],
+    } as never,
+  };
+}
+
+test("declared PE gaps never append extra chores, while Python gap lines remain", () => {
+  const g = createPlayableGame(9, r);
+  for (const id of ["PE:T07.1", "PE:T20.2", "PE:X09.2", "PE:X08.2"]) {
+    const contract = productContract(id);
+    const plain = devProblem({ ...g, rng: 3 }, r, contract);
+    const gapped = devProblem(withGap(g, "PE", id), r, contract);
+    assert.equal(gapped.prompt, plain.prompt, id);
+    assert.doesNotMatch(
+      gapped.prompt,
+      /flagged this as a gap|full migration plan/,
+      id,
+    );
+  }
+  const base = eligible(r, g.study);
+  const python = devProblem(withGap(g, "PY", "PY:T05.2"), r, {
+    ...base,
+    track: "PY",
+    objectiveIds: ["PY:T05.2"],
+    scopes: [base.scopes[0]],
+  });
+  assert.match(
+    python.prompt,
+    /You flagged this as a gap earlier, so cover it too: Write a full migration plan\./,
+  );
 });
 
 test("product question generation preserves its existing number of world RNG draws", () => {
@@ -230,37 +366,46 @@ test("product question generation preserves its existing number of world RNG dra
     const expected = { rng: seed };
     const n = 3 + Math.floor(rand(expected) * 6);
     for (let i = 0; i < n + 1; i++) rand(expected);
-    for (const id of [
-      "PE:T01.1",
-      "PE:T07.1",
-      "PE:T07.5",
-      "PE:T12.1",
-      "PE:X09.2",
-    ]) {
+    for (const [id, depth] of [
+      ["PE:T01.1", 2],
+      ["PE:T07.1", 2],
+      ["PE:T07.5", 2],
+      ["PE:T12.1", 2],
+      ["PE:T20.2", 2],
+      ["PE:X09.2", 2],
+      ["PE:X08.2", 1],
+      ["PE:X08.3", 1],
+    ] as const) {
       const subject = { ...g, rng: seed };
-      devProblem(subject, r, productContract(id));
+      devProblem(subject, r, productContract(id, depth));
       assert.equal(subject.rng, expected.rng, `${id}, seed ${seed}`);
     }
   }
 });
 
-test("editing one question's rubric cannot change a later question", () => {
-  const g = createPlayableGame(9, r);
-  const contract = productContract("PE:T07.1");
-  const first = devProblem({ ...g, rng: 3 }, r, contract);
-  const original = [...first.rubric];
-  first.rubric.splice(0, first.rubric.length, "Changed by one encounter");
-  const later = devProblem({ ...g, rng: 3 }, r, contract);
-  assert.deepEqual(later.rubric, original);
-});
-
-test("all personal-project narrative objectives require real history", () => {
-  for (const id of ["PE:X09.1", "PE:X09.2", "PE:X09.3"]) {
+test("all personal-project narrative objectives require real history with a bounded ask", () => {
+  const asks: Record<string, RegExp> = {
+    "PE:X09.1": /one decision you made and the trade-off/,
+    "PE:X09.2":
+      /what did you personally implement, which alternative did you consider/,
+    "PE:X09.3":
+      /60-second interview answer for a team building a customer-facing product/,
+  };
+  for (const [id, ask] of Object.entries(asks)) {
     const p = devProblem(createPlayableGame(9, r), r, productContract(id));
-    assert.match(p.prompt, /real project you worked on/);
-    assert.match(p.prompt, /Do not invent/);
-    assert.doesNotMatch(p.prompt, /creative tool|open-ended/);
-    assert.match(p.rubric.join(" "), /real.*(?:facts|history)/);
+    assert.match(p.prompt, /real project you worked on/, id);
+    assert.match(p.prompt, /Do not invent facts, work or metrics/, id);
+    assert.match(p.prompt, /qualify uncertain numbers/, id);
+    assert.match(p.prompt, /Separate your own work from the team's work/, id);
+    assert.match(p.prompt, ask, id);
+    for (const [other, otherAsk] of Object.entries(asks))
+      if (other !== id) assert.doesNotMatch(p.prompt, otherAsk, id);
+    assert.doesNotMatch(p.prompt, /creative tool|open-ended|What to cover/, id);
+    assert.match(
+      p.rubric.join(" "),
+      /real project facts and personal history/,
+      id,
+    );
   }
 });
 
@@ -314,12 +459,10 @@ test("practice questions show the player only the question, never scheduling int
     /product|history|assumption|narrative/i,
   );
   assert.match(trace.rubric.join(" "), /final count.*partway.*edge case/);
-  // Product prompts phrase their capability as the task itself.
+  // Product prompts never paste the scheduled scope as the task.
   const product = devProblem({ ...g, rng: 3 }, r, contracts[3]);
-  assert.match(
-    product.prompt,
-    /\n\nYour task: Frame the user problem and an MVP scope\.\n\n/,
+  assert.ok(
+    !product.prompt.includes("Frame the user problem and an MVP scope."),
   );
-  // The scenario carries a concrete proposal to critique, not just a feature.
-  assert.match(product.prompt, /proposes: "/);
+  assert.match(product.prompt, /export button/);
 });
