@@ -1137,6 +1137,13 @@ body.reduced * {
   margin: 0 0 8px;
   font-size: 16px;
 }
+#final-question-notice {
+  margin: 0 0 8px;
+  padding: 8px 10px;
+  border-left: 3px solid var(--line);
+  font-size: 12px;
+  line-height: 1.5;
+}
 #conversation-context,
 #answer-context,
 #submission-help {

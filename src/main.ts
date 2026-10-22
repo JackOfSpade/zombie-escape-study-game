@@ -1,5 +1,6 @@
 import { relayListening, relayServes } from "./bridge-client";
 import { terminalChannel, submissionView } from "./terminal-view";
+import { unfinishedLastQuestion } from "./final-question";
 import { encounterGaps, probeSummary } from "./knowledge-probe";
 import { unfinishedEarlierVisits } from "./room-questions";
 import { setTopicEnabled } from "./topic-spawn";
@@ -114,7 +115,10 @@ let game: Game,
   lastSave = 0,
   editorRevision = 0,
   // Free-look over the frozen building after the run ends. Page state only.
-  view: SpectatorView | undefined;
+  view: SpectatorView | undefined,
+  // The human's last opened terminal; finalQuestion marks post-death answering.
+  lastQuestion: string | undefined,
+  finalQuestion = false;
 const audio = new AudioDirector();
 try {
   game = recover(
@@ -376,6 +380,7 @@ async function fresh(statusLine?: HTMLElement) {
   say("");
   $<HTMLDialogElement>("#pause-menu").close();
   active = undefined;
+  lastQuestion = undefined;
   completionCursor = 0;
   keys.clear();
   closeTerminal();
@@ -394,11 +399,18 @@ function startCard() {
     return;
   }
   card.hidden = false;
+  const finishable =
+    game.status === "dead"
+      ? unfinishedLastQuestion(game, lastQuestion)
+      : undefined;
   if (game.status === "ready")
     card.innerHTML = `<span class="eyebrow">A REAL-TIME STUDY ESCAPE</span><h2>The dead are<br>on your heels.</h2><p>Twenty survivors. Four floors. Four seats.<br>Choose your route. Learn your way out.</p><button id="start">Enter the building ↗</button><small class="agent-only">${escape(status().detail)}</small>`;
   else
-    card.innerHTML = `<span class="eyebrow">${game.status === "escaped" ? "TRANSMISSION RECEIVED" : "SIGNAL LOST"}</span><h2>${game.status === "escaped" ? "You made it." : "Your work survives."}</h2><p>${escape(game.notice)}<br>${game.stats.rescued} extracted · ${game.stats.deaths} lost · ${Math.floor(game.time)} seconds</p><button id="again">Begin another run ↗</button><button id="backup" class="quiet agent-only">Export work & evidence</button><button id="spectate" class="quiet">Watch the building ↗</button>`;
+    card.innerHTML = `<span class="eyebrow">${game.status === "escaped" ? "TRANSMISSION RECEIVED" : "SIGNAL LOST"}</span><h2>${game.status === "escaped" ? "You made it." : "Your work survives."}</h2><p>${escape(game.notice)}<br>${game.stats.rescued} extracted · ${game.stats.deaths} lost · ${Math.floor(game.time)} seconds</p>${finishable ? '<button id="finish-question">Finish your last question ↗</button>' : ""}<button id="again">Begin another run ↗</button><button id="backup" class="quiet agent-only">Export work & evidence</button><button id="spectate" class="quiet">Watch the building ↗</button>`;
   document.getElementById("start")?.addEventListener("click", begin);
+  document.getElementById("finish-question")?.addEventListener("click", () => {
+    if (finishable) openFinalQuestion(finishable);
+  });
   document
     .getElementById("again")
     ?.addEventListener("click", () => void fresh(card.querySelector("p")!));
@@ -543,14 +555,37 @@ function closeTerminal() {
     }
   }
   active = undefined;
+  finalQuestion = false;
   releaseStation(human(game));
   $("#dialogue-reward").hidden = true;
+  $("#final-question-notice").hidden = true;
   $("#terminal").hidden = true;
   document.body.classList.remove("terminal-open");
   editor.blur();
   keys.clear();
   canvas.focus();
   persist();
+}
+/** After death the last tutor question stays answerable; no station is
+ * claimed and engine rewards skip the dead human. */
+function openFinalQuestion(e: Encounter) {
+  active = e.id;
+  finalQuestion = true;
+  $("#start-card").hidden = true;
+  $("#final-question-notice").hidden = false;
+  $("#terminal").hidden = false;
+  document.body.classList.add("terminal-open");
+  tab = terminalChannel(e);
+  renderTerminal(true);
+}
+/** Leaving a post-death terminal re-assesses its evidence, then shows the end card. */
+function leaveTerminal() {
+  const post = finalQuestion;
+  closeTerminal();
+  if (!post) return;
+  preserveRunLearning(game);
+  persist();
+  startCard();
 }
 async function interact() {
   if (game.status !== "playing" || game.paused) return;
@@ -637,6 +672,7 @@ async function interact() {
     return;
   }
   active = e.id;
+  lastQuestion = e.id;
   if (e.mode === "solo") e.owner = "human";
   $("#terminal").hidden = false;
   document.body.classList.add("terminal-open");
@@ -1238,7 +1274,7 @@ $("#work-log").ontoggle = () => {
     persist();
   }
 };
-$("#leave").onclick = closeTerminal;
+$("#leave").onclick = leaveTerminal;
 $("#save-button").onclick = async () => {
   await persist();
   game.notice =
@@ -1884,6 +1920,7 @@ $("#import").onchange = async () => {
   try {
     const next = recover(decode(await file.text()));
     closeTerminal();
+    lastQuestion = undefined;
     game = next;
     syncDisplayScale();
     completionCursor = 0;
@@ -1916,6 +1953,10 @@ window.addEventListener("keydown", (ev) => {
     }
     if (quitMenu) {
       if (!restarting) continueRun();
+      return;
+    }
+    if (finalQuestion) {
+      leaveTerminal();
       return;
     }
     if (spectating(game) && view) {
@@ -2217,9 +2258,16 @@ function ui() {
     running = false;
     audio.stop();
     preserveRunLearning(game);
-    closeTerminal();
+    // A dying player may finish the open tutor question; the card waits.
+    const last =
+      game.status === "dead" ? unfinishedLastQuestion(game, active) : undefined;
+    if (last && active === last.id) {
+      releaseStation(human(game));
+      finalQuestion = true;
+      $("#final-question-notice").hidden = false;
+    } else closeTerminal();
     persist();
-    startCard();
+    if (!finalQuestion) startCard();
     enterSpectator();
   }
 }
