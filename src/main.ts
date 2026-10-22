@@ -2228,6 +2228,8 @@ function frame(time: number) {
   const frameStarted = performance.now();
   const measuring = game.status === "playing" && !game.paused;
   let simulationMs = 0,
+    persistMs = 0,
+    uiMs = 0,
     steps = 0;
   const elapsed = Math.min((time - last) / 1000, 0.2);
   last = time;
@@ -2261,7 +2263,12 @@ function frame(time: number) {
         closeTerminal();
     }
     audio.update(game);
-    if (game.time - lastSave > 3) persist();
+    if (game.time - lastSave > 3) {
+      // Times only the synchronous part (diagnostic capture and save kickoff).
+      const persistStarted = performance.now();
+      persist();
+      persistMs += performance.now() - persistStarted;
+    }
   }
   if (view && spectating(game)) {
     // Held keys pan the free camera over the frozen floor.
@@ -2282,7 +2289,9 @@ function frame(time: number) {
   render(canvas, game, spectating(game) ? view : undefined);
   const renderMs = performance.now() - renderStarted;
   if (time - lastUI > 200) {
+    const uiStarted = performance.now();
     ui();
+    uiMs += performance.now() - uiStarted;
     lastUI = time;
   }
   if (measuring) {
@@ -2291,6 +2300,8 @@ function frame(time: number) {
       renderMs,
       totalMs: performance.now() - frameStarted,
       steps,
+      persistMs,
+      uiMs,
     });
     if (report)
       runLogs.record(game, "performance", {

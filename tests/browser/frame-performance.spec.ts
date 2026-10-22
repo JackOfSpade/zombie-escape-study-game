@@ -25,6 +25,25 @@ test("normal play records local frame costs and pausing persists the diagnostic 
   expect(data.steps).toBeGreaterThan(0);
   expect(data.maxWorkMs).toBeGreaterThanOrEqual(data.avgWorkMs);
   expect(data.maxSimulationMs).toBeGreaterThan(0);
+  // Persist/UI attribution is present, finite, internally consistent and
+  // bounded by the whole-frame work it is part of.
+  for (const key of [
+    "avgPersistMs",
+    "maxPersistMs",
+    "avgUiMs",
+    "maxUiMs",
+    "avgWorkMs",
+    "maxWorkMs",
+  ]) {
+    expect(typeof data[key]).toBe("number");
+    expect(Number.isFinite(data[key])).toBe(true);
+    expect(data[key]).toBeGreaterThanOrEqual(0);
+  }
+  expect(data.maxPersistMs).toBeGreaterThanOrEqual(data.avgPersistMs);
+  expect(data.maxUiMs).toBeGreaterThanOrEqual(data.avgUiMs);
+  expect(data.maxPersistMs).toBeLessThanOrEqual(data.maxWorkMs + 0.01);
+  expect(data.maxUiMs).toBeLessThanOrEqual(data.maxWorkMs + 0.01);
+  expect(data.maxWorkMs).toBeLessThan(data.wallMs);
 });
 test("reused light surfaces stay pixel-stable across frames, flares and resize", async ({
   page,
