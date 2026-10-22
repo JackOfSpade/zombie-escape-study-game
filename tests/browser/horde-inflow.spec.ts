@@ -2,6 +2,16 @@ import { expect, test } from "@playwright/test";
 test("entrance reinforcements continue beyond ninety births and preserve their actual deadline through reload", async ({
   page,
 }) => {
+  await page.route("**/api/**", (route) =>
+    route.fulfill({
+      json: {
+        mode: "development",
+        label: "Synthetic",
+        detail: "Isolated inflow fixture",
+        capabilities: [],
+      },
+    }),
+  );
   await page.goto("/");
   await page.getByRole("button", { name: "Enter the building" }).click();
   const before = await page.evaluate(() => {
@@ -11,7 +21,9 @@ test("entrance reinforcements continue beyond ninety births and preserve their a
     g.survivors.slice(1).forEach((a: any) => {
       a.escaped = true;
     });
-    g.time = 10;
+    // Fresh playable runs intentionally have a three-minute grace period.
+    // Start this capacity regression at its actual end, not the retired 10s.
+    g.time = 180;
     g.spawned = 90;
     g.nextSpawn = g.time + 0.1;
     g.surge.anchor = 999999;

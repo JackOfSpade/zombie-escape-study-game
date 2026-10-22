@@ -1,8 +1,10 @@
+import { EQUIPMENT } from "../equipment";
 import { SWARM } from "../force-fields";
 import { soundConnected } from "../acoustics";
 import { buildingLayoutErrors } from "../building-layout";
 import { step, toggleDoor, toggleGrip, vault } from "../engine";
 import { distance, type Game, type Roadmap, type Point } from "../model";
+import { applyStudyPacing } from "../study-pacing";
 import {
   beginPhysics,
   checkpointPhysics,
@@ -37,8 +39,21 @@ export interface TestResult {
   actions: { tick: number; type: string; ok: boolean }[];
   positions: { id: string; x: number; y: number; floor: number; hp: number }[];
 }
-function read(g: Game, c: Check): number | boolean {
+function read(
+  g: Game,
+  c: Check,
+  endedTravel: { npcTravel: number; zombieTravel: number },
+): number | boolean {
   const q = c.query;
+  if (q.type === "worldTime") return g.time;
+  if (q.type === "humanEnded")
+    return g.status === "dead" || g.status === "escaped";
+  if (q.type === "sinceEnd")
+    return g.endedAt === undefined
+      ? -1
+      : q.metric === "time"
+        ? g.time - g.endedAt
+        : endedTravel[q.metric];
   if (q.type === "property") {
     const e = entity(g, q.id);
     if (!e) throw Error(`Missing entity ${q.id}`);
@@ -108,9 +123,15 @@ export class TestRunner {
   readonly results: CheckResult[];
   readonly actionResults: { tick: number; type: string; ok: boolean }[] = [];
   private moves = new Map<string, Point>();
+  private endedTravel = { npcTravel: 0, zombieTravel: 0 };
   constructor(s: Scenario, roadmap: Roadmap) {
     this.scenario = parseScenario(s);
     this.game = createTestWorld(this.scenario, roadmap);
+    if (this.scenario.pacing === "study") {
+      applyStudyPacing(this.game);
+      if (!this.scenario.naturalSpawns)
+        this.game.nextSpawn = Number.MAX_SAFE_INTEGER;
+    }
     this.results = this.scenario.checks.map((c) => ({
       name: c.name,
       status: "pending",
@@ -120,6 +141,21 @@ export class TestRunner {
     }));
   }
   private action(a: Action) {
+    if (a.type === "decoy") {
+      this.game.effects.push({
+        kind: "decoy",
+        floor: a.floor,
+        x: a.x,
+        y: a.y,
+        radius: EQUIPMENT.decoy.radius,
+        until: this.game.time + EQUIPMENT.decoy.seconds,
+      });
+      return true;
+    }
+    if (a.type === "pause") {
+      this.game.paused = a.paused;
+      return true;
+    }
     if (a.type === "checkpoint") {
       checkpointPhysics(this.game);
       this.game = JSON.parse(JSON.stringify(this.game)) as Game;
@@ -173,8 +209,32 @@ export class TestRunner {
             );
         }
         if (this.scenario.simulation === "game") {
+          const before =
+            this.game.endedAt === undefined
+              ? undefined
+              : new Map(
+                  [...this.game.survivors, ...this.game.zombies].map((e) => [
+                    e.id,
+                    { x: e.x, y: e.y, floor: e.floor },
+                  ]),
+                );
           const input = manual ?? this.moves.get("human") ?? { x: 0, y: 0 };
           step(this.game, TEST_DT, { ...input, grab: false });
+          if (before)
+            for (const [kind, entities] of [
+              [
+                "npcTravel",
+                this.game.survivors.filter(
+                  (a) => a.id !== "human" && a.alive && !a.escaped,
+                ),
+              ],
+              ["zombieTravel", this.game.zombies.filter((z) => z.hp > 0)],
+            ] as const)
+              for (const e of entities) {
+                const p = before.get(e.id);
+                if (p?.floor === e.floor)
+                  this.endedTravel[kind] += distance(e, p);
+              }
         } else {
           this.game.time += TEST_DT;
           this.game.tick = (this.game.tick ?? 0) + 1;
@@ -220,7 +280,7 @@ export class TestRunner {
             (c.mode === "at" && c.tick !== this.tick)
           )
             return;
-          const value = read(this.game, c),
+          const value = read(this.game, c, this.endedTravel),
             ok = matches(value, c);
           result.actual = value;
           result.tick = this.tick;

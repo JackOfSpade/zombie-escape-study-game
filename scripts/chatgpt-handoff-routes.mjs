@@ -1,7 +1,10 @@
 import { HttpInputError, readJsonBody } from "./http-json.mjs";
 import { randomBytes, timingSafeEqual } from "node:crypto";
 import { writeFileSync, renameSync } from "node:fs";
-import { HANDOFF_OPERATIONS } from "./chatgpt-handoff-queue.mjs";
+import {
+  HANDOFF_OPERATIONS,
+  legacyWorkerJob,
+} from "./chatgpt-handoff-queue.mjs";
 
 export function createHandoffRoutes(
   queue,
@@ -37,6 +40,9 @@ export function createHandoffRoutes(
         capabilities: [
           ...HANDOFF_OPERATIONS,
           "retrospective-group",
+          // Native ChatGPT conversation for a tutor question (mode
+          // terminal-direct) finished once via finish_study_question.
+          "direct-study",
           ...(queue.snapshot().autonomousWork ? ["autonomous-work"] : []),
         ],
         detail:
@@ -59,6 +65,7 @@ export function createHandoffRoutes(
         if (url.pathname === "/api/handoff/status" && req.method === "GET") {
           send(res, 200, {
             ...queue.snapshot(),
+            capabilities: ["direct-study"],
             public: publicBridge?.status() ?? { configured: false },
             tunnel: supervisor?.status() ?? { state: "off", verified: false },
           });
@@ -115,7 +122,7 @@ export function createHandoffRoutes(
           }
           const body = await readJsonBody(req);
           if (body.action === "get") {
-            let result = queue.get(body.worker);
+            let result = queue.get(body.worker, undefined, legacyWorkerJob);
             // Keep an idle worker waiting without spinning through model calls.
             // The bounded wait does not hold the game simulation or other routes.
             const end =
@@ -127,7 +134,7 @@ export function createHandoffRoutes(
               !res.destroyed
             ) {
               await new Promise((resolve) => setTimeout(resolve, 250));
-              result = queue.get(body.worker);
+              result = queue.get(body.worker, undefined, legacyWorkerJob);
             }
             if (!res.destroyed) send(res, 200, result);
           } else if (body.action === "part")
@@ -165,8 +172,8 @@ export function createHandoffRoutes(
       }
       return true;
     },
-    enqueue(req, res, operation, payload) {
-      const handoff = queue.enqueue(operation, payload);
+    enqueue(req, res, operation, payload, nativeScope) {
+      const handoff = queue.enqueue(operation, payload, nativeScope);
       send(res, 202, { status: "pending", handoff });
     },
   };

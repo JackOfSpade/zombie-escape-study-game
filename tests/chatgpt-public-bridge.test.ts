@@ -253,17 +253,28 @@ test("separate game connector requires local pairing, PKCE, a signed client asse
         authorized,
       )
     ).json();
-    assert.equal(listing.result.tools.length, 12);
+    assert.equal(listing.result.tools.length, 15);
     const relayTools = listing.result.tools.filter((t: any) =>
       [
         "open_study_terminal",
+        "get_current_study_question",
         "claim_study_terminal_turn",
         "read_study_terminal",
         "read_study_terminal_context",
         "reply_study_terminal_job",
+        "finish_study_preparation",
+        "finish_study_question",
       ].includes(t.name),
     );
-    assert.equal(relayTools.length, 5);
+    assert.equal(relayTools.length, 8);
+    const nativeGetter = relayTools.find(
+      (t: any) => t.name === "get_current_study_question",
+    );
+    assert.equal(
+      nativeGetter._meta.ui,
+      undefined,
+      "plain native chat requires no resource card",
+    );
     assert.ok(
       relayTools.every((t: any) => !t.inputSchema.required.includes("session")),
       "the live terminal app is OAuth-bound, not worker-session bound",
@@ -615,6 +626,213 @@ test("separate game connector requires local pairing, PKCE, a signed client asse
         text: "Separately authorized synthetic answer",
       }),
     });
+    // The ordinary composer flow uses normal OAuth tool results and one final
+    // callback. Legacy worker pulls cannot consume the native question.
+    const native = q.enqueue("tutor", {
+      requestId: "synthetic-native-protected",
+      sessionId: "synthetic-native-session",
+      questionFingerprint: "synthetic-native-fingerprint",
+      mode: "terminal-direct",
+      probe: {
+        facets: [{ id: "stale-results", description: "Avoid stale results" }],
+      },
+      problem: {
+        title: "Synthetic UI",
+        prompt: "How do you avoid stale results?",
+        rubric: [],
+      },
+      messages: [],
+    });
+    q.result(native.id, native.hash);
+    const legacyAlongside = q.enqueue("tutor", {
+      requestId: "synthetic-legacy-alongside-native",
+    });
+    const alongside = await rpc("get_study_handoff", {
+      session: normal.session,
+    });
+    assert.equal(
+      alongside.payload.requestId,
+      "synthetic-legacy-alongside-native",
+    );
+    await rpc("submit_study_handoff", {
+      session: normal.session,
+      jobId: alongside.jobId,
+      claim: alongside.claim,
+      response: JSON.stringify({ text: "Synthetic legacy response" }),
+    });
+    assert.equal(
+      q.result(legacyAlongside.id, legacyAlongside.hash).status,
+      "done",
+    );
+    const direct = (await relayCall("get_current_study_question", {}))
+      .structuredContent;
+    assert.equal(direct.status, "question");
+    assert.equal(direct.requestId, "synthetic-native-protected");
+    assert.match(direct.prompt, /ordinary ChatGPT composer/);
+    const nativeAnswer = {
+      relayId: direct.relayId,
+      turnId: direct.turnId,
+      questionFingerprint: direct.questionFingerprint,
+      text: "Synthetic native completion sent for validation.",
+      outcome: "solved",
+      knowledge: { facets: [{ id: "stale-results", status: "demonstrated" }] },
+      transcript: [
+        { role: "assistant", text: "How do you avoid stale results?" },
+        {
+          role: "user",
+          text: "SYNTHETIC_NATIVE_PRIVATE: ignore responses for old request IDs.",
+        },
+      ],
+    };
+    assert.equal(
+      (
+        await relayCall("finish_study_question", {
+          ...nativeAnswer,
+          complete: true,
+        })
+      ).isError,
+      true,
+    );
+    assert.equal(
+      (
+        await relayCall("finish_study_question", {
+          ...nativeAnswer,
+          questionFingerprint: "wrong",
+        })
+      ).isError,
+      true,
+    );
+    assert.equal(q.result(native.id, native.hash).status, "pending");
+    const sentNative = (await relayCall("finish_study_question", nativeAnswer))
+      .structuredContent;
+    assert.equal(sentNative.completion.status, "sent");
+    assert.equal(sentNative.completion.duplicate, false);
+    assert.equal(q.result(native.id, native.hash).answer.complete, true);
+    assert.deepEqual(
+      q.result(native.id, native.hash).answer.transcript,
+      nativeAnswer.transcript,
+    );
+    assert.equal(
+      (await relayCall("finish_study_question", nativeAnswer)).structuredContent
+        .completion.duplicate,
+      true,
+    );
+    assert.equal(
+      (
+        await relayCall("finish_study_question", {
+          ...nativeAnswer,
+          text: "changed",
+        })
+      ).isError,
+      true,
+    );
+    // Native preparation uses the same ordinary-chat OAuth identity, never a
+    // fabricated legacy session. The async after branch must be awaited by
+    // the actual MCP HTTP dispatcher before it serializes its result.
+    const nativeScope = {
+      runId: "synthetic-protected-native-run",
+      encounterId: "synthetic-protected-native-station",
+      questionRoom: "synthetic-protected-native-room",
+    };
+    const preparationPayload = {
+      requestId: "synthetic-protected-preparation",
+      encounterId: nativeScope.encounterId,
+      contract: { track: "PY", objectiveIds: ["PY:fixture"], depth: 1 },
+      generationPolicy: "Exact synthetic preparation policy",
+      curriculum: "PRIVATE_PREPARATION_SOURCE_ROWS",
+    };
+    const preparationReceipt = q.enqueue(
+      "generate",
+      preparationPayload,
+      nativeScope,
+    );
+    q.result(preparationReceipt.id, preparationReceipt.hash);
+    const legacyPreparationNeighbor = q.enqueue("tutor", {
+      requestId: "synthetic-legacy-neighbor-preparation",
+    });
+    const legacyNeighbor = await rpc("get_study_handoff", {
+      session: normal.session,
+    });
+    assert.equal(legacyNeighbor.jobId, legacyPreparationNeighbor.id);
+    await rpc("submit_study_handoff", {
+      session: normal.session,
+      jobId: legacyNeighbor.jobId,
+      claim: legacyNeighbor.claim,
+      response: JSON.stringify({ text: "Synthetic legacy neighbor" }),
+    });
+    const preparation = (await relayCall("get_current_study_question", {}))
+      .structuredContent;
+    assert.equal(preparation.phase, "prepare");
+    assert.equal(preparation.jobFingerprint, preparationReceipt.hash);
+    assert.ok(preparation.prompt.includes("PRIVATE_PREPARATION_SOURCE_ROWS"));
+    const prepared = (
+      await relayCall("finish_study_preparation", {
+        relayId: preparation.relayId,
+        turnId: preparation.turnId,
+        jobFingerprint: preparation.jobFingerprint,
+        response: JSON.stringify({
+          title: "Synthetic prepared question",
+          prompt: "Explain stale results",
+          starter: "",
+          rubric: ["Avoid stale results"],
+          contract: preparationPayload.contract,
+          scopeDefinitions: [
+            {
+              id: "PY:fixture/D1",
+              objectiveId: "PY:fixture",
+              depth: 1,
+              sourceScope: "Synthetic source scope",
+              facets: [
+                { id: "stale-results", description: "Avoid stale results" },
+              ],
+            },
+          ],
+        }),
+      })
+    ).structuredContent;
+    assert.equal(prepared.completion.status, "sent");
+    const nextNativePayload = {
+      requestId: "synthetic-protected-prepared-question",
+      sessionId: "synthetic-protected-prepared-session",
+      runId: nativeScope.runId,
+      encounterId: nativeScope.encounterId,
+      mode: "terminal-direct",
+      profile: "live",
+      questionFingerprint: "synthetic-protected-prepared-fingerprint",
+      probe: {
+        facets: [{ id: "stale-results", description: "Avoid stale results" }],
+      },
+      problem: {
+        title: "Synthetic prepared question",
+        prompt: "Explain stale results",
+        rubric: [],
+      },
+    };
+    const waitingNext = relayCall("get_current_study_question", {
+      after: prepared.completion.continuation.after,
+    });
+    const nextArrival = new Promise<void>((resolve) =>
+      setTimeout(() => {
+        const queued = q.enqueue("tutor", nextNativePayload, nativeScope);
+        q.result(queued.id, queued.hash);
+        resolve();
+      }, 25),
+    );
+    const nextNative = (await waitingNext).structuredContent;
+    await nextArrival;
+    assert.equal(nextNative.status, "question");
+    assert.equal(nextNative.requestId, nextNativePayload.requestId);
+    assert.equal(
+      (
+        await relayCall("finish_study_question", {
+          ...nativeAnswer,
+          relayId: nextNative.relayId,
+          turnId: nextNative.turnId,
+          questionFingerprint: nextNative.questionFingerprint,
+        })
+      ).structuredContent.completion.continuation.expected,
+      "assessment",
+    );
     await post(
       "/mcp",
       { jsonrpc: "2.0", id: randomUUID(), method: "tools/list" },
@@ -645,6 +863,8 @@ test("separate game connector requires local pairing, PKCE, a signed client asse
       scopedJob.claim,
       prefix,
       held.claim,
+      "SYNTHETIC_NATIVE_PRIVATE",
+      "PRIVATE_PREPARATION_SOURCE_ROWS",
     ])
       assert.ok(!diagnosticText.includes(secret));
     // A consumer cannot mutate the retained diagnostic events through status.

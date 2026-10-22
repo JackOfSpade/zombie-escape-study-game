@@ -8,6 +8,7 @@ import {
   type Station,
 } from "./model";
 import { npcReasoningAvailable, npcThinkingRate } from "./npc-cognition";
+import { npcThinkingScale } from "./study-pacing";
 import { walkSegment } from "./navigation";
 import { solid } from "./spatial";
 import { sectorBounds } from "./floor-plan";
@@ -258,7 +259,10 @@ export function studyLoopDecision(
   const m = metrics.get(g);
   if (m) m.decisions++;
   const e = g.encounters[p.encounter],
-    reasoningRate = npcThinkingRate(a, e) * (a.role === "analyst" ? 1.2 : 1);
+    reasoningRate =
+      npcThinkingRate(a, e) *
+      npcThinkingScale(g) *
+      (a.role === "analyst" ? 1.2 : 1);
   const nextMilestone =
     Math.max(0, 24 * (a.milestone + 1) - a.thought) /
     Math.max(0.01, reasoningRate);

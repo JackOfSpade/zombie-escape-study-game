@@ -1,10 +1,39 @@
 import { openGameMenu } from "./helpers/game-menu";
-import { restoreTerminalMode } from "./helpers/terminal-mode";
 import { expect, test, type Page } from "@playwright/test";
 import { readFile, writeFile } from "node:fs/promises";
 import { tier4RoadmapFixture } from "../fixtures/tier4-roadmap";
 import { enterLegacyBuilding, useLegacyWorld } from "./helpers/legacy-world";
 import { isolateRunnerBridge } from "./helpers/runner-bridge";
+import {
+  enterNativeGame,
+  flushNativeSave,
+  killHumanInStep,
+  mockNativeStudy,
+  nativeState,
+  openNativeQuestion,
+  seedLegacyDraft,
+} from "./native-study-harness";
+
+// No browser smoke case may accidentally release real model/bridge work.
+// Explicit synthetic provider routes below override this safe default.
+test.beforeEach(async ({ page }) => {
+  await page.route("**/api/**", (route) => {
+    const path = new URL(route.request().url()).pathname;
+    if (path === "/api/status")
+      return route.fulfill({
+        json: {
+          mode: "development",
+          label: "Isolated smoke fixture",
+          detail: "No real study requests",
+          capabilities: [],
+        },
+      });
+    return route.fulfill({
+      status: 503,
+      json: { error: "Browser study/runner network is isolated" },
+    });
+  });
+});
 async function expectHumanDrawn(page: Page) {
   await expect
     .poll(() =>
@@ -22,114 +51,105 @@ async function expectHumanDrawn(page: Page) {
     )
     .toBe(true);
 }
-test("real browser: launch, playable movement, no typing capture, exact resume, running survival, save/reload", async ({
+test("real browser: launch, movement, native study capture, running survival and exact save/reload", async ({
   page,
 }) => {
   const errors: string[] = [];
   page.on("pageerror", (e) => errors.push(e.message));
-  await enterLegacyBuilding(page);
+  const relay = await mockNativeStudy(page);
+  await enterNativeGame(page);
   await expectHumanDrawn(page);
   const start = await page.evaluate(
     () => (window as any).__deadAir.game.survivors[0].y,
   );
+  await page.locator("#world").focus();
   await page.keyboard.down("w");
   await page.waitForTimeout(800);
   await page.keyboard.up("w");
   expect(
     await page.evaluate(() => (window as any).__deadAir.game.survivors[0].y),
   ).toBeLessThan(start);
-  await page.evaluate(() => {
-    const g = (window as any).__deadAir.game;
-    const st = g.floors[0].stations[0];
-    Object.assign(g.survivors[0], { x: st.x, y: st.y });
-  });
-  await page.keyboard.press("e");
-  await expect(page.locator("#terminal")).toBeVisible();
-  // The practice label lives in the provenance line, not in the question.
-  await expect(page.locator("#terminal-provenance")).toContainText(
-    "Development practice",
+  await seedLegacyDraft(
+    page,
+    "exact persisted legacy draft / boundary reasoning",
   );
-  await expect(page.locator("#problem")).not.toBeEmpty();
-  const prompt = await page.locator("#problem").textContent();
-  await page
-    .locator("#workspace")
-    .fill("wasd · exact persisted draft / boundary reasoning");
+  const id = await openNativeQuestion(page);
+  await expect.poll(() => relay.calls.length).toBe(1);
+  const captured = (await nativeState(page, id)).session.payloadJson;
   const pos = await page.evaluate(() => {
     const a = (window as any).__deadAir.game.survivors[0];
     return [a.x, a.y];
   });
-  await page.locator("#workspace").pressSequentially("wasd");
+  // Keyboard-owned controls do not move the human. Native conversation typing
+  // occurs in another document; this game has no answer composer.
+  await page.locator("#native-study-copy").focus();
+  await page.keyboard.type("wasd");
   expect(
     await page.evaluate(() => {
       const a = (window as any).__deadAir.game.survivors[0];
       return [a.x, a.y];
     }),
   ).toEqual(pos);
-  const time = await page.evaluate(() => (window as any).__deadAir.game.time);
-  await page.waitForTimeout(1000);
-  expect(
-    await page.evaluate(() => (window as any).__deadAir.game.time),
-  ).toBeGreaterThan(time + 0.5);
-  const draft = await page.locator("#workspace").inputValue();
-  await page.locator("#leave").click();
-  await expect(page.locator("#terminal")).toBeHidden();
-  await page.keyboard.press("e");
-  await expect(page.locator("#terminal")).toBeVisible();
-  await expect(page.locator("#workspace")).toHaveValue(draft);
-  await expect(page.locator("#problem")).toHaveText(prompt!);
+  const time = (await nativeState(page, id)).time;
+  await expect
+    .poll(async () => (await nativeState(page, id)).time)
+    .toBeGreaterThan(time + 0.5);
+  expect(JSON.parse(captured).workspace).toBe(
+    "exact persisted legacy draft / boundary reasoning",
+  );
   await openGameMenu(page);
   await page.getByRole("button", { name: "Save run", exact: true }).click();
   await expect(page.locator("#notice")).toContainText("Run saved locally");
   await page.locator("#resume-game").click();
+  await flushNativeSave(page);
   await page.reload();
-  await page.waitForFunction(() => !!(window as any).__deadAir);
-  await page.evaluate(() => {
-    const g = (window as any).__deadAir.game;
-    const st = g.floors[0].stations[0];
-    Object.assign(g.survivors[0], { x: st.x, y: st.y });
-  });
-  await page.locator("#world").focus();
-  await page.keyboard.press("e");
-  await expect(page.locator("#workspace")).toHaveValue(draft);
-  expect(errors).toEqual([]);
+  await expect.poll(() => relay.calls.length).toBe(2);
+  expect((await nativeState(page, id)).session.payloadJson).toBe(captured);
+  expect(relay.calls[1].payload).toEqual(JSON.parse(captured));
+  await expect(page.locator("#terminal")).toBeHidden();
   await expectHumanDrawn(page);
-  await page.evaluate(
-    () =>
-      new Promise<void>((resolve) =>
-        requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
-      ),
-  );
+  expect(errors).toEqual([]);
   await page.screenshot({
-    path: "test-results/playable-terminal.png",
+    path: "test-results/playable-native-study.png",
     fullPage: false,
   });
 });
-test("terminal use respects wall/door occlusion and keeps the draft when access is blocked", async ({
+
+test("physical station access respects occlusion while an issued native question keeps its captured draft", async ({
   page,
 }) => {
-  await enterLegacyBuilding(page);
+  const relay = await mockNativeStudy(page);
+  await enterNativeGame(page);
   await page.evaluate(() => {
     const g = (window as any).__deadAir.game,
       a = g.survivors[0],
       f = g.floors[0];
-    g.survivors = [a];
-    g.zombies = [];
-    g.nextSpawn = Number.MAX_SAFE_INTEGER;
     Object.assign(a, { x: 19.7, y: 15.5 });
     f.tiles = Array.from({ length: 34 }, () => Array(44).fill(0));
     f.stations = [{ ...f.stations[0], x: 21.3, y: 15.5 }];
     f.furniture = [];
     f.tiles[15][20] = 1;
   });
+  await seedLegacyDraft(page, "draft kept behind a new obstruction");
   await page.locator("#world").focus();
   await page.keyboard.press("e");
-  await expect(page.locator("#terminal")).toBeHidden();
+  expect(relay.calls).toHaveLength(0);
+  await expect(page.locator("#native-study")).toBeHidden();
   await page.evaluate(() => {
     (window as any).__deadAir.game.floors[0].tiles[15][20] = 0;
   });
   await page.keyboard.press("e");
-  await expect(page.locator("#terminal")).toBeVisible();
-  await page.locator("#workspace").fill("draft kept behind a new obstruction");
+  await expect.poll(() => relay.calls.length).toBe(1);
+  const payload = relay.calls[0].payload;
+  expect(payload.workspace).toBe("draft kept behind a new obstruction");
+  const reachable = () =>
+    page.evaluate(async () => {
+      const root = "/src/",
+        { canReachStation } = await import(root + "engine.ts"),
+        g = (window as any).__deadAir.game;
+      return canReachStation(g, g.survivors[0], g.floors[0].stations[0]);
+    });
+  expect(await reachable()).toBe(true);
   await page.evaluate(() => {
     (window as any).__deadAir.game.floors[0].furniture = [
       {
@@ -153,19 +173,18 @@ test("terminal use respects wall/door occlusion and keeps the draft when access 
       },
     ];
   });
+  await expect.poll(reachable).toBe(false);
+  await expect
+    .poll(async () => (await nativeState(page, payload.encounterId)).station)
+    .toBeUndefined();
+  await expect(page.locator("#native-study")).toBeVisible();
+  expect(
+    (await nativeState(page, payload.encounterId)).session.payloadJson,
+  ).toBe(JSON.stringify(payload));
   await expect(page.locator("#terminal")).toBeHidden();
-  await page.locator("#world").focus();
-  await page.keyboard.press("e"); // Release the latch; the leaf still blocks access.
-  await expect(page.locator("#terminal")).toBeHidden();
-  await page.keyboard.down("d");
-  await page.waitForTimeout(600);
-  await page.keyboard.up("d");
-  await page.keyboard.press("e");
-  await expect(page.locator("#terminal")).toBeVisible();
-  await expect(page.locator("#workspace")).toHaveValue(
-    "draft kept behind a new obstruction",
-  );
+  expect(relay.calls).toHaveLength(1);
 });
+
 test("UI settings and curriculum stay in the pause menu; narrow layout remains usable", async ({
   page,
 }) => {
@@ -376,56 +395,26 @@ test("finite 360 vision: see through closed doors in both palettes, walls and di
   expect(errors).toEqual([]);
 });
 
-test("development partial work survives actual outside combat death and a fresh run without transferring its lock", async ({
+test("partial development work survives actual combat death and a fresh run without transferring its lock", async ({
   page,
 }) => {
-  await enterLegacyBuilding(page);
-  await page.evaluate(() => {
-    const g = (window as any).__deadAir.game,
-      s = g.floors[0].stations[0];
-    g.survivors[0].x = s.x;
-    g.survivors[0].y = s.y;
-  });
-  await page.keyboard.press("e");
-  await page
-    .locator("#workspace")
-    .fill("Preserved human partial reasoning: a boundary remains unresolved.");
-  const originalPrompt = await page.locator("#problem").textContent();
-  await page.locator("#leave").click();
-  await page.evaluate(() => {
-    const g = (window as any).__deadAir.game,
-      a = g.survivors[0];
-    a.x = 21.5;
-    a.y = 31.5;
-    g.survivors = [a];
-    g.nextSpawn = 99999;
-    g.zombies = [-0.6, 0, 0.6].map((dx, i) => ({
-      id: `outside-combat-fixture-${i}`,
-      floor: 0,
-      x: a.x + dx,
-      y: a.y + 0.5,
-      hp: 60,
-      path: [],
-      repath: 0,
-      cooldown: 0,
-      memory: 0,
-      stagger: 0,
-      origin: "outside",
-    }));
-  });
-  await expect(
-    page.getByRole("button", { name: "Begin another run" }),
-  ).toBeVisible({ timeout: 10000 });
-  await expect(page.locator("#next-title")).toHaveText("Escape attempt ended.");
-  await expect(page.locator("#start-card")).toHaveClass(/finished/);
-  const archivedRun = await page.evaluate(
-    () => (window as any).__deadAir.game.id,
-  );
+  const relay = await mockNativeStudy(page);
+  await enterNativeGame(page);
+  const draft =
+    "Preserved human partial reasoning: a boundary remains unresolved.";
+  await seedLegacyDraft(page, draft);
+  const id = await openNativeQuestion(page);
+  await expect.poll(() => relay.calls.length).toBe(1);
+  const payload = relay.calls[0].payload;
+  const oldRun = await page.evaluate(() => (window as any).__deadAir.game.id);
+  await killHumanInStep(page);
+  await expect(page.locator("#start-card")).toBeHidden();
+  await page.getByRole("button", { name: "Run summary" }).click();
   await page.getByRole("button", { name: "Begin another run" }).click();
-  // A new run starts once the last run's learning is saved.
   await expect(page.locator("#start-card")).toBeHidden();
   const state = await page.evaluate(() => {
     const g = (window as any).__deadAir.game;
+    g.survivors = g.survivors.slice(0, 1);
     return {
       id: g.id,
       archives: g.study.archives,
@@ -433,30 +422,39 @@ test("development partial work survives actual outside combat death and a fresh 
       attempts: g.study.learner.attempts,
     };
   });
-  expect(state.id).not.toBe(archivedRun);
-  await expect(page.locator("#start-card")).toBeHidden();
-  await expect(page.locator("#next-title")).toHaveText("Make it inside.");
-  expect(
-    state.archives.some(
-      (e: any) =>
-        e.workspace ===
-          "Preserved human partial reasoning: a boundary remains unresolved." &&
-        e.problem.prompt === originalPrompt,
-    ),
-  ).toBeTruthy();
+  expect(state.id).not.toBe(oldRun);
+  const archive = state.archives.find(
+    (e: any) => e.id === id && e.runId === oldRun,
+  );
+  expect(archive.workspace).toBe(draft);
+  expect(archive.problem).toEqual(payload.problem);
+  expect(archive.directStudy.payloadJson).toBe(JSON.stringify(payload));
   expect(state.evidence).toEqual([]);
   expect(state.attempts).toEqual([]);
-  await page.evaluate(() => {
-    const g = (window as any).__deadAir.game,
-      s = g.floors[0].stations[0];
-    g.survivors[0].x = s.x;
-    g.survivors[0].y = s.y;
-  });
-  await page.locator("#world").focus();
-  await page.keyboard.press("e");
-  await expect(page.locator("#workspace")).not.toHaveValue(
-    "Preserved human partial reasoning: a boundary remains unresolved.",
+  // One native conversation finishes its retained question before the new
+  // run issues another. Its old-run completion records learning only.
+  relay.finish(payload.requestId, "gap");
+  await expect
+    .poll(() =>
+      page.evaluate((oldRun) => {
+        const g = (window as any).__deadAir.game;
+        return g.study.archives.find(
+          (e: any) => e.runId === oldRun && e.directStudy,
+        )?.directStudy.state;
+      }, oldRun),
+    )
+    .toBe("applied");
+  expect(
+    await page.evaluate(() => (window as any).__deadAir.game.survivors[0].keys),
+  ).toBe(0);
+  const next = await openNativeQuestion(page);
+  await expect.poll(() => relay.calls.length).toBe(2);
+  const current = await nativeState(page, next);
+  expect(current.session.questionFingerprint).not.toBe(
+    payload.questionFingerprint,
   );
+  expect(JSON.parse(current.session.payloadJson).workspace).not.toBe(draft);
+  expect(current.keys).toBe(0);
 });
 
 for (const fixtureKind of ["checkpoint", "transfer", "historical"] as const) {
@@ -628,15 +626,25 @@ for (const fixtureKind of ["checkpoint", "transfer", "historical"] as const) {
     );
     await page.locator("#world").focus();
     await page.keyboard.press("e");
-    await expect(page.locator("#problem-title")).toHaveText(
-      "Isolated bridge workflow",
-    );
-    await page
-      .locator("#workspace")
-      .fill(
-        "Human-authored integration fixture reasoning, covering the defined scope without any asserted runtime execution.",
+    await page.evaluate(async () => {
+      const d = (window as any).__deadAir,
+        root = "/src/";
+      const { ensureProblem, presentProblem, edit, submit } = await import(
+        root + "ai.ts"
       );
-    await page.getByRole("button", { name: "Submit answer" }).click();
+      const e = d.game.encounters[d.game.floors[0].stations[0].encounter];
+      await ensureProblem(d.game, e, d.roadmap);
+      presentProblem(d.game, e, d.roadmap);
+      edit(
+        d.game,
+        e,
+        "Human-authored integration fixture reasoning, covering the defined scope without any asserted runtime execution.",
+        e.revision,
+        d.roadmap,
+      );
+      await submit(d.game, e, d.roadmap);
+    });
+    await expect(page.locator("#terminal")).toBeHidden();
     await expect
       .poll(() =>
         page.evaluate(() => {
@@ -698,7 +706,6 @@ for (const fixtureKind of ["checkpoint", "transfer", "historical"] as const) {
         newObservations: 1,
         reconciliations: 1,
       });
-    await page.locator("#leave").click();
     await openGameMenu(page);
     await page.getByRole("button", { name: "Inspect" }).click();
     await expect(page.locator("#inspector-content")).toContainText(
@@ -758,472 +765,119 @@ for (const fixtureKind of ["checkpoint", "transfer", "historical"] as const) {
   });
 }
 
-test("group proposal fixture: private tutor context stays private and replies become assistance only when displayed", async ({
+// Retired shared-editor widgets have no normal player entry. Their retained
+// domain behavior is covered by workspace-proposals, group-retry,
+// group-availability, terminal-lifecycle and terminal-submission unit suites.
+// Native browser conversation coverage lives in direct-study.spec.ts.
+test("retained group API keeps private tutoring out of proposals and preserves NPC authorship", async ({
   page,
 }) => {
-  let releaseTutor!: () => void,
-    tutorQueued = false,
-    groupRequested = false;
-  const tutorGate = new Promise<void>((resolve) => {
-    releaseTutor = resolve;
-  });
   await page.route("**/api/status", (route) =>
     route.fulfill({
       json: {
         mode: "study-mode",
-        label: "Synthetic conversation fixture",
-        detail: "Not a native-service verification",
-        capabilities: ["generate", "tutor", "group", "complete", "assess"],
+        label: "Synthetic retained API",
+        detail: "No real AI",
+        capabilities: ["generate", "group"],
       },
     }),
   );
   await page.route("**/api/bridge", async (route) => {
     const { operation, payload } = route.request().postDataJSON();
-    if (operation === "generate") {
-      const c = payload.contract;
-      await route.fulfill({
+    if (operation === "generate")
+      return route.fulfill({
         json: {
-          title: "Synthetic group workspace",
-          prompt: "A fixture question with no supplied answer.",
+          title: "Synthetic group API task",
+          prompt: "A captured synthetic task",
           starter: "Original shared draft",
-          rubric: ["scope"],
-          contract: c,
-          scopeDefinitions: [
-            {
-              id: `${c.objectiveIds[0]}/D${c.depth}`,
-              objectiveId: c.objectiveIds[0],
-              depth: c.depth,
-              sourceScope: c.scopes[0],
-              facets: [
-                { id: "scope", description: "Complete synthetic scope" },
-              ],
-            },
-          ],
+          rubric: [],
+          contract: payload.contract,
         },
       });
-    } else if (operation === "tutor") {
-      tutorQueued = true;
-      await tutorGate;
-      await route.fulfill({
-        json: { text: "PRIVATE_TUTOR_REPLY", complete: false },
-      });
-    } else if (operation === "group") {
-      groupRequested = true;
-      expect(JSON.stringify(payload)).not.toContain("PRIVATE_TUTOR_");
-      expect(payload.speakers[0].profile.topics).toBeTruthy();
-      await route.fulfill({
-        json: {
-          requestId: payload.requestId,
-          sourceRevision: payload.sourceRevision,
-          messages: [
-            {
-              author: payload.speakers[0].id,
-              kind: "proposal",
-              text: "Proposed boundary check: consider an empty input. This is a candidate, not an executed test.",
-              refs: [payload.events.at(-1).seq],
-              patch: {
-                prefix: payload.workspace.length,
-                removed: "",
-                inserted: "\nNPC boundary candidate",
-              },
+    expect(operation).toBe("group");
+    expect(JSON.stringify(payload)).not.toContain("PRIVATE_TUTOR_");
+    return route.fulfill({
+      json: {
+        requestId: payload.requestId,
+        sourceRevision: payload.sourceRevision,
+        messages: [
+          {
+            author: payload.speakers[0].id,
+            kind: "proposal",
+            text: "Consider an empty input boundary; this is unvalidated.",
+            refs: [payload.events.at(-1).seq],
+            patch: {
+              prefix: payload.workspace.length,
+              removed: "",
+              inserted: "\nNPC boundary candidate",
             },
-          ],
-        },
-      });
-    } else
-      await route.fulfill({
-        status: 400,
-        json: { error: "Unexpected fixture operation" },
-      });
+          },
+        ],
+      },
+    });
   });
   await enterLegacyBuilding(page);
-  await openGameMenu(page);
-  await page.getByRole("button", { name: "Settings", exact: true }).click();
-  await page.getByText("ChatGPT handoff connection", { exact: true }).click();
-  await page
-    .getByRole("button", { name: "Start a live study run", exact: true })
-    .click();
-  // A new live run is a fresh force-field world; keep the legacy fixture.
-  // The live run starts once the last run's learning is saved.
-  await page.waitForFunction(
-    () => (window as any).__deadAir.game.study.profile === "live",
-  );
-  await useLegacyWorld(page);
-  await page.evaluate(() => {
-    const g = (window as any).__deadAir.game,
-      f = g.floors[0],
-      st = f.stations[0];
-    g.zombies = [];
-    g.nextSpawn = Number.MAX_SAFE_INTEGER;
-    for (const a of g.survivors.slice(2)) a.escaped = true;
-    Object.assign(g.survivors[0], { x: st.x, y: st.y });
-    const other = f.stations.find(
-      (s: any) => s.encounter === st.encounter && s.id !== st.id,
-    )!;
-    Object.assign(g.survivors[1], {
-      x: other.x,
-      y: other.y,
-      intent: st.encounter,
-      station: other.id,
-      thought: 10,
-      floor: 0,
-    });
-  });
-  await page.locator("#world").focus();
-  await page.keyboard.press("e");
-  await expect(page.locator("#problem-title")).toHaveText(
-    "Synthetic group workspace",
-  );
-  await restoreTerminalMode(page, "tutor");
-  // The solo composer is labelled "Message Terminal AI".
-  await page.locator("#chat-input").fill("PRIVATE_TUTOR_QUESTION");
-  await page.locator("#chat-form button").click();
-  await expect.poll(() => tutorQueued).toBe(true);
-  // A private terminal-dialogue reply applies only while the room is still the
-  // learner's solo conversation, so it lands while the terminal is closed and
-  // nothing is displayed; the room then reopens as the shared group fixture.
-  await page.locator("#leave").click();
-  await expect(page.locator("#terminal")).toBeHidden();
-  releaseTutor();
-  await page.waitForFunction(() =>
-    (window as any).__deadAir.game.encounters["f0-room0"].tutor.some(
-      (m: any) => m.text === "PRIVATE_TUTOR_REPLY",
-    ),
-  );
-  await page.evaluate(async () => {
-    const g = (window as any).__deadAir.game,
-      e = g.encounters["f0-room0"],
-      a = g.survivors[1],
+  const result = await page.evaluate(async () => {
+    const d = (window as any).__deadAir,
+      g = d.game,
       root = "/src/";
-    const { openChat } = await import(/* @vite-ignore */ root + "ai.ts");
-    e.mode = "shared";
-    delete e.owner;
-    void openChat(g, e);
-    // Restored solo history temporarily releases group workers; re-establish
-    // the synthetic shared respondent for the shared terminal fixture.
-    a.intent = e.id;
-    a.thought = 10;
-    a.activity = "working";
+    const api = await import(root + "ai.ts"),
+      proposals = await import(root + "workspace-proposals.ts");
+    const e = g.encounters["f0-room0"],
+      stations = g.floors[0].stations.filter((s: any) => s.encounter === e.id);
+    g.study.profile = "live";
+    g.paused = true;
+    g.zombies = [];
+    g.survivors = g.survivors.slice(0, 2);
+    Object.assign(g.survivors[0], {
+      x: stations[0].x,
+      y: stations[0].y,
+      station: stations[0].id,
+    });
+    Object.assign(g.survivors[1], {
+      x: stations[1].x,
+      y: stations[1].y,
+      station: stations[1].id,
+      intent: e.id,
+      activity: "studying",
+      thought: 10,
+    });
+    await api.ensureProblem(g, e, d.roadmap);
+    api.recordAttributedMessage(
+      g,
+      e,
+      "tutor",
+      "Terminal AI",
+      "tutor",
+      "PRIVATE_TUTOR_REPLY",
+      "study-mode",
+    );
+    await api.send(g, e, "group", "Propose a boundary check", d.roadmap);
+    const p = e.proposals?.[0];
+    if (!p) throw Error(e.error ?? "No synthetic proposal returned");
+    const before = e.workspace;
+    api.presentMessages(g, e, "group");
+    proposals.presentWorkspaceProposal(g, e, p.id);
+    proposals.reviewWorkspaceProposal(g, e, p.id, "apply");
+    return {
+      before,
+      after: e.workspace,
+      author: e.history.filter((h: any) => h.kind === "edit").at(-1).author,
+      privateShown: e.tutor[0].presented !== undefined,
+      evidence: g.study.learner.evidence.length,
+      state: p.state,
+    };
   });
-  await page.locator("#world").focus();
-  await page.keyboard.press("e");
-  await expect(page.locator("#conversation-title")).toHaveText("Group chat");
-  expect(
-    await page.evaluate(
-      () =>
-        (window as any).__deadAir.game.encounters["f0-room0"].tutor.find(
-          (m: any) => m.text === "PRIVATE_TUTOR_REPLY",
-        ).presented === undefined,
-    ),
-  ).toBe(true);
-  await expect(page.locator("#messages")).not.toContainText(
-    "PRIVATE_TUTOR_REPLY",
-  );
-  await page
-    .getByRole("textbox", { name: "Message", exact: true })
-    .fill("Can someone propose a boundary check?");
-  await page.locator("#chat-form button").click();
-  await expect(page.locator("#messages")).toContainText(
-    "not executed or validated",
-  );
-  expect(groupRequested).toBe(true);
-  await expect(page.locator("#workspace")).toHaveValue("Original shared draft");
-  await page.screenshot({
-    path: "test-results/group-proposal.png",
-    fullPage: false,
+  expect(result).toEqual({
+    before: "Original shared draft",
+    after: "Original shared draft\nNPC boundary candidate",
+    author: "npc-0",
+    privateShown: false,
+    evidence: 0,
+    state: "applied",
   });
-  expect(
-    await page.evaluate(() => {
-      const g = (window as any).__deadAir.game,
-        e = g.encounters["f0-room0"];
-      return {
-        evidence: g.study.learner.evidence.length,
-        proposalAuthor: e.history.find((h: any) => h.kind === "npc-proposal")
-          .author,
-        privateShown:
-          e.tutor.find((m: any) => m.text === "PRIVATE_TUTOR_REPLY")
-            .presented !== undefined,
-      };
-    }),
-  ).toEqual({ evidence: 0, proposalAuthor: "npc-0", privateShown: false });
-  await restoreTerminalMode(page, "tutor");
-  await expect(page.locator("#messages")).toContainText("PRIVATE_TUTOR_REPLY");
-  expect(
-    await page.evaluate(
-      () =>
-        (window as any).__deadAir.game.encounters["f0-room0"].tutor.find(
-          (m: any) => m.text === "PRIVATE_TUTOR_REPLY",
-        ).presented !== undefined,
-    ),
-  ).toBe(true);
-  await restoreTerminalMode(page, "group");
-  const candidate = page.locator("#workspace-proposals details").first();
-  await candidate.locator("summary").click();
-  await expect(candidate).toContainText("NPC boundary candidate");
-  await expect(page.locator("#workspace")).toHaveValue("Original shared draft");
-  await candidate
-    .getByRole("button", { name: "Apply NPC edit", exact: true })
-    .click();
-  await expect(page.locator("#workspace")).toHaveValue(
-    "Original shared draft\nNPC boundary candidate",
-  );
-  await expect(page.locator("#revision")).toContainText("v1");
-  expect(
-    await page.evaluate(() => {
-      const g = (window as any).__deadAir.game,
-        e = g.encounters["f0-room0"];
-      return {
-        author: e.history.find((h: any) => h.kind === "edit").author,
-        evidence: g.study.learner.evidence.length,
-        applied: e.proposals[0].state,
-      };
-    }),
-  ).toEqual({ author: "npc-0", evidence: 0, applied: "applied" });
-  await page.screenshot({
-    path: "test-results/reviewed-npc-edit.png",
-    fullPage: false,
-  });
-  await restoreTerminalMode(page, "group");
-  await page.evaluate(() => {
-    const g = (window as any).__deadAir.game,
-      a = g.survivors[1];
-    a.intent = "f0-room0";
-    a.thought = 10;
-    a.activity = "working";
-  });
-  await page
-    .getByRole("textbox", { name: "Message", exact: true })
-    .fill("Suggest another concrete edit for this revision.");
-  await page.locator("#chat-form button").click();
-  await expect(page.locator("#workspace-proposals details")).toHaveCount(2);
-  await page.locator("#workspace").fill("newer human workspace");
-  const stale = page.locator("#workspace-proposals details").nth(1);
-  await stale.locator("summary").click();
-  await expect(stale).toContainText("stale");
-  await expect(
-    stale.getByRole("button", { name: "Apply NPC edit", exact: true }),
-  ).toBeDisabled();
-  await stale
-    .getByRole("button", { name: "Dismiss candidate", exact: true })
-    .click();
-  await expect(stale).toContainText("dismissed");
-  await expect(page.locator("#workspace")).toHaveValue("newer human workspace");
-  await openGameMenu(page);
-  await page.getByRole("button", { name: "Save run", exact: true }).click();
-  await expect(page.locator("#notice")).toContainText("Run saved locally");
-  await page.locator("#resume-game").click();
-  await page.reload();
-  await page.waitForFunction(() => !!(window as any).__deadAir);
-  await page.locator("#world").focus();
-  await page.keyboard.press("e");
-  await expect(page.locator("#workspace")).toHaveValue("newer human workspace");
-  await expect(page.locator("#workspace-proposals")).toContainText(
-    "applied as v1",
-  );
-  await expect(page.locator("#workspace-proposals")).toContainText("dismissed");
-  expect(
-    await page.evaluate(
-      () => (window as any).__deadAir.game.study.learner.evidence.length,
-    ),
-  ).toBe(0);
+  await expect(page.locator("#terminal")).toBeHidden();
 });
-
-for (const provider of ["study-mode", "chatgpt-handoff"])
-  test(`retrospective ${provider} fixture: failed catch-up retries its captured range, keeps newer code and does not reroll after reload`, async ({
-    page,
-  }) => {
-    // Synthetic provider/work fixture only; this does not verify a native service.
-    const requests: any[] = [];
-    let release!: () => void;
-    const gate = new Promise<void>((resolve) => {
-      release = resolve;
-    });
-    await page.route("**/api/status", (route) =>
-      route.fulfill({
-        json: {
-          mode: provider,
-          label: "Synthetic retrospective fixture",
-          detail: "Not native-service validation",
-          capabilities: [
-            "generate",
-            "tutor",
-            "group",
-            "complete",
-            "assess",
-            "retrospective-group",
-          ],
-        },
-      }),
-    );
-    await page.route("**/api/bridge", async (route) => {
-      const { operation, payload } = route.request().postDataJSON();
-      if (operation === "generate") {
-        const c = payload.contract;
-        await route.fulfill({
-          json: {
-            title: "Retained-work fixture",
-            prompt: "A synthetic question with no supplied answer.",
-            starter: "Saved draft",
-            rubric: ["scope"],
-            contract: c,
-            scopeDefinitions: [
-              {
-                id: `${c.objectiveIds[0]}/D${c.depth}`,
-                objectiveId: c.objectiveIds[0],
-                depth: c.depth,
-                sourceScope: c.scopes[0],
-                facets: [{ id: "scope", description: "Synthetic scope" }],
-              },
-            ],
-          },
-        });
-      } else if (operation === "group" && payload.mode === "catch-up") {
-        expect(payload.provider).toBe(provider);
-        requests.push(payload);
-        if (requests.length === 1)
-          await route.fulfill({
-            status: 503,
-            json: { error: "Synthetic outage" },
-          });
-        else {
-          expect(JSON.stringify(payload)).toBe(JSON.stringify(requests[0]));
-          await gate;
-          await route.fulfill({
-            json: {
-              requestId: payload.requestId,
-              sourceRevision: payload.sourceRevision,
-              messages: [
-                {
-                  author: payload.speakers[0].id,
-                  kind: "observation",
-                  text: "A recorded contract note remained unvalidated. No tests were executed.",
-                  refs: [payload.range.refs[0]],
-                },
-              ],
-            },
-          });
-        }
-      } else
-        await route.fulfill({
-          status: 400,
-          json: { error: "Unexpected fixture request" },
-        });
-    });
-    await page.goto("/");
-    await page.getByRole("button", { name: "Enter the building" }).click();
-    await openGameMenu(page);
-    await page.getByRole("button", { name: "Settings", exact: true }).click();
-    await page.getByText("ChatGPT handoff connection", { exact: true }).click();
-    await page
-      .getByRole("button", { name: "Start a live study run", exact: true })
-      .click();
-    // A new live run is a fresh force-field world; keep the legacy fixture.
-    // The live run starts once the last run's learning is saved.
-    await page.waitForFunction(
-      () => (window as any).__deadAir.game.study.profile === "live",
-    );
-    await useLegacyWorld(page);
-    await page.evaluate(() => {
-      const g = (window as any).__deadAir.game,
-        e = g.encounters["f0-room0"],
-        st = g.floors[0].stations.find((s: any) => s.encounter === e.id);
-      g.zombies = [];
-      g.nextSpawn = Number.MAX_SAFE_INTEGER;
-      for (const a of g.survivors.slice(1)) a.escaped = true;
-      e.chatCursor = g.seq;
-      e.history = e.history.filter(
-        (h: any) => !["activity", "npc-thought"].includes(h.kind),
-      );
-      Object.assign(g.survivors[0], { x: st.x, y: st.y });
-    });
-    await page.locator("#world").focus();
-    await page.keyboard.press("e");
-    await expect(page.locator("#problem-title")).toHaveText(
-      "Retained-work fixture",
-    );
-    await page.evaluate(async () => {
-      const g = (window as any).__deadAir.game,
-        e = g.encounters["f0-room0"],
-        a = g.survivors[1];
-      const path = "/src/npc-cognition.ts",
-        cognition = await import(path);
-      a.milestone = 1;
-      cognition.recordNpcWork(g, e, a, false);
-    });
-    await restoreTerminalMode(page, "tutor");
-    await restoreTerminalMode(page, "group");
-    await expect(page.locator("#retry-catchup")).toBeVisible();
-    expect(requests).toHaveLength(1);
-    await page.locator("#work-log summary").click();
-    await expect(page.locator("#work-log-body")).toContainText(
-      "No code execution or validated correctness is claimed",
-    );
-    await page.locator("#workspace").fill("Newer draft after the outage");
-    await page.locator("#retry-catchup").click();
-    await expect.poll(() => requests.length).toBe(2);
-    const before = await page.evaluate(
-      () => (window as any).__deadAir.game.time,
-    );
-    await page.waitForTimeout(600);
-    expect(
-      await page.evaluate(() => (window as any).__deadAir.game.time),
-    ).toBeGreaterThan(before + 0.3);
-    release();
-    await expect(page.locator("#messages")).toContainText("through draft v0");
-    await expect(page.locator("#messages")).toContainText(
-      "summary shown now, not prior dialogue",
-    );
-    await expect(page.locator("#workspace")).toHaveValue(
-      "Newer draft after the outage",
-    );
-    const count = await page.evaluate(
-      () => (window as any).__deadAir.game.encounters["f0-room0"].group.length,
-    );
-    await restoreTerminalMode(page, "tutor");
-    await restoreTerminalMode(page, "group");
-    expect(requests).toHaveLength(2);
-    expect(
-      await page.evaluate(
-        () =>
-          (window as any).__deadAir.game.encounters["f0-room0"].group.length,
-      ),
-    ).toBe(count);
-    await page.screenshot({
-      path: "test-results/retrospective-work-log.png",
-      fullPage: false,
-    });
-    await page.locator("#leave").click();
-    await openGameMenu(page);
-    await page.getByRole("button", { name: "Save run", exact: true }).click();
-    await expect(page.locator("#notice")).toContainText("Run saved locally");
-    await page.locator("#resume-game").click();
-    await page.reload();
-    await page.waitForFunction(() => !!(window as any).__deadAir);
-    await page.locator("#world").focus();
-    await page.keyboard.press("e");
-    await expect(page.locator("#messages")).toContainText("through draft v0");
-    await expect(page.locator("#workspace")).toHaveValue(
-      "Newer draft after the outage",
-    );
-    expect(
-      await page.evaluate(
-        () =>
-          (window as any).__deadAir.game.encounters["f0-room0"].group.find(
-            (m: any) => m.requestId?.startsWith("catchup-"),
-          ).provenance,
-      ),
-    ).toBe(
-      provider === "chatgpt-handoff"
-        ? "chatgpt-handoff-catch-up"
-        : "study-mode-catch-up",
-    );
-    expect(requests).toHaveLength(2);
-    expect(
-      await page.evaluate(
-        () => (window as any).__deadAir.game.study.learner.evidence.length,
-      ),
-    ).toBe(0);
-  });
 
 test("durable saves retain a large archive beyond localStorage capacity", async ({
   page,
@@ -1299,12 +953,17 @@ test("container workspace: real code execution preserves a captured revision whi
     await d.interact();
   });
   const code = "import time\ntime.sleep(.4)\nprint('captured code output')";
-  await page.locator("#workspace").fill(code);
   const before = await page.evaluate(() => (window as any).__deadAir.game.time);
-  await page.getByRole("button", { name: "Run python", exact: true }).click();
-  await expect(page.locator("#run-code")).toBeDisabled();
-  await page.locator("#workspace").fill("print('later edit')");
-  await page.locator("#leave").click();
+  await page.evaluate(async (code) => {
+    const d = (window as any).__deadAir,
+      root = "/src/";
+    const { edit } = await import(root + "ai.ts"),
+      { runWorkspace } = await import(root + "execution.ts");
+    const e = d.game.encounters["f0-room0"];
+    edit(d.game, e, code, e.revision, d.roadmap);
+    void runWorkspace(d.game, e, d.roadmap);
+    edit(d.game, e, "print('later edit')", e.revision, d.roadmap);
+  }, code);
   await expect(page.locator("#terminal")).toBeHidden();
   await expect
     // Docker inspection, creation and cleanup are outside the program's five-second
@@ -1330,12 +989,11 @@ test("container workspace: real code execution preserves a captured revision whi
   expect(result.receipt.executed).toBe(true);
   expect(result.receipt.exitCode).toBe(0);
   expect(result.receipt.stdout).toBe("captured code output\n");
-  await page.keyboard.press("KeyE");
-  await expect(page.locator("#workspace")).toHaveValue("print('later edit')");
-  await expect(page.locator("#execution-output")).toContainText(
-    "captured code output",
-  );
-  await page.locator("#leave").click();
+  expect(
+    await page.evaluate(
+      () => (window as any).__deadAir.game.encounters["f0-room0"].workspace,
+    ),
+  ).toBe("print('later edit')");
   await openGameMenu(page);
   await page.getByRole("button", { name: "Save run", exact: true }).click();
   await expect(page.locator("#notice")).toContainText("Run saved locally");
@@ -1483,9 +1141,10 @@ test("roadmap review preview: uploaded Markdown reports ancestry and protected c
   ).toBe(before);
 });
 
-test("audio and accessibility: real sound output, mute, stable reduced-motion canvas and intact Surge editing", async ({
+test("audio and accessibility: real sound output, mute, stable reduced-motion canvas and intact native study during Surge", async ({
   page,
 }) => {
+  await mockNativeStudy(page);
   await page.goto("/");
   await page.getByRole("button", { name: "Enter the building" }).click();
   const audio = await page.evaluate(async () => {
@@ -1626,15 +1285,16 @@ test("audio and accessibility: real sound output, mute, stable reduced-motion ca
   });
   await page.locator("#world").focus();
   await page.keyboard.press("e");
-  await expect(page.locator("#terminal")).toBeVisible();
-  await page
-    .locator("#chat-input")
-    .fill("draft remains intact during the Surge");
-  const prompt = await page.locator("#problem").textContent();
-  await page.locator("#chat-input").evaluate((element: HTMLTextAreaElement) => {
-    element.focus();
-    element.setSelectionRange(2, 8);
+  await expect(page.locator("#terminal")).toBeHidden();
+  const id = await page.evaluate(() => {
+    const g = (window as any).__deadAir.game;
+    return g.floors[0].stations[0].encounter as string;
   });
+  await expect
+    .poll(async () => (await nativeState(page, id)).session?.state)
+    .toBe("pending");
+  const captured = (await nativeState(page, id)).session.payloadJson;
+  await page.locator("#native-study-copy").focus();
   await page.evaluate(() => {
     const g = (window as any).__deadAir.game;
     g.surge.state = "warning";
@@ -1644,9 +1304,6 @@ test("audio and accessibility: real sound output, mute, stable reduced-motion ca
     "biological pulse",
   );
   await expect(page.locator("body")).toHaveClass(/reduced/);
-  const beforeColor = await page
-    .locator("#chat-input")
-    .evaluate((e) => getComputedStyle(e).color);
   await page.evaluate(() => {
     const g = (window as any).__deadAir.game;
     g.surge.state = "active";
@@ -1657,20 +1314,8 @@ test("audio and accessibility: real sound output, mute, stable reduced-motion ca
   await expect(page.locator("#world-caption")).toContainText(
     "horde intensified",
   );
-  const activeColor = await page
-    .locator("#chat-input")
-    .evaluate((e) => getComputedStyle(e).color);
-  expect(activeColor).not.toBe(beforeColor);
-  await expect(page.locator("#chat-input")).toHaveValue(
-    "draft remains intact during the Surge",
-  );
-  await expect(page.locator("#chat-input")).toBeFocused();
-  expect(
-    await page
-      .locator("#chat-input")
-      .evaluate((e: HTMLTextAreaElement) => [e.selectionStart, e.selectionEnd]),
-  ).toEqual([2, 8]);
-  await expect(page.locator("#problem")).toHaveText(prompt!);
+  expect((await nativeState(page, id)).session.payloadJson).toBe(captured);
+  await expect(page.locator("#native-study-copy")).toBeFocused();
   await page.screenshot({
     path: "test-results/surge-accessibility.png",
     fullPage: false,
@@ -1685,15 +1330,8 @@ test("audio and accessibility: real sound output, mute, stable reduced-motion ca
   await expect(page.locator("#world-caption")).not.toContainText(
     "horde intensified",
   );
-  expect(
-    await page
-      .locator("#chat-input")
-      .evaluate((e) => getComputedStyle(e).color),
-  ).toBe(beforeColor);
-  await expect(page.locator("#chat-input")).toBeFocused();
-  await expect(page.locator("#chat-input")).toHaveValue(
-    "draft remains intact during the Surge",
-  );
+  expect((await nativeState(page, id)).session.payloadJson).toBe(captured);
+  await expect(page.locator("#native-study-copy")).toBeFocused();
 });
 
 test("equipment UI: readable effects, no wasted healing or blocked shots, physical door access and saved charges", async ({
@@ -1870,158 +1508,6 @@ test("equipment UI: readable effects, no wasted healing or blocked shots, physic
   });
 });
 
-for (const provider of ["study-mode", "chatgpt-handoff"])
-  test(`observed team work ${provider}: artifact retry, inert notes, NPC edit attribution and reload without unsolicited dialogue`, async ({
-    page,
-  }) => {
-    let calls = 0;
-    let savedPayload: any;
-    await page.route("**/api/status", (route) =>
-      route.fulfill({
-        json: {
-          mode: provider,
-          label: "Synthetic team-work fixture",
-          detail: "Not native verification",
-          capabilities: ["materialize-work"],
-        },
-      }),
-    );
-    await page.route("**/api/bridge", async (route) => {
-      const { operation, payload } = route.request().postDataJSON();
-      expect(operation).toBe("materialize-work");
-      expect(payload.provider).toBe(provider);
-      expect(payload.autonomyAllowed).toBeUndefined();
-      calls++;
-      if (calls === 1) {
-        savedPayload = payload;
-        await route.fulfill({
-          status: 503,
-          json: { error: "Synthetic outage" },
-        });
-        return;
-      }
-      expect(payload).toEqual(savedPayload);
-      await route.fulfill({
-        json: {
-          requestId: payload.requestId,
-          sourceRevision: payload.sourceRevision,
-          notes: payload.work.map((w: any) => ({
-            workId: w.id,
-            author: w.actor,
-            refs: [w.seq],
-            text: "Concrete boundary note <script>window.badTeamNote=true</script>",
-            patch: { prefix: 1, removed: "b", inserted: "BOUNDARY" },
-          })),
-        },
-      });
-    });
-    await enterLegacyBuilding(page);
-    await page.evaluate(async () => {
-      const g = (window as any).__deadAir.game,
-        r = (window as any).__deadAir.roadmap,
-        moduleRoot = "/src/",
-        { eligible } = await import(moduleRoot + "curriculum.ts"),
-        { recordNpcWork } = await import(moduleRoot + "npc-cognition.ts"),
-        { checkBridge } = await import(moduleRoot + "ai.ts");
-      await checkBridge();
-      g.study.profile = "live";
-      g.study.learner.mode = "test";
-      g.zombies = [];
-      g.nextSpawn = Number.MAX_SAFE_INTEGER;
-      g.surge.anchor = 10000;
-      const e = g.encounters["f0-room0"],
-        ss = g.floors[0].stations.filter((s: any) => s.encounter === e.id),
-        a = g.survivors[1];
-      for (const b of g.survivors.slice(2)) b.escaped = true;
-      Object.assign(g.survivors[0], { x: ss[0].x, y: ss[0].y });
-      Object.assign(a, {
-        x: ss[1].x,
-        y: ss[1].y,
-        station: ss[1].id,
-        intent: e.id,
-        activity: "studying",
-        milestone: 1,
-        thought: 1,
-        role: "analyst",
-        social: 0.3,
-      });
-      e.problem = {
-        title: "Synthetic autonomous work",
-        prompt: "Examine the boundary",
-        starter: "abc",
-        rubric: ["fixture"],
-        provenance: "study-mode",
-        contract: eligible(r, g.study),
-      };
-      e.workspace = e.workspaceBase = "abc";
-      e.state = "in-progress";
-      recordNpcWork(g, e, a, false);
-    });
-    await page.locator("#world").focus();
-    await page.keyboard.press("e");
-    await expect(page.locator("#retry-team-work")).toBeVisible();
-    expect(calls).toBe(1);
-    const chat = await page.locator("#messages").textContent();
-    await page.waitForTimeout(500);
-    expect(calls).toBe(1);
-    await page.locator("#retry-team-work").click();
-    await expect(page.locator("#workspace-proposals")).toContainText(
-      "candidate for v0",
-    );
-    await expect(page.locator("#workspace")).toHaveValue("abc");
-    expect(calls).toBe(2);
-    expect(await page.locator("#messages").textContent()).toBe(chat);
-    expect(
-      await page.evaluate(
-        () =>
-          (window as any).__deadAir.game.encounters["f0-room0"].history.at(-1)
-            .presented,
-      ),
-    ).toBeUndefined();
-    await page.locator("#work-log summary").click();
-    await expect(page.locator("#work-log-body")).toContainText(
-      "Concrete boundary note <script>",
-    );
-    expect(
-      await page.evaluate(() => (window as any).badTeamNote),
-    ).toBeUndefined();
-    await page.locator("#workspace-proposals summary").click();
-    await page
-      .getByRole("button", { name: "Apply NPC edit", exact: true })
-      .click();
-    await expect(page.locator("#workspace")).toHaveValue("aBOUNDARYc");
-    expect(
-      await page.evaluate(() => {
-        const g = (window as any).__deadAir.game,
-          e = g.encounters["f0-room0"];
-        return {
-          author: e.history.at(-1).author,
-          ev: g.study.learner.evidence.length,
-          jobs: e.materializations.length,
-        };
-      }),
-    ).toEqual({ author: "npc-0", ev: 0, jobs: 1 });
-    await page.screenshot({ path: "test-results/team-work.png" });
-    await page.getByRole("button", { name: /Leave/ }).click();
-    await openGameMenu(page);
-    await page.getByRole("button", { name: "Save run", exact: true }).click();
-    await expect(page.locator("#notice")).toContainText("Run saved locally");
-    await page.locator("#resume-game").click();
-    await page.reload();
-    await page.waitForFunction(() => !!(window as any).__deadAir);
-    await page.locator("#world").focus();
-    await page.keyboard.press("e");
-    await expect(page.locator("#workspace")).toHaveValue("aBOUNDARYc");
-    expect(
-      await page.evaluate(
-        () =>
-          (window as any).__deadAir.game.encounters["f0-room0"]
-            .materializations[0].provider,
-      ),
-    ).toBe(provider);
-    expect(calls).toBe(2);
-  });
-
 test("practical observations: unreviewed output is inert, persists without changing ENV or academic status, and fits a narrow viewport", async ({
   page,
 }) => {
@@ -2079,9 +1565,9 @@ test("practical observations: unreviewed output is inert, persists without chang
     }),
   ).toBe(true);
   await page.waitForTimeout(400);
-  expect(
-    await page.evaluate(() => (window as any).__deadAir.game.time),
-  ).toBeGreaterThan(time);
+  expect(await page.evaluate(() => (window as any).__deadAir.game.time)).toBe(
+    time,
+  );
   const downloadPromise = page.waitForEvent("download");
   await page
     .getByRole("button", { name: "Download observation packet", exact: true })
@@ -2093,6 +1579,11 @@ test("practical observations: unreviewed output is inert, persists without chang
   expect(packet.execution).toBeUndefined();
   await page.locator("#environment-observations").scrollIntoViewIfNeeded();
   await page.screenshot({ path: "test-results/environment-observations.png" });
+  await page.locator("#close-inspector").click();
+  await page.locator("#resume-game").click();
+  await expect
+    .poll(() => page.evaluate(() => (window as any).__deadAir.game.time))
+    .toBeGreaterThan(time);
   await page.reload();
   await page.waitForFunction(() => !!(window as any).__deadAir);
   await openGameMenu(page);
@@ -2177,495 +1668,6 @@ test("environment packet survives an actual browser-storage write failure and ca
     ),
   ).toBe(packet.id);
 });
-
-test("shared reading and private tutoring preserve an exact question through delayed generation, NPC completion pressure and reload", async ({
-  page,
-}) => {
-  let release!: (v: void) => void,
-    queued = false;
-  const gate = new Promise<void>((resolve) => (release = resolve));
-  await page.route("**/api/status", (route) =>
-    route.fulfill({
-      json: {
-        mode: "study-mode",
-        label: "Synthetic lifecycle fixture",
-        detail: "Not native validation",
-        capabilities: [],
-      },
-    }),
-  );
-  await page.route("**/api/bridge", async (route) => {
-    const { operation, payload } = route.request().postDataJSON();
-    if (operation === "generate") {
-      queued = true;
-      await gate;
-      const c = payload.contract;
-      await route.fulfill({
-        json: {
-          title: "Synthetic held group question",
-          prompt: "Keep the exact reasoning problem while the horde advances.",
-          starter: "Original untouched starter",
-          rubric: ["fixture"],
-          contract: c,
-          scopeDefinitions: c.objectiveIds.map((id: string, i: number) => ({
-            id: `${id}/D${c.depth}`,
-            objectiveId: id,
-            depth: c.depth,
-            sourceScope: c.scopes[i],
-            facets: [{ id: "scope", description: "Synthetic scope" }],
-          })),
-        },
-      });
-    } else if (operation === "tutor")
-      await route.fulfill({
-        json: {
-          text: "Synthetic private guidance; no completed solution.",
-          complete: false,
-        },
-      });
-    else throw Error(`Unexpected lifecycle operation ${operation}`);
-  });
-  await enterLegacyBuilding(page);
-  await page.evaluate(async () => {
-    const g = (window as any).__deadAir.game,
-      root = "/src/",
-      { checkBridge } = await import(root + "ai.ts");
-    await checkBridge();
-    g.study.profile = "live";
-    g.study.learner.mode = "test";
-    g.zombies = [];
-    g.nextSpawn = Number.MAX_SAFE_INTEGER;
-    g.surge.anchor = 10000;
-    const e = g.encounters["f0-room0"],
-      f = g.floors[0],
-      ss = f.stations.filter((s: any) => s.encounter === e.id),
-      a = g.survivors[1];
-    f.furniture = [];
-    for (const b of g.survivors.slice(2)) b.escaped = true;
-    Object.assign(g.survivors[0], { x: ss[0].x, y: ss[0].y });
-    Object.assign(a, {
-      x: ss[1].x,
-      y: ss[1].y,
-      station: ss[1].id,
-      intent: e.id,
-      seen: ss.map((s: any) => s.id),
-      activity: "studying",
-      role: "analyst",
-      social: 0.3,
-      thought: 1,
-    });
-    e.npcProgress = 0;
-    e.contributors = [a.id];
-  });
-  await page.locator("#world").focus();
-  await page.keyboard.press("e");
-  await expect.poll(() => queued).toBe(true);
-  await page.evaluate(() => {
-    (window as any).__deadAir.game.encounters["f0-room0"].npcProgress = 1.1;
-  });
-  const before = await page.evaluate(() => (window as any).__deadAir.game.time);
-  await page.waitForTimeout(350);
-  expect(
-    await page.evaluate(() => {
-      const g = (window as any).__deadAir.game;
-      return {
-        state: g.encounters["f0-room0"].state,
-        engaged: g.encounters["f0-room0"].humanEngaged,
-        visits: g.study.visits.length,
-        time: g.time,
-      };
-    }),
-  ).toMatchObject({ state: "in-progress", engaged: true, visits: 0 });
-  expect(
-    await page.evaluate(() => (window as any).__deadAir.game.time),
-  ).toBeGreaterThan(before);
-  release();
-  await expect(page.locator("#problem-title")).toHaveText(
-    "Synthetic held group question",
-  );
-  await expect(page.locator("#workspace")).toHaveValue(
-    "Original untouched starter",
-  );
-  await restoreTerminalMode(page, "tutor");
-  await page
-    .locator("#chat-input")
-    .fill("Help me reason without writing a solution.");
-  await page.locator("#chat-form button").click();
-  await expect(page.locator("#messages")).toContainText(
-    "Synthetic private guidance",
-  );
-  await page.locator("#leave").click();
-  await openGameMenu(page);
-  await page.getByRole("button", { name: "Save run", exact: true }).click();
-  await expect(page.locator("#notice")).toContainText("Run saved locally");
-  await page.locator("#resume-game").click();
-  await page.reload();
-  await page.waitForFunction(() => !!(window as any).__deadAir);
-  await page.waitForTimeout(250);
-  expect(
-    await page.evaluate(() => {
-      const g = (window as any).__deadAir.game,
-        e = g.encounters["f0-room0"];
-      return {
-        state: e.state,
-        title: e.problem.title,
-        workspace: e.workspace,
-        evidence: g.study.learner.evidence.length,
-      };
-    }),
-  ).toEqual({
-    state: "in-progress",
-    title: "Synthetic held group question",
-    workspace: "Original untouched starter",
-    evidence: 0,
-  });
-  await page.locator("#world").focus();
-  await page.keyboard.press("e");
-  await expect(page.locator("#workspace")).toHaveValue(
-    "Original untouched starter",
-  );
-});
-
-test("observed NPC review finishes without idle generation or private-context rerolls and resumes for an actual shared edit", async ({
-  page,
-}) => {
-  let calls = 0;
-  const payloads: any[] = [];
-  await page.route("**/api/status", (route) =>
-    route.fulfill({
-      json: {
-        mode: "study-mode",
-        label: "Synthetic bounded-work fixture",
-        detail: "Not native validation",
-        capabilities: ["materialize-work"],
-      },
-    }),
-  );
-  await page.route("**/api/bridge", async (route) => {
-    const { operation, payload } = route.request().postDataJSON();
-    expect(operation).toBe("materialize-work");
-    calls++;
-    payloads.push(payload);
-    await route.fulfill({
-      json: {
-        requestId: payload.requestId,
-        sourceRevision: payload.sourceRevision,
-        notes: payload.work.map((w: any) => ({
-          workId: w.id,
-          author: w.actor,
-          text: "A tentative recorded review note; no validation or execution.",
-          refs: [w.seq],
-        })),
-      },
-    });
-  });
-  await enterLegacyBuilding(page);
-  await page.evaluate(async () => {
-    const d = (window as any).__deadAir,
-      g = d.game,
-      r = d.roadmap,
-      root = "/src/",
-      { eligible } = await import(root + "curriculum.ts"),
-      { registerScopes } = await import(root + "learner.ts"),
-      { checkBridge } = await import(root + "ai.ts");
-    await checkBridge();
-    g.study.profile = "live";
-    g.study.learner.mode = "test";
-    g.zombies = [];
-    g.nextSpawn = Number.MAX_SAFE_INTEGER;
-    g.surge.anchor = 10000;
-    const e = g.encounters["f0-room0"],
-      f = g.floors[0],
-      ss = f.stations.filter((s: any) => s.encounter === e.id),
-      a = g.survivors[1],
-      c = eligible(r, g.study);
-    f.furniture = [];
-    for (const b of g.survivors.slice(2)) b.escaped = true;
-    Object.assign(g.survivors[0], { x: ss[0].x, y: ss[0].y });
-    Object.assign(a, {
-      x: ss[1].x,
-      y: ss[1].y,
-      station: ss[1].id,
-      intent: e.id,
-      seen: ss.map((s: any) => s.id),
-      activity: "studying",
-      role: "analyst",
-      social: 0.3,
-      thought: 0,
-      milestone: 0,
-    });
-    e.problem = {
-      title: "Synthetic bounded review",
-      prompt: "A fixed fixture task",
-      starter: "",
-      rubric: ["fixture"],
-      provenance: "study-mode",
-      contract: c,
-      scopeDefinitions: c.objectiveIds.map((id: string, i: number) => ({
-        id: `${id}/D${c.depth}`,
-        objectiveId: id,
-        depth: c.depth,
-        sourceScope: c.scopes[i],
-        facets: [{ id: "scope", description: "Synthetic single facet" }],
-      })),
-    };
-    registerScopes(r, g.study.learner, e);
-    e.state = "in-progress";
-  });
-  await page.locator("#world").focus();
-  await page.keyboard.press("e");
-  await page.evaluate(
-    () => ((window as any).__deadAir.game.survivors[1].thought = 1000),
-  );
-  await expect.poll(() => calls).toBeGreaterThan(0);
-  // This Playwright runtime treats an async waitForFunction predicate's Promise
-  // as truthy. Poll the awaited browser evaluation and check cognition plus all
-  // materializations together, so ordinary unfinished stages are not "idle".
-  await expect
-    .poll(() =>
-      page.evaluate(async () => {
-        const root = "/src/",
-          { npcReasoningAvailable } = await import(root + "npc-cognition.ts"),
-          g = (window as any).__deadAir.game,
-          e = g.encounters["f0-room0"];
-        return (
-          !npcReasoningAvailable(e, g.survivors[1]) &&
-          e.materializations.every((j: any) => j.state === "applied") &&
-          e.npcWork.every((w: any) =>
-            e.materializations.some((j: any) => j.workIds.includes(w.id)),
-          )
-        );
-      }),
-    )
-    .toBe(true);
-  const settled = calls;
-  await page.evaluate(() => {
-    const g = (window as any).__deadAir.game,
-      e = g.encounters["f0-room0"];
-    e.tutor.push({
-      id: "private",
-      kind: "human",
-      author: "human",
-      text: "PRIVATE_SECRET_FOR_NO_REROLL",
-      seq: ++g.seq,
-      worldTime: g.time,
-      provenance: "live-human",
-    });
-    e.group.push({
-      id: "npc-followup",
-      kind: "npc",
-      author: "npc-0",
-      text: "An existing tentative note",
-      seq: ++g.seq,
-      worldTime: g.time,
-      provenance: "fixture",
-    });
-  });
-  await page.waitForTimeout(550);
-  expect(calls).toBe(settled);
-  expect(JSON.stringify(payloads)).not.toContain(
-    "PRIVATE_SECRET_FOR_NO_REROLL",
-  );
-  await page.locator("#workspace").fill("A new public workspace revision");
-  await expect.poll(() => calls).toBeGreaterThan(settled);
-  expect(payloads.at(-1).sourceRevision).toBe(1);
-  expect(JSON.stringify(payloads)).not.toContain(
-    "PRIVATE_SECRET_FOR_NO_REROLL",
-  );
-  expect(
-    await page.evaluate(
-      () => (window as any).__deadAir.game.study.learner.evidence.length,
-    ),
-  ).toBe(0);
-});
-
-for (const provider of ["study-mode", "chatgpt-handoff"])
-  for (const executable of [false, true])
-    test(`${executable ? "container workspace NPC" : "autonomous shared workspace"} ${provider}: NPC edits and submits only after departure, return exposes the accepted snapshot without human credit`, async ({
-      page,
-    }) => {
-      test.skip(
-        executable && process.env.RUN_CONTAINER_BROWSER !== "1",
-        "Requires enabled restricted Docker runner",
-      );
-      const acceptedCode = executable ? 'print("NPC runtime")' : "aBOUNDARYc";
-      let completed = 0;
-      await page.route("**/api/status", (route) =>
-        route.fulfill({
-          json: {
-            mode: provider,
-            label: "Synthetic autonomous fixture",
-            detail: "Not native verification",
-            capabilities: ["materialize-work", "autonomous-work"],
-          },
-        }),
-      );
-      await page.route("**/api/bridge", async (route) => {
-        const { operation, payload } = route.request().postDataJSON();
-        expect(payload.provider).toBe(provider);
-        if (operation === "materialize-work")
-          await route.fulfill({
-            json: {
-              requestId: payload.requestId,
-              sourceRevision: payload.sourceRevision,
-              notes: payload.work.map((w: any) => ({
-                workId: w.id,
-                author: w.actor,
-                refs: [w.seq],
-                text: "Tentative concrete candidate.",
-                patch: executable
-                  ? { prefix: 0, removed: "abc", inserted: acceptedCode }
-                  : { prefix: 1, removed: "b", inserted: "BOUNDARY" },
-                readyToSubmit: true,
-              })),
-            },
-          });
-        else {
-          expect(operation).toBe("complete");
-          expect(payload.submitter).toBe("npc-0");
-          if (executable) {
-            expect(payload.executions).toHaveLength(1);
-            expect(payload.executions[0].author).toBe("npc-0");
-            expect(payload.executions[0].receipt.executed).toBe(true);
-            expect(payload.executions[0].receipt.stdout).toBe("NPC runtime\n");
-          }
-          completed++;
-          await route.fulfill({
-            json: {
-              complete: true,
-              feedback: "Synthetic semantic acceptance",
-              qualified: ["npc-0"],
-            },
-          });
-        }
-      });
-      await enterLegacyBuilding(page);
-      await page.evaluate(
-        async ({ executable, provider }) => {
-          const { game: g, roadmap: r } = (window as any).__deadAir,
-            root = "/src/",
-            { eligible } = await import(root + "curriculum.ts"),
-            { recordNpcWork } = await import(root + "npc-cognition.ts"),
-            { checkBridge } = await import(root + "ai.ts");
-          await checkBridge();
-          g.study.profile = "live";
-          g.settings.handoffAutonomous = provider === "chatgpt-handoff";
-          g.study.learner.mode = "test";
-          if (executable) {
-            const { initialLearner, reconcileGates } = await import(
-              root + "learner.ts"
-            );
-            const l = initialLearner(r, "test");
-            for (const o of r.tracks.PY.objectives)
-              l.cells[o.id].states[0] = "P";
-            l.reviews = {};
-            reconcileGates(r, l);
-            g.study.learner = l;
-          }
-          g.zombies = [];
-          g.nextSpawn = Number.MAX_SAFE_INTEGER;
-          g.surge.anchor = 10000;
-          const e = g.encounters["f0-room0"],
-            ss = g.floors[0].stations.filter((s: any) => s.encounter === e.id),
-            a = g.survivors[1];
-          for (const b of g.survivors.slice(2)) b.escaped = true;
-          Object.assign(g.survivors[0], {
-            x: ss[0].x,
-            y: ss[0].y,
-            station: ss[0].id,
-          });
-          Object.assign(a, {
-            x: ss[1].x,
-            y: ss[1].y,
-            station: ss[1].id,
-            intent: e.id,
-            activity: "studying",
-            milestone: 1,
-            thought: 1,
-            role: "analyst",
-            social: 0.3,
-          });
-          e.problem = {
-            title: "Synthetic unattended workspace",
-            prompt: "Examine boundary",
-            starter: "abc",
-            rubric: ["fixture"],
-            provenance: provider,
-            contract: eligible(r, g.study),
-          };
-          if (executable) e.problem.runtime = { language: "python" };
-          e.workspace = e.workspaceBase = "abc";
-          e.state = "in-progress";
-          e.humanEngaged = true;
-          recordNpcWork(g, e, a, false);
-          // Human is physically seated before opening the terminal UI.
-        },
-        { executable, provider },
-      );
-      await page.locator("#world").focus();
-      await page.keyboard.press("e");
-      await expect(page.locator("#workspace-proposals")).toContainText(
-        "candidate for v0",
-      );
-      await expect(page.locator("#workspace")).toHaveValue("abc");
-      await page.waitForTimeout(500);
-      expect(completed).toBe(0);
-      const chatBefore = await page.evaluate(() =>
-        JSON.stringify(
-          (window as any).__deadAir.game.encounters["f0-room0"].group,
-        ),
-      );
-      await page.getByRole("button", { name: /Leave/ }).click();
-      await page.waitForFunction(
-        () =>
-          (window as any).__deadAir.game.encounters["f0-room0"].state ===
-          "consumed",
-      );
-      expect(completed).toBe(1);
-      expect(
-        await page.evaluate(() => {
-          const g = (window as any).__deadAir.game,
-            e = g.encounters["f0-room0"];
-          return {
-            author: e.submissions[0].author,
-            views: e.history.filter((h: any) => h.kind === "workspace-view")
-              .length,
-            visits: g.study.visits.length,
-            evidence: g.study.learner.evidence.length,
-            chat: JSON.stringify(e.group),
-          };
-        }),
-      ).toEqual({
-        author: "npc-0",
-        views: 0,
-        visits: 0,
-        evidence: 0,
-        chat: chatBefore,
-      });
-      await page.locator("#world").focus();
-      await page.keyboard.press("e");
-      await expect(page.locator("#workspace")).toHaveValue(acceptedCode);
-      await expect(page.locator("#workspace")).toHaveAttribute("readonly", "");
-      expect(
-        await page.evaluate(
-          () =>
-            (window as any).__deadAir.game.encounters[
-              "f0-room0"
-            ].history.filter((h: any) => h.kind === "workspace-view").length,
-        ),
-      ).toBe(1);
-      await page.getByRole("button", { name: /Leave/ }).click();
-      await openGameMenu(page);
-      await page.getByRole("button", { name: "Save run", exact: true }).click();
-      await expect(page.locator("#notice")).toContainText("Run saved locally");
-      await page.locator("#resume-game").click();
-      await page.reload();
-      await page.waitForFunction(() => !!(window as any).__deadAir);
-      await page.locator("#world").focus();
-      await page.keyboard.press("e");
-      await expect(page.locator("#workspace")).toHaveValue(acceptedCode);
-      expect(completed).toBe(1);
-    });
 
 for (const { storageFailure, provider } of [
   { storageFailure: false, provider: "study-mode" },

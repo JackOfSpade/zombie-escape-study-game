@@ -1,4 +1,4 @@
-import type { Provider } from "./model";
+import type { Encounter, Game, Provider } from "./model";
 /** Provider transport only; gameplay and learning remain in their owning modules. */
 export interface BridgeStatus {
   mode: "development" | Provider;
@@ -53,19 +53,56 @@ export const relayServes = (info: any) =>
   (info?.public?.terminalRelay?.activeSessions ??
     info?.public?.terminalRelay?.sessions ??
     0) > 0 || info?.public?.workerActive === true;
+/** Legacy handoff turns wait at most 30 minutes. */
+export const HANDOFF_TIMEOUT_MS = 30 * 60_000;
+/** A direct native ChatGPT study session may run a whole conversation. */
+export const DIRECT_STUDY_TIMEOUT_MS = 8 * 60 * 60_000;
+/** Routing metadata for one released native-chat study task. It stays outside
+ * the frozen payload so retries retain their original content and hash. */
+export interface NativeStudyScope {
+  runId: string;
+  encounterId: string;
+  questionRoom?: string;
+}
+export const nativeStudyScope = (
+  g: Pick<Game, "id">,
+  e: Pick<Encounter, "id" | "runId" | "questionRoom">,
+): NativeStudyScope => ({
+  runId: e.runId ?? g.id,
+  encounterId: e.id,
+  ...(e.questionRoom ? { questionRoom: e.questionRoom } : {}),
+});
+export interface BridgeRequestOptions {
+  /** Handoff wait budget; bounded to DIRECT_STUDY_TIMEOUT_MS. */
+  timeoutMs?: number;
+  nativeScope?: NativeStudyScope;
+}
 export async function bridgeRequest(
   operation: string,
   payload: unknown,
   onProgress?: (phase: HandoffProgress) => void,
+  options?: BridgeRequestOptions,
 ) {
   const provider = status().mode,
     handoff = provider === "chatgpt-handoff";
-  const signal = AbortSignal.timeout(handoff ? 30 * 60_000 : 45000);
+  const requested = options?.timeoutMs;
+  const budget =
+    typeof requested === "number" && Number.isFinite(requested) && requested > 0
+      ? Math.min(requested, DIRECT_STUDY_TIMEOUT_MS)
+      : HANDOFF_TIMEOUT_MS;
+  const signal = AbortSignal.timeout(handoff ? budget : 45000);
   let r = await fetch("/api/bridge", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     // Transport identity stays outside the frozen payload, preserving old hashes.
-    body: JSON.stringify({ operation, payload, provider }),
+    body: JSON.stringify({
+      operation,
+      payload,
+      provider,
+      ...(handoff && options?.nativeScope
+        ? { nativeScope: options.nativeScope }
+        : {}),
+    }),
     signal,
   });
   let data = await r.json();

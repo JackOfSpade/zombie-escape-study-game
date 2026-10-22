@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import { step } from "../src/engine";
+import { EQUIPMENT } from "../src/equipment";
 import { TestRunner } from "../src/gametest/runner";
 import { parseScenario } from "../src/gametest/schema";
 import type { Roadmap } from "../src/model";
@@ -17,13 +18,28 @@ const fixture = (id: string) =>
  * shove grew with frame rate: at 120 Hz four zombies slid this desk aside in
  * about 7 s and eight pushed the fridge out of its doorway. */
 function replay(id: string, hz: number, seconds: number) {
-  const g = new TestRunner(fixture(id), roadmap).game,
+  const scenario = fixture(id),
+    g = new TestRunner(scenario, roadmap).game,
     o = g.floors[0].furniture[0],
     start = { x: o.x, y: o.y, angle: o.angle ?? 0 };
   let passed = 0,
     shift = 0,
     turn = 0;
   for (let t = 0; t < seconds * hz; t++) {
+    // Replay the fixture's real audible lure at the corresponding display tick.
+    for (const action of scenario.actions)
+      if (
+        action.type === "decoy" &&
+        Math.round(((action.tick - 1) / 30) * hz) === t
+      )
+        g.effects.push({
+          kind: "decoy",
+          floor: action.floor,
+          x: action.x,
+          y: action.y,
+          radius: EQUIPMENT.decoy.radius,
+          until: g.time + EQUIPMENT.decoy.seconds,
+        });
     step(g, 1 / hz, { x: 0, y: 0, grab: false });
     g.survivors[0].hp = 100;
     shift = Math.max(shift, Math.hypot(o.x - start.x, o.y - start.y));

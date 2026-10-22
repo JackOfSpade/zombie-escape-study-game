@@ -142,6 +142,7 @@ export interface LearnerLedger {
   version: number;
   cycle: number;
   cycleOffset?: number;
+  careerFocus?: "product-feature-owner" | "full";
   cells: Record<string, LearningCell>;
   finalProgress?: Record<string, FinalProgress>;
   historicalReviews?: HistoricalFacetReview[];

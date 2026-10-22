@@ -21,6 +21,8 @@ import { createHandoffQueue } from "../scripts/chatgpt-handoff-queue.mjs";
 import { createHandoffRoutes } from "../scripts/chatgpt-handoff-routes.mjs";
 // @ts-expect-error Direct .mjs transport test.
 import { createStudyBridgeServer } from "../scripts/study-bridge-server.mjs";
+// @ts-expect-error Direct .mjs native relay integration.
+import { createTerminalRelayApp } from "../scripts/terminal-relay-app.mjs";
 const worker = "synthetic-worker-one",
   other = "synthetic-worker-two";
 const payload = (requestId: string) => ({
@@ -309,6 +311,70 @@ test("actual loopback relay queues ChatGPT work without claiming native Study Mo
     assert.deepEqual(await (await fetch(resultUrl)).json(), {
       text: "Explain the boundary.",
     });
+    assert.ok(status.capabilities.includes("direct-study"));
+    const nativeResponse = await post(
+      "/api/bridge",
+      {
+        operation: "tutor",
+        payload: {
+          requestId: "synthetic-http-native",
+          sessionId: "synthetic-http-native-session",
+          questionFingerprint: "synthetic-http-native-fingerprint",
+          mode: "terminal-direct",
+          probe: {
+            facets: [
+              { id: "stale-state", description: "Avoid stale UI state" },
+            ],
+          },
+          problem: {
+            title: "Synthetic native",
+            prompt: "Explain stale UI state",
+            rubric: [],
+          },
+          messages: [],
+        },
+      },
+      { Origin: "http://127.0.0.1:5173" },
+    );
+    assert.equal(nativeResponse.status, 202);
+    const { handoff: nativeReceipt } = await nativeResponse.json();
+    const nativeResultUrl = `${base}/api/bridge/result?id=${nativeReceipt.id}&hash=${nativeReceipt.hash}`;
+    assert.equal((await fetch(nativeResultUrl)).status, 202);
+    const legacyPull = await (
+      await post("/api/handoff/worker", { action: "get", worker }, auth)
+    ).json();
+    assert.equal(
+      legacyPull.status,
+      "waiting",
+      "legacy local worker cannot claim native questions",
+    );
+    const nativeApp = createTerminalRelayApp({ queue: q });
+    const grant = { linkId: "synthetic-http-owner" };
+    const nativeTurn = nativeApp.call(
+      "get_current_study_question",
+      {},
+      grant,
+    ).structuredContent;
+    assert.equal(nativeTurn.requestId, "synthetic-http-native");
+    nativeApp.call(
+      "finish_study_question",
+      {
+        relayId: nativeTurn.relayId,
+        turnId: nativeTurn.turnId,
+        questionFingerprint: nativeTurn.questionFingerprint,
+        text: "Synthetic completion sent.",
+        outcome: "gap",
+        transcript: [
+          { role: "user", text: "I don't know this stale-state case." },
+        ],
+        knowledge: { facets: [{ id: "stale-state", status: "gap" }] },
+      },
+      grant,
+    );
+    const nativeReturned = await (await fetch(nativeResultUrl)).json();
+    assert.equal(nativeReturned.complete, true);
+    assert.equal(nativeReturned.outcome, "gap");
+    assert.equal(nativeReturned.transcript[0].role, "user");
     const summary = await (await fetch(base + "/api/handoff/status")).text();
     assert.ok(!summary.includes("PRIVATE_SYNTHETIC"));
   } finally {

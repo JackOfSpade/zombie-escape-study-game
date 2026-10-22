@@ -40,6 +40,12 @@ import {
   baselineCheckpointValid,
   baselineReviewSuspended,
 } from "./observation-validity";
+import {
+  effectiveTarget,
+  focusMaxTier,
+  focusOf,
+  roleFocused,
+} from "./career-profile";
 import { externalResolutionRow } from "./roadmap-active-work";
 import { allocationCounters, formatIdentifier } from "./roadmap-identifiers";
 import { sourceSessionStatus } from "./roadmap-structure";
@@ -232,7 +238,7 @@ function incompleteTopics(
       r.tracks[t].objectives.some(
         (o) =>
           topic(o.id) === name &&
-          o.target >= depth &&
+          effectiveTarget(o, focusOf(l)) >= depth &&
           l.cells[o.id].states[depth - 1] !== "P",
       ),
   );
@@ -242,15 +248,84 @@ function incompleteTopics(
     );
   return topics;
 }
+type CarryLedger = LearnerLedger & {
+  careerCarryover?: { ledgerVersion: number; contract: Contract };
+};
+/** A pre-switch issued formal contract still valid at this ledger version. */
+function carryover(l: LearnerLedger) {
+  const c = (l as CarryLedger).careerCarryover;
+  return c && c.ledgerVersion === l.version ? c.contract : undefined;
+}
+/** Role-focused tracks stop at their profile depth, unless unfinished work is deeper. */
+function focusCap(l: LearnerLedger, t: Track) {
+  const cap = focusMaxTier(t, focusOf(l));
+  if (cap >= 4) return 4;
+  const carried = carryover(l);
+  return Math.min(
+    4,
+    Math.max(
+      cap,
+      ...l.attempts
+        .filter(
+          (a) =>
+            ["in-progress", "suspended"].includes(a.status) &&
+            a.contract.track === t,
+        )
+        .map((a) => a.contract.depth),
+      carried?.track === t ? carried.depth : 0,
+    ),
+  );
+}
+/** After restoring the full profile, re-add original topics a focused lap dropped. */
+export function restoreFullQueues(r: Roadmap, l: LearnerLedger) {
+  const saved = l as LearnerLedger & {
+    careerFullTrack?: LearnerLedger["tracks"]["PE"];
+  };
+  if (saved.careerFullTrack) {
+    l.tracks.PE = structuredClone(saved.careerFullTrack);
+    delete saved.careerFullTrack;
+    return;
+  }
+  // Older focused saves may lack a full-profile cursor. Rebuild only PE,
+  // keeping the curriculum's canonical order; Python never changed profile.
+  for (const t of ["PE"] as const) {
+    const s = l.tracks[t];
+    if (s.phase === "COMPLETE" && s.cleared < 4) s.phase = "REPAIR_VERIFY";
+    for (const name of incompleteTopics(r, l, t, s.tier))
+      if (!s.queue.includes(name)) s.queue.push(name);
+    const order = [
+      ...r.tracks[t].rotation,
+      ...finalRequirements(r, t)
+        .filter((d) => d.kind === "integration" && d.selected)
+        .map((d) => d.name),
+    ];
+    s.queue.sort((a, b) => order.indexOf(a) - order.indexOf(b));
+  }
+}
+/** Under a role focus a due review is scheduled only inside the profile's targets. */
+function focusReviewEligible(
+  r: Roadmap,
+  l: LearnerLedger,
+  v: { objectiveId: string; depth: number },
+) {
+  const track = v.objectiveId.split(":")[0] as Track;
+  const o = r.tracks[track]?.objectives.find((x) => x.id === v.objectiveId);
+  if (!o) return track !== "PE";
+  return effectiveTarget(o, focusOf(l)) >= v.depth;
+}
 export function reconcileGates(r: Roadmap, l: LearnerLedger) {
   ensureFinalProgress(r, l);
+  const focus = focusOf(l),
+    focused = roleFocused(focus);
   // Reopening a lower checkpoint suspends the later position without erasing it.
   for (const t of ["PY", "PE"] as const) {
     const state = l.tracks[t];
     for (let d = 1; d <= state.cleared; d++)
       if (
         r.tracks[t].objectives.some(
-          (o) => o.target >= d && l.cells[o.id].states[d - 1] !== "P",
+          (o) =>
+            effectiveTarget(o, focus) >= d &&
+            l.cells[o.id].states[d - 1] !== "P",
         )
       ) {
         state.cleared = d - 1;
@@ -272,7 +347,11 @@ export function reconcileGates(r: Roadmap, l: LearnerLedger) {
     for (const t of ["PY", "PE"] as const) {
       const s = l.tracks[t],
         other = l.tracks[t === "PY" ? "PE" : "PY"];
-      const limit = Math.min(4, other.cleared + 2);
+      const cap = focusCap(l, t);
+      // A role-profile completion below tier 4 is not original completion.
+      if (s.phase === "COMPLETE" && s.cleared < 4 && cap === 4)
+        s.phase = "REPAIR_VERIFY";
+      const limit = Math.min(cap, other.cleared + 2);
       if (s.tier > limit) {
         s.suspended.push({
           tier: s.tier,
@@ -293,7 +372,19 @@ export function reconcileGates(r: Roadmap, l: LearnerLedger) {
       }
       if (s.tier === 4 && incomplete.length && !s.queue.length)
         s.queue = [...incomplete];
-      if (!incomplete.length) {
+      if (
+        focused &&
+        t === "PE" &&
+        incomplete.length &&
+        !s.queue.some((name) => incomplete.includes(name))
+      )
+        s.queue.push(...incomplete.filter((name) => !s.queue.includes(name)));
+      if (!incomplete.length && cap < 4 && s.tier >= cap) {
+        // Role-profile end for this track: never an original tier-4 claim.
+        s.cleared = Math.max(s.cleared, s.tier);
+        s.phase = "COMPLETE";
+        s.queue = [];
+      } else if (!incomplete.length) {
         s.phase = "TIER_GATE";
         if (s.tier === 4 && curriculumReadiness(r, l, t).tier4RequirementsMet) {
           s.cleared = 4;
@@ -344,6 +435,8 @@ export function eligibleLearning(
   checkSource(r, l);
   const pending = l.attempts.find((a) => a.status === "in-progress");
   if (pending) return structuredClone(pending.contract);
+  const focus = focusOf(l),
+    focused = roleFocused(focus);
   const preferred: Track = (["PY", "PE", "PE"] as const)[studyRatioPosition(l)];
   for (const track of [
     preferred,
@@ -362,10 +455,18 @@ export function eligibleLearning(
                 v.objectiveId.startsWith(`${track}:`) &&
                 v.depth <= s.tier &&
                 v.due <= localDate(at) &&
-                !baselineReviewSuspended(r, l, v),
+                !baselineReviewSuspended(r, l, v) &&
+                (!focused || focusReviewEligible(r, l, v)),
             )
             .sort((a, b) => a.due.localeCompare(b.due))[0];
-    const nextTopic = s.queue[0] ?? incompleteTopics(r, l, track, s.tier)[0];
+    const focusedTrack = focused && track === "PE";
+    const incompleteNow = focusedTrack
+      ? incompleteTopics(r, l, track, s.tier)
+      : [];
+    const nextTopic = focusedTrack
+      ? (s.queue.find((name) => incompleteNow.includes(name)) ??
+        incompleteNow[0])
+      : (s.queue[0] ?? incompleteTopics(r, l, track, s.tier)[0]);
     const final =
       s.tier === 4
         ? finalRequirements(r, track).find(
@@ -379,7 +480,7 @@ export function eligibleLearning(
     const ordinary = r.tracks[track].objectives.find(
       (o) =>
         topic(o.id) === nextTopic &&
-        o.target >= s.tier &&
+        effectiveTarget(o, focus) >= s.tier &&
         l.cells[o.id].states[s.tier - 1] !== "P",
     );
     const id =
@@ -453,7 +554,7 @@ export function practiceContract(
   const o = r.tracks[track].objectives.find(
     (o) =>
       topic(o.id) === topicId &&
-      o.target >= s.tier &&
+      effectiveTarget(o, focusOf(l)) >= s.tier &&
       l.cells[o.id]?.states[s.tier - 1] !== "P",
   );
   if (!o) return undefined;
@@ -515,15 +616,22 @@ export function beginLearningAttempt(
     return existing;
   }
   const c = e.problem?.contract,
-    next = eligibleLearning(r, l, at);
-  if (
-    !c ||
-    c.track !== next.track ||
-    c.depth !== next.depth ||
-    c.review !== next.review ||
-    (c.kind ?? "checkpoint") !== (next.kind ?? "checkpoint") ||
-    JSON.stringify(c.objectiveIds) !== JSON.stringify(next.objectiveIds)
-  )
+    scheduled = eligibleLearning(r, l, at);
+  const matches = (n: Contract) =>
+    !!c &&
+    c.track === n.track &&
+    c.depth === n.depth &&
+    c.review === n.review &&
+    (c.kind ?? "checkpoint") === (n.kind ?? "checkpoint") &&
+    JSON.stringify(c.objectiveIds) === JSON.stringify(n.objectiveIds);
+  // A question issued before a career-focus switch keeps its contract.
+  const carried = carryover(l);
+  const next = matches(scheduled)
+    ? scheduled
+    : carried && matches(carried)
+      ? carried
+      : undefined;
+  if (!c || !next)
     throw Error("This encounter is not the scheduled learning contract.");
   if (l.attempts.some((a) => a.status === "in-progress"))
     throw Error("The unfinished visit stays bound to its original encounter.");
@@ -1269,10 +1377,25 @@ export function applyLearningAssessment(
         s = work.tracks[c.track];
       if (!c.review) {
         const visited = topic(c.objectiveIds[0]);
-        if (s.queue[0] !== visited)
-          throw Error("Visit would violate breadth order");
-        s.queue.shift();
-        if (!s.queue.length) {
+        if (roleFocused(focusOf(work)) && c.track === "PE") {
+          // Focused breadth skips deferred topics without dropping them.
+          const index = s.queue.indexOf(visited);
+          if (index >= 0) s.queue.splice(index, 1);
+          const required = incompleteTopics(r, work, c.track, s.tier);
+          if (!s.queue.some((name) => required.includes(name))) {
+            s.phase = "REPAIR_VERIFY";
+            s.lap++;
+            s.queue = required;
+          }
+        } else {
+          if (s.queue[0] !== visited)
+            throw Error("Visit would violate breadth order");
+          s.queue.shift();
+        }
+        if (
+          (!roleFocused(focusOf(work)) || c.track !== "PE") &&
+          !s.queue.length
+        ) {
           s.phase = "REPAIR_VERIFY";
           s.lap++;
           s.queue = incompleteTopics(r, work, c.track, s.tier);

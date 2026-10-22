@@ -1,4 +1,9 @@
 import { expect, test } from "@playwright/test";
+import {
+  flushNativeSave,
+  killHumanInStep,
+  mockNativeStudy,
+} from "./native-study-harness";
 const state = (page: import("@playwright/test").Page) =>
   page.evaluate(() => {
     const d = (window as any).__deadAir,
@@ -9,21 +14,24 @@ const state = (page: import("@playwright/test").Page) =>
       seq: g.seq,
       x: g.survivors[0].x,
       floorName: g.floors[1].name,
+      paused: !!g.paused,
+      npcs: g.survivors.slice(1).map((a: any) => `${a.floor}/${a.x}/${a.y}`),
+      zombies: g.zombies.map((z: any) => `${z.floor}/${z.x}/${z.y}`),
     };
   });
-test("after death the frozen building can be watched floor by floor with a free camera", async ({
+test("after combat death the live building can be watched, paused and reloaded with a free camera", async ({
   page,
 }) => {
+  await mockNativeStudy(page);
   await page.goto("/");
   await page.getByRole("button", { name: "Enter the building" }).click();
   await page.evaluate(() => {
-    const g = (window as any).__deadAir.game,
-      a = g.survivors[0];
+    const g = (window as any).__deadAir.game;
     g.zombies = [];
     g.nextSpawn = 999999;
-    Object.assign(a, { alive: false, hp: 0 });
-    g.status = "dead";
+    g.surge.anchor = Number.MAX_SAFE_INTEGER;
   });
+  await killHumanInStep(page);
   await expect(
     page.getByRole("button", { name: "Begin another run" }),
   ).toBeVisible();
@@ -92,12 +100,26 @@ test("after death the frozen building can be watched floor by floor with a free 
   await expect(page.locator("#start-card")).toBeHidden();
   await page.keyboard.press("Escape");
   await expect(page.locator("#start-card")).toBeVisible();
-  // Nothing in the world moved while spectating.
+  // Camera controls never move the dead human; the rest of the world lives.
   const after = await state(page);
-  expect(after.time).toBe(before.time);
-  expect(after.seq).toBe(before.seq);
+  expect(after.time).toBeGreaterThan(before.time);
   expect(after.x).toBe(before.x);
+  expect(after.npcs).not.toEqual(before.npcs);
+  expect(after.zombies).not.toEqual(before.zombies);
+  await page.locator("#pause-toggle").click();
+  await expect.poll(async () => (await state(page)).paused).toBe(true);
+  const paused = await state(page);
+  await page.waitForTimeout(300);
+  const still = await state(page);
+  expect(still.time).toBe(paused.time);
+  expect(still.npcs).toEqual(paused.npcs);
+  expect(still.zombies).toEqual(paused.zombies);
+  await page.locator("#resume-game").click();
+  await expect
+    .poll(async () => (await state(page)).time)
+    .toBeGreaterThan(paused.time);
   // The ended save still offers spectating after a reload.
+  await flushNativeSave(page);
   await page.reload();
   await page.getByRole("button", { name: "Watch the building" }).click();
   await expect(page.locator("#spectator")).toBeVisible();

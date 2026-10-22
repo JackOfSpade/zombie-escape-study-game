@@ -4,6 +4,7 @@ import {
   BRIDGE_OUTAGE_GRACE_MS,
   bridgeRequest,
   checkBridge,
+  nativeStudyScope,
   status,
 } from "../src/bridge-client";
 const reply = (mode = "study-mode") =>
@@ -33,6 +34,47 @@ test("overlapping bridge checks cannot let an old failure replace a newer connec
   fail(Error("Old request failed"));
   await older;
   assert.equal(status().mode, "study-mode");
+});
+
+test("native routing scope stays outside frozen content and follows the archived run", async (t) => {
+  const original = globalThis.fetch;
+  t.after(() => {
+    globalThis.fetch = original;
+  });
+  const nativeScope = nativeStudyScope(
+    { id: "new-run" },
+    { id: "station-a", runId: "original-run", questionRoom: "room-one" },
+  );
+  assert.deepEqual(nativeScope, {
+    runId: "original-run",
+    encounterId: "station-a",
+    questionRoom: "room-one",
+  });
+  assert.deepEqual(nativeStudyScope({ id: "new-run" }, { id: "station-b" }), {
+    runId: "new-run",
+    encounterId: "station-b",
+  });
+  const payload = { requestId: "captured", packet: { encounter: "station-a" } };
+  const frozen = JSON.stringify(payload);
+  for (const provider of ["chatgpt-handoff", "study-mode"]) {
+    globalThis.fetch = async (url, init) => {
+      if (url === "/api/status") return reply(provider);
+      assert.equal(url, "/api/bridge");
+      const body = JSON.parse(String(init?.body));
+      assert.equal(JSON.stringify(body.payload), frozen);
+      assert.deepEqual(
+        body.nativeScope,
+        provider === "chatgpt-handoff" ? nativeScope : undefined,
+      );
+      return Response.json({ accepted: true });
+    };
+    await checkBridge();
+    assert.deepEqual(
+      await bridgeRequest("assess", payload, undefined, { nativeScope }),
+      { accepted: true },
+    );
+  }
+  assert.equal(JSON.stringify(payload), frozen);
 });
 test("malformed bridge capabilities fail closed without retaining a native identity", async (t) => {
   const original = globalThis.fetch;

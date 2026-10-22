@@ -1,6 +1,9 @@
 import { defineConfig } from "vite";
 export default defineConfig({
-  server: { strictPort: true, proxy: { "/api": "http://127.0.0.1:4318" } },
+  server: {
+    strictPort: true,
+    proxy: { "/api": process.env.STUDY_BRIDGE_URL ?? "http://127.0.0.1:4318" },
+  },
   build: {
     rollupOptions: {
       input: { game: "index.html", lab: "lab.html" },

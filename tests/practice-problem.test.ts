@@ -466,3 +466,16 @@ test("practice questions show the player only the question, never scheduling int
   );
   assert.match(product.prompt, /export button/);
 });
+
+test("recipe browser-loading practice supplies network setup and DOM timing instead of testing protocol trivia", () => {
+  const p = devProblem(
+    createPlayableGame(9, r),
+    r,
+    productContract("PE:T04.1", 1),
+  );
+  assert.match(p.prompt, /DNS lookup and the HTTPS connection.*complete/);
+  assert.match(p.prompt, /waits until the DOM is ready \(DOMContentLoaded\)/);
+  assert.match(p.prompt, /heading.*first appear/);
+  assert.doesNotMatch(p.rubric.join(" "), /TCP|TLS|connection setup|handshake/);
+  assert.equal(p.rubric.length, 3);
+});

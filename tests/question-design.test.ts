@@ -174,17 +174,23 @@ test("handoff tutor instructions use focused questioning without breadth inflati
   assert.doesNotMatch(job.instructions, /establishes the most at once/);
 });
 
-test("probe stance keeps focused leverage, gap descent and clarification semantics", () => {
+test("probe stance keeps bounded reasoning, one-level clarification and explicit gaps", () => {
   assert.ok(TERMINAL_DIALOGUE_INSTRUCTION.includes(PROBE_STANCE));
   assert.match(PROBE_STANCE, /highest-leverage question/);
   assert.match(
     PROBE_STANCE,
-    /focused reasoning that genuinely entails prerequisites, never breadth inflation/,
+    /focused reasoning whose correct answer necessarily entails other facets already in the issued task/,
   );
-  assert.match(PROBE_STANCE, /mark unasked unrelated facets established/);
-  assert.match(PROBE_STANCE, /hidden full-project follow-up demands/);
+  assert.match(PROBE_STANCE, /leave all unasked siblings unknown/);
+  assert.match(
+    PROBE_STANCE,
+    /Do not widen the question or add hidden project demands/,
+  );
   assert.match(PROBE_STANCE, /mark Y and Z implied by X/);
-  assert.match(PROBE_STANCE, /probe Y and Z next, one level down/);
+  assert.match(
+    PROBE_STANCE,
+    /at most one directly relevant prerequisite question, one level down/,
+  );
   assert.match(PROBE_STANCE, /known parts never imply the apex/);
   assert.match(
     PROBE_STANCE,

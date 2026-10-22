@@ -3,6 +3,7 @@ import {
   reviewBaselineCorrections,
 } from "./baseline-correction";
 import { syncLearningView } from "./curriculum";
+import { roleFocused } from "./career-profile";
 import { sha256 } from "./digest";
 import {
   finalRequirements,
@@ -11,7 +12,7 @@ import {
 } from "./final-requirements";
 import { facetProofValid, independentProofValid } from "./historical-proof";
 import { importedMappingValid } from "./imported-proof";
-import { reconcileAttemptGates } from "./learner";
+import { reconcileAttemptGates, reconcileGates } from "./learner";
 import type {
   CellState,
   LearnerLedger,
@@ -45,6 +46,7 @@ import { parseRoadmapDocument } from "./roadmap-document";
 import {
   prepareRoadmapExport,
   roadmapSemanticFingerprint,
+  sourceLedgerProjection,
   type RoadmapExport,
 } from "./roadmap-export";
 import {
@@ -729,8 +731,9 @@ export async function compileRoadmapAdoption(
       suspended: structuredClone(s.suspended ?? []),
     };
   }
+  const sourceTracks = sourceLedgerProjection(r, l).tracks;
   for (const t of ["PY", "PE"] as const) {
-    const previous = l.tracks[t],
+    const previous = sourceTracks[t],
       next = work.tracks[t];
     const retained = [...previous.suspended];
     if (previous.tier > next.tier)
@@ -907,13 +910,29 @@ export async function compileRoadmapAdoption(
       gapIds[id] = c[0];
     }
   }
+  if (roleFocused(work.careerFocus)) {
+    // The reviewed document carries the full original scheduler. Replace the
+    // prior full cursor before narrowing active scheduling again; otherwise
+    // a later export/full restore would resurrect the pre-adoption cursor.
+    (
+      work as LearnerLedger & {
+        careerFullTrack?: LearnerLedger["tracks"]["PE"];
+      }
+    ).careerFullTrack = structuredClone(work.tracks.PE);
+    // One reconciliation makes only two tier sweeps. An adopted full cursor
+    // can start at D1 while retained role-core evidence already supports D3:
+    // four sweeps settle D1 -> D2 -> D3 -> profile completion and release PY D4
+    // under the unchanged shared lead limit. No cells or proof are created.
+    reconcileGates(r, work);
+    reconcileGates(r, work);
+  }
   const cache: RoadmapExport = {
     content: p.canonical,
     hash: receipt.canonicalHash,
     revision: parsed.revision,
     parentHash: inspectMergedDocument(p.canonical).field("parent_file_sha256"),
     ledgerVersion: work.version,
-    fingerprint: await roadmapSemanticFingerprint(work),
+    fingerprint: await roadmapSemanticFingerprint(work, r),
     gapIds,
   };
   // Reuse the full export validator against an exact cache hit. This verifies
@@ -990,7 +1009,9 @@ export function reconcileRoadmap(
             context: {
               cycle: l.cycle,
               cycleOffset: l.cycleOffset,
-              tracks: l.tracks,
+              // The complete file and its gate review use the original
+              // curriculum; active role-profile ceilings are not full gates.
+              tracks: sourceLedgerProjection(r, l).tracks,
               reviews: l.reviews,
               retentionHistory: l.retentionHistory,
               scopes: l.scopes,

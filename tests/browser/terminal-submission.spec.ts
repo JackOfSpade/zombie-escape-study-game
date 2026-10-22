@@ -1,185 +1,86 @@
-import { expect, test, type Page } from "@playwright/test";
-import { writeFile } from "node:fs/promises";
-async function openFixture(page: Page, mode: "solo" | "shared") {
-  await page.goto("/");
-  await page.getByRole("button", { name: "Enter the building" }).click();
-  await page.evaluate(async (mode) => {
-    const root = "/src/";
-    const { ensureProblem } = await import(/* @vite-ignore */ root + "ai.ts");
-    const r = await (await fetch("/curriculum.json")).json();
-    const g = (window as any).__deadAir.game,
-      st = g.floors[0].stations[0],
-      e = g.encounters[st.encounter];
-    for (const a of g.survivors.slice(1)) a.escaped = true;
-    g.zombies = [];
-    Object.assign(g.survivors[0], { x: st.x, y: st.y });
-    await ensureProblem(g, e, r);
-    e.mode = mode;
-    // Legacy shared-save fixture: fresh worlds now give each station a solo puzzle.
-    if (mode === "shared") g.floors[0].stations[1].encounter = e.id;
-    if (mode === "solo") e.owner = "human";
-    e.problem.title = "Synthetic answer review";
-    e.problem.prompt =
-      "Explain a fictional sensor's behavior and one boundary worth checking.";
-  }, mode);
-  await page.locator("#world").focus();
-  await page.keyboard.press("e");
-  await expect(
-    page.locator(mode === "solo" ? "#chat-input" : "#workspace"),
-  ).toBeVisible();
-}
-test("solo terminal uses one @study conversation, exact retry and one key reward without a submission box", async ({
+import { expect, test } from "@playwright/test";
+import {
+  enterNativeGame,
+  flushNativeSave,
+  mockNativeStudy,
+  nativeState,
+  openNativeQuestion,
+} from "./native-study-harness";
+
+test("native question retries the exact captured task and announces one key on the game canvas", async ({
   page,
 }) => {
+  const relay = await mockNativeStudy(page);
   const errors: string[] = [];
-  page.on("pageerror", (e) => errors.push(e.message));
-  let connected = false,
-    calls = 0,
-    release!: () => Promise<void>;
-  const requests: any[] = [];
-  await page.route("**/api/status", (route) =>
-    route.fulfill({
-      json: {
-        mode: connected ? "chatgpt-handoff" : "development",
-        label: "Synthetic",
-        detail: "No external AI",
-        capabilities: connected ? ["tutor"] : [],
-      },
-    }),
-  );
-  await page.route("**/api/bridge", async (route) => {
-    const request = route.request().postDataJSON();
-    requests.push(request);
-    expect(request.operation).toBe("tutor");
-    calls++;
-    if (calls === 1)
-      await new Promise<void>((resolve) => {
-        release = async () => {
-          await route.fulfill({
-            json: {
-              text: "Which reading leaves when the window shifts?",
-              complete: false,
-            },
-          });
-          resolve();
-        };
-      });
-    else
-      await route.fulfill({
-        json: {
-          text: "Solved: your reasoning covers the question.",
-          complete: true,
-        },
-      });
-  });
-  await openFixture(page, "solo");
+  page.on("pageerror", (error) => errors.push(error.message));
+  await enterNativeGame(page);
+  const id = await openNativeQuestion(page);
+  await expect.poll(() => relay.calls.length).toBe(1);
+  const payload = relay.calls[0].payload;
+  await expect(page.locator("#chat-input")).toBeHidden();
   await expect(page.locator("#workspace")).toBeHidden();
-  await expect(
-    page.getByRole("button", { name: "Submit answer", exact: true }),
-  ).toBeHidden();
-  await expect(page.locator("#conversation-title")).toHaveText("Terminal AI");
-  await expect(page.locator("#problem")).toContainText("fictional sensor");
-  await page.locator("#chat-input").fill("My first prediction");
-  await page.locator("#chat-input").press("Enter");
-  await expect(page.locator("#messages")).toContainText("My first prediction");
-  await expect(page.locator("#tutor-request-status")).toContainText(
-    "Reconnect",
-  );
-  expect(calls).toBe(0);
-  connected = true;
-  await page.evaluate(async () => {
-    const root = "/src/";
-    const { checkBridge } = await import(/* @vite-ignore */ root + "ai.ts");
-    await checkBridge();
+  await expect(page.locator("#terminal")).toBeHidden();
+  await expect(page.locator("body")).not.toHaveClass(/terminal-open/);
+  relay.finish(payload.requestId, "solved", {
+    questionFingerprint: "wrong-question",
   });
-  await page
-    .getByRole("button", { name: "Retry saved private question" })
-    .click();
-  await expect(page.locator("#tutor-request-status")).toContainText(
-    "Waiting for a reply",
+  await expect(page.locator("#native-study-retry")).toBeVisible();
+  const interrupted = await nativeState(page, id);
+  expect(interrupted.keys).toBe(0);
+  expect(interrupted.submissions).toBe(0);
+  expect(interrupted.tutor).toHaveLength(0);
+  relay.finish(payload.requestId);
+  await page.locator("#native-study-retry").click();
+  await expect
+    .poll(async () => (await nativeState(page, id)).session.state)
+    .toBe("applied");
+  expect(relay.calls).toHaveLength(2);
+  expect(relay.calls[1].payload).toEqual(payload);
+  await expect(page.locator("#reward-toast")).toBeVisible();
+  await expect(page.locator("#reward-toast")).toHaveText("Key granted");
+  await expect(page.locator("#hud-keys")).toHaveText("1 key");
+  await expect(page.locator("#native-study-status")).toContainText(
+    "Question complete",
   );
-  await expect(page.locator("#chat-form button")).toBeDisabled();
-  await release();
-  await expect(page.locator("#messages")).toContainText("Which reading leaves");
-  await expect(page.locator("#chat-form button")).toBeEnabled();
-  await page.locator("#chat-input").fill("The outgoing reading is removed");
-  await page.locator("#chat-input").press("Shift+Enter");
-  await page
-    .locator("#chat-input")
-    .pressSequentially("and the incoming reading is added.");
-  await page.screenshot({ path: "test-results/terminal-chat-desktop.png" });
+  const completed = await nativeState(page, id);
+  expect(completed.keys).toBe(1);
+  expect(completed.submissions).toBe(1);
   await page.setViewportSize({ width: 390, height: 844 });
-  await page.screenshot({
-    path: "test-results/terminal-chat-mobile.png",
-    fullPage: true,
-  });
   expect(
     await page.evaluate(
       () => document.documentElement.scrollWidth <= innerWidth,
     ),
   ).toBe(true);
-  await expect(page.locator("#reward-toast")).toBeHidden();
-  await expect(page.locator("#dialogue-reward")).toBeHidden();
-  await page.locator("#chat-input").press("Enter");
-  await expect(page.locator("#dialogue-status")).toContainText("Solved");
-  await expect(page.locator("#messages")).toContainText(
-    "Solved: your reasoning",
-  );
-  // The granted key is announced where the player is looking, not only as a
-  // changed HUD number: a "Key granted" pill over the world, a pulse on the
-  // count and a line in the conversation panel. Totals and stairs are not
-  // repeated; the HUD and the map already show them.
-  await expect(page.locator("#reward-toast")).toBeVisible();
-  await expect(page.locator("#reward-toast")).toHaveText("Key granted");
-  await expect(page.locator("#hud-keys")).toHaveText("1 key");
-  await expect(page.locator("#hud-keys")).toHaveClass(/gained/);
-  await expect(page.locator("#dialogue-reward")).toHaveText("Key granted");
-  await page.screenshot({ path: "test-results/key-granted.png" });
-  expect(calls).toBe(2);
-  for (const request of requests) {
-    expect(request.payload.mode).toBe("terminal-dialogue");
-    expect(request.payload.prompt).toMatch(/^@study\n/);
-    expect(request.payload.studyPrompt).toBe("@study");
-    expect(request.payload.curriculum.length).toBeGreaterThan(100);
-    expect(request.payload.progressContext.length).toBeGreaterThan(100);
-  }
-  expect(requests[1].payload.messages.length).toBe(3);
-  const result = await page.evaluate(() => {
-    const g = (window as any).__deadAir.game;
-    const e = g.encounters[g.floors[0].stations[0].encounter];
-    return { keys: g.survivors[0].keys, submissions: e.submissions.length };
-  });
-  expect(result).toEqual({ keys: 1, submissions: 1 });
-  // Leaving the terminal clears its line; the toast times out on its own and
-  // a reload never re-announces a key the player already has.
-  await page.locator("#leave").click();
-  await expect(page.locator("#dialogue-reward")).toBeHidden();
-  await expect(page.locator("#reward-toast")).toBeHidden({ timeout: 10_000 });
+  await expect(page.locator("#terminal")).toBeHidden();
+  await flushNativeSave(page);
   await page.reload();
   await expect(page.locator("#hud-keys")).toHaveText("1 key");
-  await page.waitForTimeout(600);
   await expect(page.locator("#reward-toast")).toBeHidden();
+  expect((await nativeState(page, id)).submissions).toBe(1);
+  expect(relay.calls).toHaveLength(2);
   expect(errors).toEqual([]);
 });
-test("shared terminal presents only group chat and supplies its current draft without private tutor history", async ({
+
+test("a legacy shared question uses native private study and keeps private history out of public group requests", async ({
   page,
 }) => {
+  const relay = await mockNativeStudy(page);
   let group: any;
   await page.route("**/api/status", (route) =>
     route.fulfill({
       json: {
         mode: "chatgpt-handoff",
-        label: "Synthetic browser transport",
+        label: "Synthetic",
         detail: "No external AI",
-        capabilities: ["group"],
+        capabilities: ["tutor", "group", "direct-study"],
       },
     }),
   );
   await page.route("**/api/bridge", async (route) => {
-    const r = route.request().postDataJSON();
-    expect(r.operation).toBe("group");
-    group = r.payload;
-    await route.fulfill({
+    const body = route.request().postDataJSON();
+    if (body.operation !== "group") return route.fallback();
+    group = body.payload;
+    return route.fulfill({
       json: {
         requestId: group.requestId,
         sourceRevision: group.sourceRevision,
@@ -187,49 +88,56 @@ test("shared terminal presents only group chat and supplies its current draft wi
           {
             author: group.speakers[0].id,
             kind: "question",
-            text: "What changes in the current draft?",
+            text: "What changes in the current shared draft?",
             refs: [],
           },
         ],
       },
     });
   });
-  await openFixture(page, "shared");
-  await expect(page.locator("#conversation-title")).toHaveText("Group chat");
-  await expect(page.locator("[data-tab]")).toHaveCount(0);
-  await page.locator("#workspace").fill("Shared synthetic draft");
-  await page.evaluate(async () => {
-    const root = "/src/",
-      { claimStation } = await import(root + "engine.ts"),
-      { npcCanRespond } = await import(root + "ai.ts"),
-      g = (window as any).__deadAir.game,
-      e = g.encounters["f0-room0"],
-      a = g.survivors[1],
-      station = g.floors[0].stations[1];
+  await page.goto("/");
+  await page.getByRole("button", { name: "Enter the building" }).click();
+  const id = await page.evaluate(async () => {
+    const d = (window as any).__deadAir,
+      g = d.game,
+      root = "/src/";
+    const { ensureProblem, npcCanRespond } = await import(
+      /* @vite-ignore */ root + "ai.ts"
+    );
+    const { claimStation } = await import(
+      /* @vite-ignore */ root + "engine.ts"
+    );
+    const station = g.floors[0].stations[0],
+      e = g.encounters[station.encounter];
+    for (const a of g.survivors.slice(1)) a.escaped = true;
+    g.zombies = [];
+    g.nextSpawn = Number.MAX_SAFE_INTEGER;
+    g.surge.anchor = Number.MAX_SAFE_INTEGER;
+    await ensureProblem(g, e, d.roadmap);
+    e.mode = "shared";
+    e.workspace = "Shared synthetic draft";
+    g.floors[0].stations[1].encounter = e.id;
     e.tutor.push({
-      id: "private",
+      id: "private-synthetic",
       author: "Terminal AI",
       kind: "tutor",
-      text: "PRIVATE_SENTINEL",
+      text: "PRIVATE_TUTOR_SENTINEL",
       seq: ++g.seq,
       worldTime: g.time,
       provenance: "chatgpt-handoff",
     });
-    // openFixture can mark an NPC escaped during a crossing. Exercise that
-    // retained motion explicitly, then seat this controlled chat participant.
-    a.vault = {
-      from: { x: a.x, y: a.y },
-      to: { x: a.x + 0.5, y: a.y },
-      left: 1.5,
-      duration: 1.5,
-    };
+    Object.assign(g.survivors[0], { floor: 0, x: station.x, y: station.y });
+    await d.interact();
+    const a = g.survivors[1],
+      seat = g.floors[0].stations[1];
     Object.assign(a, {
       escaped: false,
+      alive: true,
       floor: 0,
       intent: e.id,
-      thought: 100,
-      x: station.x,
-      y: station.y,
+      thought: 10,
+      x: seat.x,
+      y: seat.y,
       activity: "studying",
       path: [],
       repath: 0,
@@ -247,70 +155,46 @@ test("shared terminal presents only group chat and supplies its current draft wi
       "fleeFloor",
     ])
       delete a[field];
-    g.nextSpawn = Number.MAX_SAFE_INTEGER;
-    if (!claimStation(g, a, station.id) || !npcCanRespond(g, e, a))
-      throw Error("Synthetic group speaker must occupy its shared station");
+    if (!claimStation(g, a, seat.id) || !npcCanRespond(g, e, a))
+      throw Error("Synthetic group participant unavailable");
+    g.paused = true;
+    return e.id as string;
   });
-  await page.locator("#chat-input").fill("What assumption should we check?");
-  await page.locator("#chat-form button").click();
-  try {
-    await expect(page.locator("#messages")).toContainText(
-      "What changes in the current draft?",
+  await expect.poll(() => relay.calls.length).toBe(1);
+  expect(
+    relay.calls[0].payload.messages.some(
+      (m: any) => m.text === "PRIVATE_TUTOR_SENTINEL",
+    ),
+  ).toBe(true);
+  await expect(page.locator("#terminal")).toBeHidden();
+  await expect(page.locator("#chat-input")).toBeHidden();
+  await page.evaluate(async (id) => {
+    const root = "/src/",
+      { send } = await import(/* @vite-ignore */ root + "ai.ts");
+    const d = (window as any).__deadAir;
+    await send(
+      d.game,
+      d.game.encounters[id],
+      "group",
+      "What assumption should the group check?",
+      d.roadmap,
     );
-  } catch (error) {
-    const observed = await page.evaluate(async () => {
-      const root = "/src/",
-        { npcCanRespond, status } = await import(root + "ai.ts"),
-        g = (window as any).__deadAir.game,
-        e = g.encounters["f0-room0"],
-        a = g.survivors[1];
-      return {
-        runId: g.id,
-        time: g.time,
-        profile: g.study.profile,
-        bridge: status().mode,
-        encounter: {
-          id: e.id,
-          runId: e.runId,
-          state: e.state,
-          revision: e.revision,
-          error: e.error,
-          request: e.groupRequest,
-          jobs: e.groupRequests?.map((j: any) => ({
-            id: j.id,
-            state: j.state,
-            error: j.error,
-          })),
-        },
-        actor: {
-          id: a.id,
-          x: a.x,
-          y: a.y,
-          floor: a.floor,
-          alive: a.alive,
-          escaped: a.escaped,
-          intent: a.intent,
-          activity: a.activity,
-          station: a.station,
-          thought: a.thought,
-          vault: a.vault,
-          stairTravel: a.stairTravel,
-          canRespond: npcCanRespond(g, e, a),
-        },
-      };
-    });
-    const diagnosticPath = test
-      .info()
-      .outputPath("shared-group-request-diagnostic.json");
-    await writeFile(diagnosticPath, JSON.stringify(observed, null, 2));
-    await test.info().attach("shared-group-request-diagnostic", {
-      path: diagnosticPath,
-      contentType: "application/json",
-    });
-    throw error;
-  }
-  await expect(page.locator("#messages")).not.toContainText("PRIVATE_SENTINEL");
+  }, id);
   expect(group.workspace).toBe("Shared synthetic draft");
-  expect(JSON.stringify(group)).not.toContain("PRIVATE_SENTINEL");
-  await expect(page.locator("#submission-status")).toHaveText("Not submitted");
+  expect(JSON.stringify(group)).not.toContain("PRIVATE_TUTOR_SENTINEL");
+  const result = await page.evaluate((id) => {
+    const g = (window as any).__deadAir.game,
+      e = g.encounters[id];
+    return {
+      public: e.group.map((m: any) => m.text),
+      submissions: e.submissions.length,
+      keys: g.survivors[0].keys,
+      native: e.directStudy.state,
+    };
+  }, id);
+  expect(result.public).toContain("What changes in the current shared draft?");
+  expect(result.public.join(" ")).not.toContain("PRIVATE_TUTOR_SENTINEL");
+  expect(result.submissions).toBe(0);
+  expect(result.keys).toBe(0);
+  expect(result.native).toBe("pending");
 });

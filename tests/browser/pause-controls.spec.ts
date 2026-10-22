@@ -1,6 +1,14 @@
 import { expect, test, type Page } from "./helpers/offline-test";
 import { enterLegacyBuilding } from "./helpers/legacy-world";
+import {
+  flushNativeSave,
+  mockNativeStudy,
+  nativeState,
+  openNativeQuestion,
+  seedLegacyDraft,
+} from "./native-study-harness";
 async function setup(page: Page) {
+  await mockNativeStudy(page);
   await enterLegacyBuilding(page);
   await page.evaluate(() => {
     const g = (window as any).__deadAir.game,
@@ -76,24 +84,36 @@ test("player controls live in the pause dialog and developer tools stay hidden",
   expect(resumed.time).toBeGreaterThan(before.time);
   expect([resumed.x, resumed.y]).toEqual([before.x, before.y]);
 });
-test("Esc freezes survival while typing, preserves work and survives reload; resume has no catch-up", async ({
+test("Esc freezes survival during native study, preserves the captured legacy draft and survives reload without catch-up", async ({
   page,
 }) => {
   await setup(page);
-  await page.keyboard.press("e");
-  await page.locator("#workspace").fill("saved learner draft");
+  await seedLegacyDraft(page, "saved learner draft");
+  const id = await openNativeQuestion(page);
+  await expect
+    .poll(async () => (await nativeState(page, id)).session?.state)
+    .toBe("pending");
+  const captured = (await nativeState(page, id)).session.payloadJson;
+  await page.locator("#world").focus();
   await page.keyboard.press("Escape");
   await expect(page.locator("#pause-menu")).toBeVisible();
-  const before = await page.evaluate(() =>
-    JSON.stringify((window as any).__deadAir.game),
-  );
+  const world = () =>
+    page.evaluate(() => {
+      const g = (window as any).__deadAir.game;
+      return JSON.stringify({
+        time: g.time,
+        survivors: g.survivors,
+        zombies: g.zombies,
+        floors: g.floors,
+      });
+    });
+  const before = await world();
   await page.keyboard.press("w");
   await page.keyboard.press("e");
   await page.waitForTimeout(700);
-  expect(
-    await page.evaluate(() => JSON.stringify((window as any).__deadAir.game)),
-  ).toBe(before);
+  expect(await world()).toBe(before);
   await expect(page.locator("#pause-save-status")).toContainText("saved");
+  await flushNativeSave(page);
   await page.reload();
   await expect(page.locator("#pause-menu")).toBeVisible();
   const time = await page.evaluate(() => (window as any).__deadAir.game.time);
@@ -104,8 +124,9 @@ test("Esc freezes survival while typing, preserves work and survives reload; res
   await page.keyboard.press("Escape");
   await expect(page.locator("#pause-menu")).not.toBeVisible();
   await page.locator("#world").focus();
-  await page.keyboard.press("e");
-  await expect(page.locator("#workspace")).toHaveValue("saved learner draft");
+  expect((await nativeState(page, id)).session.payloadJson).toBe(captured);
+  expect(JSON.parse(captured).workspace).toBe("saved learner draft");
+  await expect(page.locator("#terminal")).toBeHidden();
   await page.waitForTimeout(250);
   const elapsed =
     (await page.evaluate(() => (window as any).__deadAir.game.time)) - time;
@@ -116,10 +137,12 @@ test("pause restart retains original progress and archives unfinished human work
   page,
 }) => {
   await setup(page);
-  await page.keyboard.press("e");
-  await page
-    .locator("#workspace")
-    .fill("unfinished human reasoning survives restart");
+  await seedLegacyDraft(page, "unfinished human reasoning survives restart");
+  const id = await openNativeQuestion(page);
+  await expect
+    .poll(async () => (await nativeState(page, id)).session?.state)
+    .toBe("pending");
+  const captured = (await nativeState(page, id)).session.payloadJson;
   const before = await page.evaluate(() => {
     const g = (window as any).__deadAir.game;
     return {
@@ -132,22 +155,26 @@ test("pause restart retains original progress and archives unfinished human work
   await page.keyboard.press("Escape");
   await page.locator("#restart-game").click();
   await expect(page.locator("#pause-menu")).not.toBeVisible();
-  const after = await page.evaluate(() => {
+  const after = await page.evaluate((captured) => {
     const g = (window as any).__deadAir.game;
     return {
       id: g.id,
       progress: g.study.learner,
       source: g.study.learner?.sourceHash,
       archives: g.study.archives.map((e: any) => e.workspace),
+      archivedNative: g.study.archives.find(
+        (e: any) => e.directStudy?.payloadJson === captured,
+      )?.directStudy?.payloadJson,
       paused: g.paused,
     };
-  });
+  }, captured);
   expect(after.id).not.toBe(before.id);
   expect(after.progress).toEqual(before.progress);
   expect(after.source).toEqual(before.source);
   expect(after.archives).toContain(
     "unfinished human reasoning survives restart",
   );
+  expect(after.archivedNative).toBe(captured);
   expect(after.paused).toBe(false);
 });
 test("E toggles a pivoting grip; old G/R/digit shortcuts do not act; Space vaults", async ({

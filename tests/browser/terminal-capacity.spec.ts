@@ -1,14 +1,18 @@
-import { openGameMenu } from "./helpers/game-menu";
 import { expect, test } from "@playwright/test";
+import { openGameMenu } from "./helpers/game-menu";
 import { enterLegacyBuilding } from "./helpers/legacy-world";
+import { mockNativeStudy } from "./native-study-harness";
 
-test("a late player can use an initially generated opportunity after nineteen NPC completions and retain the exact draft on reload", async ({
+test("late player retains an initial native question after nineteen NPC completions, including migrated saved draft and exact reload identity", async ({
   page,
 }) => {
+  const relay = await mockNativeStudy(page);
   await enterLegacyBuilding(page);
-  const baseline = await page.evaluate(async () => {
+  const draft =
+    "Late arrival: my unsent saved reasoning stays at this exact terminal.";
+  const baseline = await page.evaluate(async (draft) => {
     const root = "/src/",
-      { complete } = await import(root + "engine.ts"),
+      { complete } = await import(/* @vite-ignore */ root + "engine.ts"),
       g = (window as any).__deadAir.game,
       a = g.survivors[0];
     const tasks = Object.values(g.encounters).filter(
@@ -16,7 +20,7 @@ test("a late player can use an initially generated opportunity after nineteen NP
     ) as any[];
     if (tasks.length !== 20)
       throw Error(
-        `Expected initial twenty opportunities, found ${tasks.length}`,
+        `Expected twenty initial opportunities, found ${tasks.length}`,
       );
     for (const [i, npc] of g.survivors.slice(1).entries()) {
       complete(
@@ -24,67 +28,62 @@ test("a late player can use an initially generated opportunity after nineteen NP
         tasks[i].id,
         `capacity-fixture-${i}`,
         [npc.id],
-        "Controlled lone NPC completion; no human learning evidence",
+        "Controlled NPC completion; no human evidence",
       );
       npc.escaped = true;
     }
     const remaining = tasks.filter((e) => e.state !== "consumed");
     if (remaining.length !== 1)
       throw Error("Expected one initial opportunity left");
-    const s = g.floors[0].stations.find(
-      (s: any) => s.encounter === remaining[0].id,
-    );
-    Object.assign(a, { x: s.x, y: s.y });
-    // Isolate the actual terminal interaction from combat. This is a controlled
-    // capacity/persistence fixture, not a thirty-minute survival claim.
-    g.nextSpawn = 999999;
-    g.surge.anchor = 999999;
+    const e = remaining[0],
+      s = g.floors[0].stations.find((s: any) => s.encounter === e.id);
+    // Migration input from a former in-game composer, never submitted. It must
+    // travel as unsent context, without becoming a human answer or evidence.
+    e.chatDraft = draft;
+    Object.assign(a, { floor: 0, x: s.x, y: s.y });
+    g.nextSpawn = Number.MAX_SAFE_INTEGER;
+    g.surge.anchor = Number.MAX_SAFE_INTEGER;
     g.zombies = [];
     const { topicSpawn, ...learning } = g.study;
     return {
-      id: remaining[0].id,
-      room: remaining[0].questionRoom ?? remaining[0].id,
+      id: e.id,
+      room: e.questionRoom ?? e.id,
       access: [...a.access],
       learning: JSON.stringify(learning),
       spawns: JSON.stringify(topicSpawn?.recent ?? []),
       count: Object.keys(g.encounters).length,
     };
-  });
+  }, draft);
   expect(baseline.access).toEqual([]);
   await page.locator("#world").focus();
   await page.keyboard.press("e");
-  await expect(page.locator("#terminal")).toBeVisible();
-  // The practice label lives in the provenance line, not in the question.
-  await expect(page.locator("#terminal-provenance")).toContainText(
-    "Development practice",
-  );
-  await expect(page.locator("#problem")).not.toBeEmpty();
-  const problem = await page.locator("#problem").textContent();
-  const draft =
-    "Late arrival: my independent reasoning stays at this exact terminal.";
-  // Solo terminals keep the learner's unsent text in the conversation composer.
-  await page.locator("#chat-input").fill(draft);
+  await expect.poll(() => relay.calls.length).toBe(1);
+  await expect(page.locator("#native-study")).toBeVisible();
+  await expect(page.locator("#terminal")).toBeHidden();
+  await expect(page.locator("#chat-input")).toBeHidden();
+  const payload = relay.calls[0].payload;
+  expect(payload.problem.prompt).toBeTruthy();
+  expect(payload.profile).toBe("development");
+  expect(payload.unsentDraft).toEqual({ text: draft, learnerEvidence: false });
+  expect(payload.messages.some((m: any) => m.kind === "human")).toBe(false);
   const time = await page.evaluate(() => (window as any).__deadAir.game.time);
   await expect
     .poll(() => page.evaluate(() => (window as any).__deadAir.game.time))
     .toBeGreaterThan(time + 0.4);
   await openGameMenu(page);
   await page.getByRole("button", { name: "Save run", exact: true }).click();
-  // The click resolves before the async save; reloading earlier loses it.
   await expect(page.locator("#notice")).toContainText("Run saved locally");
   await page.locator("#resume-game").click();
   await page.reload();
   await page.waitForFunction(() => !!(window as any).__deadAir);
-  await page.locator("#world").focus();
-  await page.keyboard.press("e");
-  await expect(page.locator("#terminal")).toBeVisible();
-  await expect(page.locator("#chat-input")).toHaveValue(draft);
-  await expect(page.locator("#problem")).toHaveText(problem!);
+  await expect.poll(() => relay.calls.length).toBe(2);
+  expect(relay.calls[1].payload).toEqual(payload);
   const after = await page.evaluate((id) => {
     const g = (window as any).__deadAir.game,
+      e = g.encounters[id],
       { topicSpawn, ...learning } = g.study;
     return {
-      owner: g.encounters[id].owner,
+      owner: e.owner,
       access: g.survivors[0].access,
       learning: JSON.stringify(learning),
       spawns: topicSpawn.recent,
@@ -93,13 +92,19 @@ test("a late player can use an initially generated opportunity after nineteen NP
         (e: any) =>
           e.floor === 0 && e.reward === "stairs" && e.state === "consumed",
       ).length,
+      problem: e.problem,
+      draft: e.chatDraft,
+      session: e.directStudy,
+      humanArtifacts: e.history.filter((h: any) => h.author === "human"),
     };
   }, baseline.id);
   expect(after.owner).toBe("human");
   expect(after.access).toEqual([]);
   expect(after.learning).toBe(baseline.learning);
-  // Opening the terminal generated its question, which the topic-variety
-  // policy records exactly once (not learning evidence); reload adds none.
+  expect(after.problem).toEqual(payload.problem);
+  expect(after.draft).toBe(draft);
+  expect(after.session.questionFingerprint).toBe(payload.questionFingerprint);
+  expect(after.humanArtifacts).toEqual([]);
   expect(JSON.stringify(after.spawns.slice(0, -1))).toBe(baseline.spawns);
   expect(after.spawns.at(-1)).toMatchObject({
     encounter: baseline.room,
@@ -107,6 +112,8 @@ test("a late player can use an initially generated opportunity after nineteen NP
   });
   expect(after.count).toBe(baseline.count);
   expect(after.consumed).toBe(19);
-  await page.locator("#leave").click();
-  await page.screenshot({ path: "test-results/late-terminal-capacity.png" });
+  await expect(page.locator("#terminal")).toBeHidden();
+  await page.screenshot({
+    path: "test-results/late-native-terminal-capacity.png",
+  });
 });

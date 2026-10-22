@@ -200,11 +200,13 @@
           const live = next === "live";
           $("form").hidden = live;
           $("live-status").hidden = !live;
+          $("question").hidden = live;
+          $("messages").hidden = live;
           $("kicker").textContent = live
             ? "ZOMBIE STUDY / LIVE TERMINAL RELAY"
             : "ZOMBIE STUDY / REGULAR CHAT PROOF";
           $("intro").textContent = live
-            ? "Live relay. Type in the game's terminal; each message you send there starts a turn in this conversation. Replies return to the game, which applies its own once-only reward. Nothing is sent until live study requests are released in the game's Settings."
+            ? "Game connection. Open a question in the game, then answer here in the regular ChatGPT composer. Only the final result goes back to the game. Release live study requests in the game’s Settings to connect."
             : "Synthetic puzzle only. No real game save, curriculum progress, API key or polling worker.";
         }
         function render(snapshot) {
@@ -263,12 +265,12 @@
             (snapshot.answered === 1 ? " turn answered" : " turns answered");
           $("title").textContent = turn
             ? turn.question.title || "Game terminal turn"
-            : "Waiting for your game terminal";
+            : "Connected to your game";
           $("question").textContent = turn
             ? turn.question.prompt
             : snapshot.released
-              ? "No pending terminal turn. Send a message from the game's terminal."
-              : "Live study requests are not released. Enable them in the game's Settings → ChatGPT handoff, then send a message from the game's terminal.";
+              ? "No question is waiting. Open a question in the game."
+              : "Enable live study requests in the game’s Settings → ChatGPT handoff, then open a question in the game.";
           const messages = turn ? [...turn.messages] : [];
           if (turn?.reply)
             messages.push({ role: "tutor", text: turn.reply.text });
@@ -279,8 +281,8 @@
             show(
               turn.reply.complete
                 ? turn.reply.outcome === "gap"
-                  ? "Terminal AI conceded the key on a declared knowledge gap. The game records the gap and applies its once-only reward separately."
-                  : "Terminal AI marked this conversation complete. The game applies its once-only reward separately."
+                  ? "Completion sent to the game bridge with the declared gap. The game validates it before deciding its once-only reward."
+                  : "Completion sent to the game bridge. The game validates it before deciding its once-only reward."
                 : "Reply delivered to the game. Waiting for your next terminal message.",
             );
         }
@@ -346,9 +348,27 @@
               if (!posted.has(turn.turnId)) {
                 posted.add(turn.turnId);
                 polls = 0;
-                await sendPrompt(turn.prompt);
+                if (turn.deliveredVia !== "tool") await sendPrompt(turn.prompt);
               } else {
                 await tool("read_study_terminal", { relayId: state.relayId });
+              }
+              if (
+                state.turn?.status === "claimed" &&
+                ["terminal-direct", "native-preparation"].includes(
+                  state.turn.mode,
+                )
+              ) {
+                // Native direct question: posted once; the learner answers in
+                // the regular ChatGPT composer and ChatGPT finishes it later
+                // (possibly after 30+ minutes). Only status metadata is read
+                // here, never conversation content, and no timer gives up.
+                polls++;
+                show(
+                  state.turn.mode === "native-preparation"
+                    ? "ChatGPT is preparing or reviewing this question in the regular chat. No answer is needed here."
+                    : "Question posted. Answer in the regular ChatGPT chat; ChatGPT sends the result to the game when you are done.",
+                );
+                return schedule(liveLoop, 5000);
               }
               if (state.turn?.status === "claimed") {
                 if (++polls < 240) {
@@ -367,24 +387,20 @@
               relayId: state.relayId,
               revision: state.revision,
             });
-            if (state.turn?.status === "claimed") return schedule(liveLoop, 0);
+            if (state.turn?.status === "claimed") {
+              waits = 0;
+              return schedule(liveLoop, 0);
+            }
             if (!state.turn)
               show(
                 state.released
-                  ? "Connected. Waiting for a terminal message from your game…"
+                  ? "Connected. Open a question in the game; answer in the regular ChatGPT composer."
                   : "Waiting. Release live study requests in the game's Settings to start.",
               );
-            // Keep listening while the panel is open: quick polls for the first
-            // ten minutes, then one every ten seconds. A game message, focus or
-            // the Resume button brings the quick cadence back.
-            const idle = ++waits >= 240;
-            if (idle) {
-              show(
-                "Still connected after ten minutes without a game terminal message; checking every ten seconds. Resume to check quickly again.",
-              );
-              $("resume").hidden = false;
-            }
-            return schedule(liveLoop, idle ? 10000 : 2500);
+            // Keep initial question delivery responsive, even after a long idle.
+            waits = 0;
+            $("resume").hidden = true;
+            return schedule(liveLoop, 500);
           } catch (error) {
             show(
               /relay unavailable|reopen the study terminal/i.test(error.message)

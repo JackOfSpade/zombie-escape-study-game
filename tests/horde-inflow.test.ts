@@ -149,6 +149,16 @@ test("G09 actual outside arrivals during an active Surge immediately use its mov
     const gate = g.floors[0].furniture.find((o) => o.id === "main-gate")!;
     assert.ok(gate && !gate.destroyed);
     const hp = gate.hp;
+    // An audible lure on the outer face makes this a directed contact test;
+    // the newcomer does not know where the building's stairs are.
+    g.effects.push({
+      kind: "decoy",
+      floor: 0,
+      x: gate.x,
+      y: gate.y + gate.h / 2 + 0.25,
+      radius: 10,
+      until: g.time + 20,
+    });
     // Let this same outside-born zombie physically reach the main entrance.
     for (
       let i = 0;

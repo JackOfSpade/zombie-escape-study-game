@@ -49,6 +49,16 @@ for (const seed of [11, 42, 1337])
     assert.equal(stairs(g, a), true);
     advance(g, 2);
     assert.equal(a.floor, 1);
+    // The human is upstairs and supplies no omniscient destination. A native
+    // lure outside the entrance gives the offscreen siege a real sensory cue.
+    g.effects.push({
+      kind: "decoy",
+      floor: 0,
+      x: gate.x,
+      y: gate.y + gate.h / 2 + 0.25,
+      radius: 10,
+      until: g.time + 20,
+    });
     advance(g, 18);
     assert.equal(g.status, "playing");
     assert.ok(g.zombies.length > 0);

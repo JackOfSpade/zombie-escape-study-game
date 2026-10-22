@@ -1,6 +1,7 @@
 import { devProblem } from "./practice-problem";
 import { roomEncounters, assignRoomProblem } from "./room-questions";
 import { completionVerdict } from "./completion-verdict";
+import { careerScopeGuidance, studyFocus } from "./career-profile";
 import {
   knowledgeProbeContext,
   parseProbeReply,
@@ -12,7 +13,11 @@ import {
   TERMINAL_DIALOGUE_FORMAT,
   TERMINAL_DIALOGUE_INSTRUCTION,
 } from "./knowledge-probe";
-import { bridgeRequest as request, status } from "./bridge-client";
+import {
+  bridgeRequest as request,
+  nativeStudyScope,
+  status,
+} from "./bridge-client";
 export { checkBridge, status, type BridgeStatus } from "./bridge-client";
 import { browserSteps } from "../scripts/browser-runner/spec.mjs";
 import {
@@ -278,6 +283,7 @@ async function ensureIndividualProblem(g: Game, e: Encounter, r: Roadmap) {
         requestId: generation,
         encounterId: e.id,
         contract,
+        careerScopeGuidance: careerScopeGuidance(contract, studyFocus(study)),
         generationPolicy:
           "@study Diagnose before teaching. Write a standalone question: the prompt alone must supply the essential scenario, interface, implementation, data, timing and business-rule facts needed to answer without using the chat. For classification, list the concrete items to classify and their relevant behavior, lifetime and source without supplying their classifications. For tracing, debugging or critique, supply the relevant code, event sequence or evidence. Distinguish fixed facts from intentional design choices; if the learner may choose an example or an approach, say so explicitly rather than expecting them to infer an unspecified implementation. Ask a bounded task that matches the supplied scenario; never paste a capability statement into an unrelated generic story. Every requirement in the rubric must be visible in the question; do not grade unstated assumptions or add unrelated decisions, personal history or edge cases. Before returning the question, check that it can be answered from the prompt alone and repair missing context without revealing the solution. For D1, keep the learner workspace starter empty; put essential scenario or code-reading material in the prompt without supplying the key explanation, endpoint update, worked result or a leading solution hint. Do not interpret an objective's implementation verb as a D1 implementation requirement. Preserve legitimate prior context and assistance attribution without presenting supplied steps as fresh independent understanding. Use probeRecords: build the question around open gaps inside the eligible scope with the facet they blocked as the apex; only a gap marked reuseInScopeDefinitions may add its exact facet id to scopeDefinitions, and existing stable scope definitions are copied exactly; do not spend the question on established facets unless the scope requires them; re-ask what a closed gap blocked. The prompt is read by the learner: never mention the scheduled scope, objective IDs, tiers, depth, scheduling or that this is a formal visit; ask the question in plain language. Keep it minimal: write the smallest self-contained diagnostic that exercises the objective, with one main problem and at most one or two directly connected follow-ups. Include only the essential facts, not pasted project context or a full-project audit. For code review, include the actual code under review, including any required helper and its authorization semantics; a prose proposal supports design review only. Prefer short snippets, traces or evidence, and never turn an objective's scope verbs into a D1 implementation task. The visible task and rubric must match, without leaking the solution. An honestly integrative objective may stay integrative on a small feature. A narrow example never establishes unrelated facets or mastery.",
         runtimeSupport: {
@@ -301,7 +307,9 @@ async function ensureIndividualProblem(g: Game, e: Encounter, r: Roadmap) {
         requestId: generation,
         payload: structuredClone(payload),
       };
-      p = await request("generate", payload);
+      p = await request("generate", payload, undefined, {
+        nativeScope: nativeStudyScope(g, e),
+      });
       p.provenance =
         provider === "chatgpt-handoff" ? "chatgpt-handoff" : "study-mode";
     } else p = devProblem(g, r, contract);
@@ -489,6 +497,8 @@ function message(
   });
   return m;
 }
+/** Record one attributed tutor/group message (shared with direct study). */
+export const recordAttributedMessage = message;
 export function presentMessages(
   g: Game,
   e: Encounter,
@@ -756,6 +766,7 @@ export function retryTutorRequest(
               (Array.isArray(payload.probe?.facets)
                 ? payload.probe.facets
                 : probeFacets(payload.problem)),
+            1,
           )
         : undefined;
       checkSnapshot();
@@ -1041,6 +1052,17 @@ export async function send(
     e.tutorRequests?.some((j) => j.state === "pending")
   )
     return;
+  // A native ChatGPT question session owns the private conversation; answers
+  // happen in ChatGPT and are never relayed per turn.
+  const direct = (e as { directStudy?: { state?: string } }).directStudy;
+  if (
+    channel === "tutor" &&
+    (direct?.state === "pending" || direct?.state === "interrupted")
+  ) {
+    e.error =
+      "This question is open in your ChatGPT conversation; answer it there. Your saved work is retained.";
+    return;
+  }
   if (channel === "tutor")
     for (const job of e.tutorRequests ?? [])
       if (job.state === "interrupted") settleTutorRequest(job, "superseded");
@@ -1425,6 +1447,7 @@ function applyCompletion(
   r: Roadmap,
   s: Submission,
   result: ReturnType<typeof completionVerdict>,
+  onAssessment?: () => void,
 ) {
   const author = s.author;
   if ((e.state as string) === "consumed" || g.encounters[e.id] !== e) {
@@ -1476,7 +1499,7 @@ function applyCompletion(
             h.seq <= s.seq,
         ))
     )
-      void assess(g, e, r, s.seq);
+      void assess(g, e, r, s.seq).then(onAssessment, onAssessment);
   } else {
     e.state = "in-progress";
     if (author !== "human") {
@@ -1499,6 +1522,18 @@ function applyCompletion(
       });
     }
   }
+}
+/** Apply an already validated direct-study completion through the shared
+ * exactly-once reward and assessment path. */
+export function applyDirectCompletion(
+  g: Game,
+  e: Encounter,
+  r: Roadmap,
+  s: Submission,
+  result: ReturnType<typeof completionVerdict>,
+  onAssessment?: () => void,
+) {
+  applyCompletion(g, e, r, s, result, onAssessment);
 }
 
 /** Opt-in public NPC work. Never retries a captured submission or failed batch. */

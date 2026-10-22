@@ -1,4 +1,4 @@
-import { bridgeRequest, status } from "./bridge-client";
+import { bridgeRequest, nativeStudyScope, status } from "./bridge-client";
 import { evidencePacket, syncLearningView } from "./curriculum";
 import { applyLearningAssessment, encounterKey } from "./learner";
 import type { Assessment, Encounter, Game, Roadmap } from "./model";
@@ -130,7 +130,9 @@ export async function assess(
         );
     };
     checkSnapshot();
-    const response = await bridgeRequest("assess", payload);
+    const response = await bridgeRequest("assess", payload, undefined, {
+      nativeScope: nativeStudyScope(g, e),
+    });
     checkSnapshot();
     a.findings = response.findings;
     a.historicalMappings = response.historicalMappings;

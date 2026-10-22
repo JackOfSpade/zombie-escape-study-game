@@ -1,3 +1,18 @@
+import {
+  beginDirectStudy,
+  resumeDirectStudies,
+  retryDirectStudy,
+  unfinishedDirectStudy,
+} from "./direct-study";
+import {
+  activateCareerFocus,
+  careerProfileSummary,
+  careerScopeGuidance,
+  studyFocus,
+  type CareerFocus,
+} from "./career-profile";
+import { simulationActive } from "./simulation-state";
+import { spawnGrace } from "./study-pacing";
 import { relayListening, relayServes } from "./bridge-client";
 import { terminalChannel, submissionView } from "./terminal-view";
 import { unfinishedLastQuestion } from "./final-question";
@@ -22,7 +37,6 @@ import {
   ensureProblem,
   inspectCompletedNpcWork,
   materializeObservedWork,
-  openChat,
   presentMessages,
   presentProblem,
   presentWorkLog,
@@ -114,7 +128,7 @@ let game: Game,
   lastUI = 0,
   lastSave = 0,
   editorRevision = 0,
-  // Free-look over the frozen building after the run ends. Page state only.
+  // Free-look over the live building after the run ends. Page state only.
   view: SpectatorView | undefined,
   // The human's last opened terminal; finalQuestion marks post-death answering.
   lastQuestion: string | undefined,
@@ -123,12 +137,51 @@ const audio = new AudioDirector();
 try {
   game = recover(
     (await load()) ??
-      createGame(crypto.getRandomValues(new Uint32Array(1))[0], roadmap),
+      newPlayableGame(crypto.getRandomValues(new Uint32Array(1))[0]),
   );
 } catch (err) {
-  game = createGame(123456, roadmap);
+  game = newPlayableGame(123456);
   saveError = String(err);
 }
+// Apply the role profile before the factory prepares development questions.
+function newPlayableGame(seed: number, study = initialStudy(roadmap)) {
+  activateCareerFocus(
+    roadmap,
+    study,
+    study.careerFocus ?? study.learner?.careerFocus ?? "product-feature-owner",
+  );
+  return createGame(seed, roadmap, study);
+}
+activateCareerFocus(
+  roadmap,
+  game.study,
+  game.study.careerFocus ??
+    game.study.learner?.careerFocus ??
+    "product-feature-owner",
+);
+function latestStudyEncounter(g: Game): string | undefined {
+  const saved = g.lastStudyEncounter && g.encounters[g.lastStudyEncounter];
+  if (
+    saved &&
+    (unfinishedDirectStudy(saved) ||
+      ((saved.problem || saved.pendingGeneration || saved.generation) &&
+        saved.state !== "consumed"))
+  )
+    return saved.id;
+  return Object.values(g.encounters)
+    .filter(
+      (e) =>
+        unfinishedDirectStudy(e) ||
+        (e.problem &&
+          e.state !== "consumed" &&
+          e.problemPresentedSequence !== undefined),
+    )
+    .sort(
+      (a, b) =>
+        (b.problemPresentedSequence ?? -1) - (a.problemPresentedSequence ?? -1),
+    )[0]?.id;
+}
+lastQuestion = latestStudyEncounter(game);
 const runLogs = new RunLogs({
   read: () => readDurable(LOG_KEY),
   write: (value) => writeDurable(LOG_KEY, value),
@@ -155,6 +208,175 @@ async function persist() {
     return false;
   }
 }
+function currentNativeQuestion() {
+  const last = lastQuestion && game.encounters[lastQuestion];
+  if (
+    last &&
+    (unfinishedDirectStudy(last) ||
+      (last.state !== "consumed" &&
+        (last.pendingGeneration || last.generation)))
+  )
+    return last;
+  return [...Object.values(game.encounters), ...game.study.archives].find(
+    unfinishedDirectStudy,
+  );
+}
+function resumeNativeQuestions() {
+  resumeDirectStudies(game, roadmap, nativeStudyChanged);
+  const e = lastQuestion ? game.encounters[lastQuestion] : undefined;
+  if (
+    e &&
+    e.state !== "consumed" &&
+    !e.directStudy &&
+    (e.problem || e.pendingGeneration) &&
+    !e.generation
+  )
+    void prepareNativeQuestion(e);
+}
+const nativePreparations = new WeakMap<Encounter, Promise<void>>();
+/** Preserve the requested generation through death/reload and join repeated
+ * retries before opening its resulting question in native ChatGPT. */
+function prepareNativeQuestion(e: Encounter): Promise<void> {
+  const pending = nativePreparations.get(e);
+  if (pending) return pending;
+  const requestGame = game;
+  const operation = (async () => {
+    try {
+      const generated = ensureProblem(requestGame, e, roadmap);
+      nativeStudyChanged();
+      await generated;
+      if (game !== requestGame || game.encounters[e.id] !== e) return;
+      if (e.problem) {
+        await launchNativeQuestion(e);
+        if (game.status === "dead" || game.status === "escaped") {
+          $("#start-card").hidden = true;
+          syncSpectatorBar();
+        }
+      } else nativeStudyChanged();
+    } catch (error) {
+      if (game !== requestGame) return;
+      e.error = String(error);
+      nativeStudyChanged();
+    }
+  })();
+  nativePreparations.set(e, operation);
+  void operation.finally(() => nativePreparations.delete(e));
+  return operation;
+}
+const nativeLogStates = new WeakMap<object, string>();
+function nativeStudyChanged() {
+  for (const e of new Set([
+    ...Object.values(game.encounters),
+    ...game.study.archives,
+  ])) {
+    const s = e.directStudy;
+    if (!s) continue;
+    const marker = `${s.state}/${s.transportPhase ?? ""}/${s.responseReceivedAt ?? ""}/${s.appliedAt ?? ""}`;
+    if (nativeLogStates.get(s) === marker) continue;
+    nativeLogStates.set(s, marker);
+    runLogs.record(game, "native-study-transport", {
+      requestId: s.id,
+      state: s.state,
+      phase: s.transportPhase,
+      createdAt: s.createdAt,
+      phaseAt: s.transportPhaseAt,
+      responseReceivedAt: s.responseReceivedAt,
+      appliedAt: s.appliedAt,
+      requestBytes: new TextEncoder().encode(s.payloadJson).byteLength,
+    });
+  }
+  renderNativeStudy();
+  void persist();
+}
+async function launchNativeQuestion(e: Encounter) {
+  const requestGame = game;
+  lastQuestion = e.id;
+  game.lastStudyEncounter = e.id;
+  if (!e.problem) {
+    e.error ??=
+      "The question is not ready. Retry its saved generation request.";
+    nativeStudyChanged();
+    return;
+  }
+  try {
+    await beginDirectStudy(game, e, roadmap, {
+      guidance: careerScopeGuidance(
+        e.problem!.contract,
+        studyFocus(game.study),
+      ),
+      onChange: () => {
+        if (game === requestGame) nativeStudyChanged();
+        else void persist();
+      },
+    });
+  } catch (error) {
+    e.error = String(error);
+  }
+  nativeStudyChanged();
+}
+function renderNativeStudy() {
+  const e =
+    currentNativeQuestion() ??
+    (lastQuestion ? game.encounters[lastQuestion] : undefined);
+  const panel = $("#native-study");
+  panel.hidden =
+    !e || (!e.directStudy && !e.error && !e.pendingGeneration && !e.generation);
+  if (panel.hidden || !e) return;
+  const session = e.directStudy;
+  const archived =
+    game.study.archives.includes(e) ||
+    (e.runId !== undefined && e.runId !== game.id);
+  const ended = archived || game.status === "dead" || game.status === "escaped";
+  setText(
+    "#native-study-title",
+    e.problem?.title ?? "Preparing study question",
+  );
+  setText(
+    "#native-study-status",
+    session?.state === "applied"
+      ? ended
+        ? "Learning saved. This run has ended."
+        : "Question complete. Result saved."
+      : e.generation
+        ? "Preparing your saved question. You can keep watching the game while it is generated."
+        : (session?.error ??
+          e.error ??
+          (e.pendingGeneration
+            ? "Question generation was interrupted. Retry the saved request."
+            : undefined) ??
+          (ended
+            ? archived
+              ? "Finish the previous run's question in ChatGPT. Learning is saved, with no key for this run."
+              : "Continue in ChatGPT. Your learning still counts; this run awards no more keys."
+            : "Answer in your ChatGPT tab. Ask it to get your game question if it has not appeared.")),
+  );
+  $("#native-study-retry").hidden = session
+    ? session.state !== "interrupted"
+    : !!e.generation || (!e.problem && !e.error && !e.pendingGeneration);
+  $("#native-study-connect").hidden =
+    status().mode === "chatgpt-handoff" &&
+    status().capabilities.includes("direct-study");
+}
+$("#native-study-retry").onclick = () => {
+  const e =
+    currentNativeQuestion() ??
+    (lastQuestion ? game.encounters[lastQuestion] : undefined);
+  if (e?.directStudy)
+    void retryDirectStudy(game, e, roadmap, nativeStudyChanged);
+  else if (e) void prepareNativeQuestion(e);
+};
+$("#native-study-connect").onclick = () =>
+  openPanel("settings", "#settings-title");
+$("#native-study-copy").onclick = () => {
+  void navigator.clipboard.writeText(CHATGPT_TERMINAL_REQUEST).then(
+    () => {
+      game.notice = "Copied. Paste the request in your ChatGPT tab.";
+    },
+    () => {
+      game.notice = "In ChatGPT, ask: Get my current game study question.";
+    },
+  );
+};
 // Settings and agent tools are subpages of the paused game menu.
 let pausePanel: string | undefined;
 function panelToggle(id: string) {
@@ -200,6 +422,7 @@ function openPanel(id: string, focus: string) {
   $("#pause-panels").hidden = false;
   $("#pause-panel-header").hidden = false;
   $(`#${id}`).hidden = false;
+  if (id === "settings") renderCareerControls();
   panelToggle(id).setAttribute("aria-expanded", "true");
   menu.dataset.panel = id;
   menu.setAttribute("aria-labelledby", `${id}-title`);
@@ -229,7 +452,7 @@ document.addEventListener("focusin", (ev) => {
 let pauseFocus: HTMLElement | undefined;
 function setPaused(paused: boolean) {
   const menu = $<HTMLDialogElement>("#pause-menu");
-  const playing = game.status === "playing";
+  const playing = simulationActive(game);
   keys.clear();
   acc = 0;
   if (paused) {
@@ -310,7 +533,8 @@ function begin() {
 }
 function preserveRunLearning(g: Game, archive = false) {
   const retained = retainRunLearning(g, archive);
-  for (const e of retained) void assess(g, e, roadmap).then(persist);
+  for (const e of retained)
+    if (!unfinishedDirectStudy(e)) void assess(g, e, roadmap).then(persist);
   if (retained.length) void persist();
 }
 /** How long a restart waits for this run's assessments before it moves on;
@@ -338,9 +562,9 @@ async function fresh(statusLine?: HTMLElement) {
   closeTerminal();
   say("Saving learning progress…");
   const assessing = Promise.allSettled(
-    retainRunLearning(previous, true).map((e) =>
-      assess(previous, e, roadmap).then(persist),
-    ),
+    retainRunLearning(previous, true)
+      .filter((e) => !unfinishedDirectStudy(e))
+      .map((e) => assess(previous, e, roadmap).then(persist)),
   );
   // Requests are captured synchronously. Save them before waiting on a model,
   // including when a page closes during the restart's assessment grace period.
@@ -366,9 +590,8 @@ async function fresh(statusLine?: HTMLElement) {
   runLogs.record(previous, "restart");
   // Encounter drafts are archived; a new run never inherits a nearly completed lock.
   delete previous.study.pending;
-  game = createGame(
+  game = newPlayableGame(
     crypto.getRandomValues(new Uint32Array(1))[0],
-    roadmap,
     previous.study,
   );
   game.settings = previous.settings;
@@ -399,14 +622,13 @@ function startCard() {
     return;
   }
   card.hidden = false;
-  const finishable =
-    game.status === "dead"
-      ? unfinishedLastQuestion(game, lastQuestion)
-      : undefined;
+  const finishable = spectating(game)
+    ? (currentNativeQuestion() ?? unfinishedLastQuestion(game, lastQuestion))
+    : undefined;
   if (game.status === "ready")
     card.innerHTML = `<span class="eyebrow">A REAL-TIME STUDY ESCAPE</span><h2>The dead are<br>on your heels.</h2><p>Twenty survivors. Four floors. Four seats.<br>Choose your route. Learn your way out.</p><button id="start">Enter the building ↗</button><small class="agent-only">${escape(status().detail)}</small>`;
   else
-    card.innerHTML = `<span class="eyebrow">${game.status === "escaped" ? "TRANSMISSION RECEIVED" : "SIGNAL LOST"}</span><h2>${game.status === "escaped" ? "You made it." : "Your work survives."}</h2><p>${escape(game.notice)}<br>${game.stats.rescued} extracted · ${game.stats.deaths} lost · ${Math.floor(game.time)} seconds</p>${finishable ? '<button id="finish-question">Finish your last question ↗</button>' : ""}<button id="again">Begin another run ↗</button><button id="backup" class="quiet agent-only">Export work & evidence</button><button id="spectate" class="quiet">Watch the building ↗</button>`;
+    card.innerHTML = `<span class="eyebrow">${game.status === "escaped" ? "TRANSMISSION RECEIVED" : "SIGNAL LOST"}</span><h2>${game.status === "escaped" ? "You made it." : "Your work survives."}</h2><p>${escape(game.notice)}<br>${game.stats.rescued} extracted · ${game.stats.deaths} lost · ${Math.floor(game.endedAt ?? game.time)} seconds</p>${finishable ? '<button id="finish-question">Continue in ChatGPT ↗</button>' : ""}<button id="again">Begin another run ↗</button><button id="backup" class="quiet agent-only">Export work & evidence</button><button id="spectate" class="quiet">Watch the building ↗</button>`;
   document.getElementById("start")?.addEventListener("click", begin);
   document.getElementById("finish-question")?.addEventListener("click", () => {
     if (finishable) openFinalQuestion(finishable);
@@ -569,14 +791,14 @@ function closeTerminal() {
 /** After death the last tutor question stays answerable; no station is
  * claimed and engine rewards skip the dead human. */
 function openFinalQuestion(e: Encounter) {
-  active = e.id;
-  finalQuestion = true;
+  lastQuestion = e.id;
+  game.lastStudyEncounter = e.id;
   $("#start-card").hidden = true;
-  $("#final-question-notice").hidden = false;
-  $("#terminal").hidden = false;
-  document.body.classList.add("terminal-open");
-  tab = terminalChannel(e);
-  renderTerminal(true);
+  if (unfinishedDirectStudy(e))
+    void retryDirectStudy(game, e, roadmap, nativeStudyChanged);
+  else void prepareNativeQuestion(e);
+  syncSpectatorBar();
+  canvas.focus();
 }
 /** Leaving a post-death terminal re-assesses its evidence, then shows the end card. */
 function leaveTerminal() {
@@ -660,6 +882,23 @@ async function interact() {
     return;
   }
   const e = game.encounters[st.encounter];
+  if (e.state === "consumed") {
+    game.notice =
+      "This station is already complete. Find an unused station for your next question.";
+    return;
+  }
+  const pending = currentNativeQuestion();
+  if (
+    pending &&
+    pending !== e &&
+    (unfinishedDirectStudy(pending) ||
+      pending.pendingGeneration ||
+      pending.generation)
+  ) {
+    game.notice =
+      "Finish your current question in ChatGPT before opening another station.";
+    return;
+  }
   if (e.mode === "solo" && e.owner && e.owner !== "human") {
     game.notice =
       "This solo terminal belongs to another survivor. Find an unused station.";
@@ -673,25 +912,9 @@ async function interact() {
   }
   active = e.id;
   lastQuestion = e.id;
+  game.lastStudyEncounter = e.id;
   if (e.mode === "solo") e.owner = "human";
-  $("#terminal").hidden = false;
-  document.body.classList.add("terminal-open");
-  tab = e.mode === "shared" ? "group" : "tutor";
-  if (tab === "group") showGroup(e);
-  renderTerminal();
-  await ensureProblem(game, e, roadmap);
-  if (active === e.id) {
-    renderTerminal(true);
-    persist();
-  }
-}
-function showGroup(e: Encounter) {
-  const pending = openChat(game, e);
-  if (pending)
-    void pending.then(() => {
-      if (active === e.id && tab === "group") renderTerminal();
-      persist();
-    });
+  await prepareNativeQuestion(e);
 }
 let workLogSignature = "";
 let proposalSignature = "";
@@ -710,7 +933,7 @@ const APPROVAL_HINT =
   "If ChatGPT shows an “Allow ChatGPT to use zombie-escape-study-game?” card in its chat, choose Always allow there; the card can sit behind the study terminal panel in full view.";
 const APPROVAL_HINT_AFTER_MS = 15_000;
 function renderTerminal(force = false) {
-  if (!active || game.paused) return;
+  if (!active || game.paused || $("#terminal").hidden) return;
   const e = game.encounters[active];
   tab = terminalChannel(e);
   setText(
@@ -1282,8 +1505,29 @@ $("#save-button").onclick = async () => {
     "Run saved locally. Export a backup from Settings to move between browsers.";
   $("#pause-save-status").textContent = game.notice;
 };
+function renderCareerControls() {
+  const profile = careerProfileSummary(roadmap, game.study);
+  for (const id of ["career-focus", "settings-career-focus"])
+    $<HTMLSelectElement>(`#${id}`).value = profile.focus;
+  const text = `${profile.label}: ${profile.active.passed}/${profile.active.required} required depth checkpoints. Full original scope: ${profile.full.passed}/${profile.full.required}. The role profile requires ${profile.core} core PE objectives through D3; reference and optional topics do not gate advancement. Python interview fundamentals stay unchanged. Existing questions and learning evidence are preserved.`;
+  setText("#career-focus-summary", text);
+  setText("#settings-career-summary", text);
+}
+for (const id of ["career-focus", "settings-career-focus"])
+  $(`#${id}`).onchange = () => {
+    activateCareerFocus(
+      roadmap,
+      game.study,
+      $<HTMLSelectElement>(`#${id}`).value as CareerFocus,
+    );
+    syncLearningView(game.study);
+    renderCareerControls();
+    void persist();
+    if (!$("#inspector").hidden) $("#curriculum-button").click();
+  };
 $("#curriculum-button").onclick = () => {
   openPanel("inspector", "#inspector-title");
+  renderCareerControls();
   const c = eligibleForUI();
   const readiness = (["PY", "PE"] as const)
     .map((track) => readinessHtml(game, roadmap, track))
@@ -1617,6 +1861,7 @@ async function handoffControl(
       $<HTMLTextAreaElement>("#handoff-starter").value = result.starter;
     await checkBridge();
     setText("#bridge-detail", status().detail);
+    resumeNativeQuestions();
     await refreshHandoff();
   } catch (error) {
     if (version !== handoffControlVersion || game !== requestGame) return;
@@ -1687,7 +1932,7 @@ const blankTab = (tab: Window) => {
  * choose the model and thinking level before it is sent. */
 const CHATGPT_NEW_CHAT_URL = "https://chatgpt.com/";
 const CHATGPT_TERMINAL_REQUEST =
-  "Open my zombie-escape-study-game study terminal so it can serve my game's terminal turns.";
+  "Get my current zombie-escape-study-game study question using get_current_study_question. Handle any preparation or assessment step returned by the game in this same chat. Ask the issued question here, then let me answer in this normal chat. When we finish, call finish_study_question once to send the result back to the game and follow its bound continuation. If no question is waiting, tell me once and wait for me.";
 /** Whether the last Connect press put the request on the clipboard. */
 let terminalRequestCopied = false,
   terminalRequestShown = false;
@@ -1791,6 +2036,17 @@ async function reconnectChatGpt(tab: Window | null = null, fresh = false) {
     $("#bridge-detail").textContent = status().detail;
     if (status().mode !== "chatgpt-handoff")
       throw Error("The study bridge did not switch to the ChatGPT handoff.");
+    if (status().capabilities.includes("direct-study")) {
+      if (tab && !tab.closed && fresh) {
+        tab.location.href = CHATGPT_NEW_CHAT_URL;
+        chatOpened = true;
+      }
+      resumeNativeQuestions();
+      reportReconnect(
+        `Connected. ${pasteRequestStep()} Keep answering in that normal ChatGPT chat.`,
+      );
+      return;
+    }
     for (let i = 0; i < 400 && game === requestGame; i++) {
       info = await handoffStatus();
       const ready = relayServes(info);
@@ -1879,6 +2135,7 @@ $("#reduced").onchange = () => {
 $("#reconnect").onclick = () => {
   void checkBridge().then(() => {
     $("#bridge-detail").textContent = status().detail;
+    resumeNativeQuestions();
   });
 };
 $("#live-profile").onclick = async () => {
@@ -1899,6 +2156,11 @@ $("#live-profile").onclick = async () => {
   next.roadmapAdoptionBackups = game.study.roadmapAdoptionBackups ??= [];
   next.assessments = game.study.assessments;
   next.roadmapExport = game.study.roadmapExport;
+  activateCareerFocus(
+    roadmap,
+    next,
+    game.study.careerFocus ?? "product-feature-owner",
+  );
   game.study = next;
   // This is a fresh run: discard unissued development questions before live generation.
   for (const e of Object.values(game.encounters))
@@ -1922,6 +2184,15 @@ $("#import").onchange = async () => {
     closeTerminal();
     lastQuestion = undefined;
     game = next;
+    lastQuestion = latestStudyEncounter(game);
+    activateCareerFocus(
+      roadmap,
+      game.study,
+      game.study.careerFocus ??
+        game.study.learner?.careerFocus ??
+        "product-feature-owner",
+    );
+    resumeNativeQuestions();
     syncDisplayScale();
     completionCursor = 0;
     persist();
@@ -2098,6 +2369,7 @@ function ui() {
     "Logs stay on this browser: newest 3 games, at most 256 KB each. Older diagnostics are deleted automatically; learning is retained.";
   syncLearningView(game.study);
   if (!game.paused) completionAssessments();
+  renderNativeStudy();
   const a = human(game);
   watchReward(a);
   document.body.classList.toggle("surge", game.surge.state === "active");
@@ -2140,10 +2412,10 @@ function ui() {
   $("#next-description").textContent =
     game.status === "escaped" || game.status === "dead"
       ? "Review your saved work or begin another run."
-      : game.time < CONFIG.spawnGraceSeconds
+      : game.time < spawnGrace(game)
         ? game.rules === "force-fields"
-          ? `Swarm begins in ${Math.ceil(CONFIG.spawnGraceSeconds - game.time)}s. Walk through green fields. E uses a key on red fields. The rear study hall stays open.`
-          : `Zombies spawn in ${Math.ceil(CONFIG.spawnGraceSeconds - game.time)}s. E releases a door latch; move to push it open.`
+          ? `Swarm begins in ${Math.ceil(spawnGrace(game) - game.time)}s. Walk through green fields. E uses a key on red fields. The rear study hall stays open.`
+          : `Zombies spawn in ${Math.ceil(spawnGrace(game) - game.time)}s. E releases a door latch; move to push it open.`
         : a.floor === CONFIG.floors
           ? "Reach the helipad and press E while a helicopter is boarding. Four seats per trip."
           : a.access.includes(a.floor)
@@ -2258,34 +2530,37 @@ function ui() {
     running = false;
     audio.stop();
     preserveRunLearning(game);
-    // A dying player may finish the open tutor question; the card waits.
-    const last =
-      game.status === "dead" ? unfinishedLastQuestion(game, active) : undefined;
-    if (last && active === last.id) {
-      releaseStation(human(game));
-      finalQuestion = true;
-      $("#final-question-notice").hidden = false;
-    } else closeTerminal();
-    persist();
-    if (!finalQuestion) startCard();
+    const unfinished =
+      currentNativeQuestion() ?? unfinishedLastQuestion(game, lastQuestion);
+    releaseStation(human(game));
+    keys.clear();
+    $("#terminal").hidden = true;
+    document.body.classList.remove("terminal-open");
+    finalQuestion = false;
+    void persist();
     enterSpectator();
+    if (unfinished) {
+      $("#start-card").hidden = true;
+      syncSpectatorBar();
+    } else startCard();
   }
 }
 const framePerformance = new FramePerformance();
 function frame(time: number) {
   const frameStarted = performance.now();
-  const measuring = game.status === "playing" && !game.paused;
+  const measuring = simulationActive(game) && !game.paused;
   let simulationMs = 0,
     persistMs = 0,
     uiMs = 0,
     steps = 0;
   const elapsed = Math.min((time - last) / 1000, 0.2);
   last = time;
-  if (game.status === "playing" && !game.paused) {
+  if (simulationActive(game) && !game.paused && !quitMenu) {
     acc += elapsed;
     let count = 0;
     while (acc >= 1 / 30 && count++ < 6) {
-      const focused = ownsKeyboard(document.activeElement);
+      const focused =
+        game.status !== "playing" || ownsKeyboard(document.activeElement);
       const x = focused
           ? 0
           : Number(keys.has("KeyD") || keys.has("ArrowRight")) -
@@ -2300,7 +2575,7 @@ function frame(time: number) {
       steps++;
       acc -= 1 / 30;
     }
-    if (active) {
+    if (active && game.status === "playing") {
       const e = game.encounters[active];
       if (
         !game.floors[human(game).floor].stations.some(
@@ -2318,8 +2593,8 @@ function frame(time: number) {
       persistMs += performance.now() - persistStarted;
     }
   }
-  if (view && spectating(game)) {
-    // Held keys pan the free camera over the frozen floor.
+  if (view && spectating(game) && !game.paused) {
+    // Held keys pan the free camera over the live floor.
     const pan = (16 * elapsed) / view.zoom,
       x =
         Number(keys.has("KeyD") || keys.has("ArrowRight")) -
@@ -2387,6 +2662,13 @@ Object.assign(window, {
 });
 startCard();
 if (game.paused) setPaused(true);
-if (spectating(game)) enterSpectator();
+if (spectating(game)) {
+  enterSpectator();
+  if (currentNativeQuestion() || unfinishedLastQuestion(game, lastQuestion)) {
+    $("#start-card").hidden = true;
+    syncSpectatorBar();
+  }
+}
+resumeNativeQuestions();
 ui();
 requestAnimationFrame(frame);

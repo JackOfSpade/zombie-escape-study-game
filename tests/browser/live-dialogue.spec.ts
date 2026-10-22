@@ -1,134 +1,149 @@
 import { expect, test } from "@playwright/test";
+// @ts-expect-error Real transport modules, isolated synthetic queue only.
+import { createHandoffQueue } from "../../scripts/chatgpt-handoff-queue.mjs";
+// @ts-expect-error Real OAuth-bound native relay, synthetic owner only.
+import * as terminalRelay from "../../scripts/terminal-relay-app.mjs";
+import {
+  enterNativeGame,
+  nativeState,
+  openNativeQuestion,
+} from "./native-study-harness";
+const { createTerminalRelayApp, DIRECT_TURN_INSTRUCTION } = terminalRelay;
 
-// Deliberately opt-in: uses the already authorized live connector, never creates
-// a session, changes sharing, supplies worker answers or reads another save.
-// A separately active ChatGPT worker must serve the two synthetic turns.
-test("live connector serves two real terminal turns and the UI awards exactly one key", async ({
+test("ordinary chat sends one native completion through the real relay and the game awards one key", async ({
   page,
-  request,
 }) => {
-  test.skip(
-    process.env.LIVE_STUDY_BRIDGE !== "1",
-    "Requires an explicitly requested live connector check",
-  );
-  test.setTimeout(180_000);
-  const status = await (await request.get("/api/handoff/status")).json();
-  expect(status.enabled).toBe(true);
-  expect(status.public?.linked).toBe(true);
-  // Either the legacy worker chat or the embedded live terminal app may serve.
-  const servedBy =
-    status.public?.terminalRelay?.sessions > 0
-      ? "embedded-terminal-app"
-      : status.public?.workerActive
-        ? "legacy-worker-session"
-        : null;
-  expect(servedBy, "Open the study terminal app in ChatGPT first").not.toBe(
-    null,
-  );
-  console.log("LIVE_DIALOGUE_SERVED_BY", servedBy);
-  expect(status.tunnel?.verified).toBe(true);
-  expect(
-    status.queued + status.working,
-    "Serve existing player work before this smoke test",
-  ).toBe(0);
+  const queue = createHandoffQueue();
+  const app = createTerminalRelayApp({ queue });
+  const grant = { linkId: "browser-native-roundtrip-owner" };
+  queue.enable(true);
+  const calls: any[] = [];
   const errors: string[] = [];
   page.on("pageerror", (error) => errors.push(error.message));
-  await page.goto("/");
-  await page.getByRole("button", { name: "Enter the building" }).click();
-  await page.evaluate(async () => {
-    const { game: g, roadmap: r } = (window as any).__deadAir;
-    const root = "/src/";
-    const { ensureProblem } = await import(/* @vite-ignore */ root + "ai.ts");
-    g.id = `live-dialogue-smoke-${crypto.randomUUID()}`;
-    for (const e of Object.values(g.encounters) as any[]) e.runId = g.id;
-    for (const a of g.survivors.slice(1)) a.escaped = true;
-    g.zombies = [];
-    g.nextSpawn = Number.MAX_SAFE_INTEGER;
-    g.surge.anchor = Number.MAX_SAFE_INTEGER;
-    const st = g.floors[0].stations[0],
-      e = g.encounters[st.encounter];
-    Object.assign(g.survivors[0], { x: st.x, y: st.y, keys: 0 });
-    await ensureProblem(g, e, r);
-    e.mode = "solo";
-    e.owner = "human";
-    e.problem.title = "LIVE CONNECTOR SMOKE · synthetic fixed window";
-    e.problem.prompt =
-      "Synthetic smoke exercise. Readings are [1,2,3], window size 2. State the largest window total, explain the enter/leave update, and state the fixed-size invariant and the final-window boundary. No implementation or execution required.";
-    e.problem.rubric = [
-      "Largest total 5 from [2,3]",
-      "Subtract outgoing reading and add incoming reading",
-      "Window contains exactly two consecutive readings; stop before incoming index reaches list length",
-    ];
-    e.problem.validation = { kind: "trace", answer: 5 };
-    e.workspace = "";
-    e.submissions = [];
-    e.tutor = [];
-    e.tutorRequests = [];
-    // Replace only this isolated browser's request context with synthetic text.
-    r.tracks.PY.curriculum =
-      "Synthetic D1 fixed-size-window scope: explain a running sum, enter/leave update, fixed cardinality and last valid index. No execution or mastery claims.";
-    r.tracks.PY.progress =
-      "Synthetic smoke learner: no personal progress or independent mastery is requested. Gameplay validation only.";
-    if (g.study.learner) g.study.learner.roadmapAdoptions = [];
+  await page.route("**/api/**", async (route) => {
+    const request = route.request(),
+      url = new URL(request.url());
+    const json = (body: unknown, status = 200) =>
+      route.fulfill({ status, json: body });
+    if (url.pathname === "/api/status")
+      return json({
+        mode: "chatgpt-handoff",
+        label: "Synthetic native relay",
+        detail: "No live connector or model",
+        capabilities: ["tutor", "direct-study"],
+      });
+    if (url.pathname === "/api/bridge") {
+      const body = request.postDataJSON();
+      calls.push(body);
+      expect(body.operation).toBe("tutor");
+      expect(body.payload.mode).toBe("terminal-direct");
+      return json(
+        { handoff: queue.enqueue(body.operation, body.payload) },
+        202,
+      );
+    }
+    if (url.pathname === "/api/bridge/result") {
+      const value = queue.result(
+        url.searchParams.get("id"),
+        url.searchParams.get("hash"),
+      );
+      return value.status === "done"
+        ? json(value.answer)
+        : json({ status: "pending" }, 202);
+    }
+    if (url.pathname === "/api/handoff/status")
+      return json({
+        ...queue.snapshot(),
+        public: { terminalRelay: app.status(), workerActive: false },
+      });
+    return json({ error: "Unexpected synthetic endpoint" }, 404);
   });
-  await page.locator("#world").focus();
-  await page.keyboard.press("e");
-  await expect(page.locator("#chat-input")).toBeVisible();
-  await expect(page.locator("#workspace")).toBeHidden();
-  await page
-    .locator("#chat-input")
-    .fill("I think [2,3] is the largest window.");
-  await page.locator("#chat-input").press("Enter");
-  await expect(page.locator("#tutor-request-status")).toContainText(
-    "Queued for ChatGPT",
-  );
-  console.log("LIVE_DIALOGUE_FIRST_TURN_QUEUED");
-  await expect(page.locator("#messages .tutor")).toHaveCount(1, {
-    timeout: 75_000,
-  });
-  await expect(page.locator("#chat-form button")).toBeEnabled();
-  let proof = await page.evaluate(() => {
-    const g = (window as any).__deadAir.game,
-      e = g.encounters[g.floors[0].stations[0].encounter];
-    return {
-      keys: g.survivors[0].keys,
-      state: e.state,
-      requests: e.tutorRequests.map((j: any) => j.state),
-    };
-  });
-  expect(proof.keys).toBe(0);
-  expect(proof.state).not.toBe("consumed");
-  expect(proof.requests).toEqual(["applied"]);
-  await page
-    .locator("#chat-input")
-    .fill(
-      "The largest total is 5 from [2,3]. Starting with [1,2], the total is 3; subtract outgoing 1 and add incoming 3, getting 5. Each window always contains exactly two consecutive readings, and the running total equals their sum. [2,3] is the final full window: stop before an incoming index reaches the list length (3), or a window would run past the end.",
-    );
-  await page.locator("#chat-input").press("Enter");
-  console.log("LIVE_DIALOGUE_SECOND_TURN_QUEUED");
-  await expect(page.locator("#dialogue-status")).toContainText("Solved", {
-    timeout: 75_000,
-  });
-  proof = await page.evaluate(() => {
-    const g = (window as any).__deadAir.game,
-      e = g.encounters[g.floors[0].stations[0].encounter];
-    return {
-      keys: g.survivors[0].keys,
-      state: e.state,
-      requests: e.tutorRequests.map((j: any) => j.state),
-    };
-  });
-  expect(proof).toEqual({
-    keys: 1,
-    state: "consumed",
-    requests: ["applied", "applied"],
-  });
-  await expect(page.locator("#messages .human")).toHaveCount(2);
-  await expect(page.locator("#messages .tutor")).toHaveCount(2);
-  await page.screenshot({
-    path: ".artifacts/live-dialogue-smoke.png",
-    fullPage: true,
-  });
+  await enterNativeGame(page);
+  const id = await openNativeQuestion(page);
+  await expect.poll(() => calls.length).toBe(1);
+  await expect
+    .poll(
+      () =>
+        app.call("get_current_study_question", {}, grant).structuredContent
+          .status,
+    )
+    .toBe("question");
+  const turn = app.call(
+    "get_current_study_question",
+    {},
+    grant,
+  ).structuredContent;
+  const payload = calls[0].payload;
+  expect(turn.questionFingerprint).toBe(payload.questionFingerprint);
+  expect(
+    JSON.parse(turn.prompt.slice(DIRECT_TURN_INSTRUCTION.length)).question
+      .prompt,
+  ).toBe(payload.problem.prompt);
+  expect(turn.prompt).toContain("ordinary ChatGPT composer");
+  expect(payload).not.toHaveProperty("curriculum");
+  expect(payload).not.toHaveProperty("progressContext");
+  const before = await nativeState(page, id);
+  expect(before.submissions).toBe(0);
+  expect(before.tutor.filter((m: any) => m.kind === "human")).toHaveLength(0);
+  await expect(page.locator("#terminal")).toBeHidden();
+  await expect(page.locator("#chat-input")).toBeHidden();
+  const transcript = [
+    { role: "assistant", text: payload.problem.prompt },
+    { role: "user", text: "Synthetic first prediction in ordinary chat." },
+    {
+      role: "assistant",
+      text: "Synthetic focused follow-up, assistance only.",
+    },
+    {
+      role: "user",
+      text: "Synthetic complete explanation of the issued question.",
+    },
+  ];
+  // Intermediate ordinary chat turns cause no bridge request or learner
+  // evidence in the game. Only the final attributed callback crosses over.
+  expect(calls).toHaveLength(1);
+  expect(
+    (await nativeState(page, id)).tutor.filter((m: any) => m.kind === "human"),
+  ).toHaveLength(0);
+  const args = {
+    relayId: turn.relayId,
+    turnId: turn.turnId,
+    questionFingerprint: turn.questionFingerprint,
+    text: "Synthetic completion sent for validation.",
+    outcome: "solved",
+    transcript,
+    knowledge: {
+      facets: payload.probe.facets.map((f: any) => ({
+        id: f.id,
+        status: "demonstrated",
+      })),
+    },
+  };
+  const receipt = app.call("finish_study_question", args, grant)
+    .structuredContent.completion;
+  expect(receipt.status).toBe("sent");
+  expect(receipt.duplicate).toBe(false);
+  await expect
+    .poll(async () => (await nativeState(page, id)).session.state)
+    .toBe("applied");
+  const after = await nativeState(page, id);
+  expect(after.keys).toBe(before.keys + 1);
+  expect(after.submissions).toBe(1);
+  expect(after.state).toBe("consumed");
+  expect(
+    after.tutor.filter((m: any) => m.kind === "human").map((m: any) => m.text),
+  ).toEqual([transcript[1].text, transcript[3].text]);
+  expect(
+    after.tutor.every(
+      (m: any) => m.provenance === "chatgpt-host-model-transcript",
+    ),
+  ).toBe(true);
+  expect(
+    app.call("finish_study_question", args, grant).structuredContent.completion
+      .duplicate,
+  ).toBe(true);
+  expect(calls).toHaveLength(1);
+  expect((await nativeState(page, id)).keys).toBe(after.keys);
+  expect(queue.snapshot().done).toBe(1);
   expect(errors).toEqual([]);
-  console.log("LIVE_DIALOGUE_VERIFIED_ONE_KEY", JSON.stringify(proof));
 });

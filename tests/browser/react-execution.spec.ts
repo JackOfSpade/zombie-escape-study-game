@@ -1,164 +1,249 @@
-import { openGameMenu } from "./helpers/game-menu";
 import { expect, test } from "@playwright/test";
 import { writeFile } from "node:fs/promises";
+import type { Server } from "node:http";
+// @ts-expect-error Isolated local execution server, no provider configured.
+import { createStudyBridgeServer } from "../../scripts/study-bridge-server.mjs";
+import { openGameMenu } from "./helpers/game-menu";
 import { enterLegacyBuilding } from "./helpers/legacy-world";
 import { isolateRunnerBridge } from "./helpers/runner-bridge";
-test("container workspace React: captured checks, safe preview and edits survive leaving and reload without academic credit", async ({
+
+test("container workspace React API: immutable checks and preview survive later edits and reload without academic credit", async ({
   page,
 }) => {
   test.skip(
     process.env.RUN_CONTAINER_BROWSER !== "1",
-    "Requires isolated Docker React runtime",
+    "Requires the already-installed isolated Docker React runtime",
   );
   test.setTimeout(45000);
+  const server: Server = createStudyBridgeServer();
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const address = server.address();
+  if (!address || typeof address === "string")
+    throw Error("No isolated execute server");
   await isolateRunnerBridge(page);
-  await enterLegacyBuilding(page);
-  await page.evaluate(async () => {
-    const d = (window as any).__deadAir,
-      g = d.game,
-      r = d.roadmap,
-      root = "/src/";
-    const { initialStudy, eligible } = await import(root + "curriculum.ts"),
-      { initialLearner, reconcileGates } = await import(root + "learner.ts");
-    const l = initialLearner(r, "test");
-    for (const o of r.tracks.PE.objectives) l.cells[o.id].states[0] = "P";
-    l.reviews = {};
-    l.cycleOffset = 1;
-    reconcileGates(r, l);
-    g.study = initialStudy(r, "live");
-    g.study.learner = l;
-    const contract = eligible(r, g.study);
-    if (contract.track !== "PE" || contract.depth !== 2)
-      throw Error("Fixture must be eligible PE D2");
-    const e = g.encounters["f0-room0"];
-    e.problem = {
-      title: "Synthetic React task / real browser execution",
-      prompt: "Runtime integration fixture only",
-      starter: "",
-      rubric: [],
-      provenance: "study-mode",
-      contract,
-      runtime: {
-        language: "typescript",
-        environment: "react",
-        steps: [
-          { kind: "click", selector: "button" },
-          { kind: "expect-text", selector: "button", text: "Count 1" },
-        ],
+  // Override the sole permitted execution route with an ephemeral server,
+  // never the user's persistent game bridge or any study/model endpoint.
+  await page.route("**/api/execute", async (route) => {
+    const response = await fetch(
+      `http://127.0.0.1:${address.port}/api/execute`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Origin: "http://127.0.0.1:5173",
+        },
+        body: route.request().postData()!,
       },
-    };
-    const station = g.floors[0].stations.find((s: any) => s.encounter === e.id);
-    Object.assign(g.survivors[0], { x: station.x, y: station.y, floor: 0 });
-    for (const a of g.survivors.slice(1)) a.escaped = true;
-    g.zombies = [];
-    g.nextSpawn = Number.MAX_SAFE_INTEGER;
-    g.surge.anchor = Number.MAX_SAFE_INTEGER;
-    g.status = "playing";
-    document.querySelector<HTMLElement>("#start-card")!.hidden = true;
-    await d.interact();
+    );
+    await route.fulfill({
+      status: response.status,
+      contentType: "application/json",
+      body: await response.text(),
+    });
   });
-  const code = `import {useState} from 'react';export default function App(){const[n,setN]=useState(0);return <button onClick={()=>setN(n+1)}>Count {n}</button>}`;
-  await page.locator("#workspace").fill(code);
-  const before = await page.evaluate(() => (window as any).__deadAir.game.time);
-  await page
-    .getByRole("button", { name: "Run React checks", exact: true })
-    .click();
-  await expect(page.locator("#run-code")).toBeDisabled();
-  await page
-    .locator("#workspace")
-    .fill("export default ()=> <p>later draft</p>");
-  await page.locator("#leave").click();
-  await expect(page.locator("#terminal")).toBeHidden();
-  await expect
-    .poll(
-      () =>
-        page.evaluate(
-          () =>
-            (window as any).__deadAir.game.encounters["f0-room0"]
-              .executions?.[0]?.status,
+  try {
+    await enterLegacyBuilding(page);
+    await page.evaluate(async () => {
+      const d = (window as any).__deadAir,
+        g = d.game,
+        r = d.roadmap,
+        root = "/src/";
+      const { initialStudy, eligible } = await import(
+          /* @vite-ignore */ root + "curriculum.ts"
         ),
-      { timeout: 30000 },
-    )
-    .toBe("finished");
-  const result = await page.evaluate(() => {
-    const g = (window as any).__deadAir.game,
-      e = g.encounters["f0-room0"],
-      j = e.executions[0];
-    return {
-      job: j,
-      time: g.time,
-      evidence: g.study.learner.evidence.length,
-      state: e.state,
-      history: e.history.filter((h: any) => h.kind === "execution"),
-    };
-  });
-  expect(result.job.code).toBe(code);
-  const receiptPath = test.info().outputPath("captured-react-receipt.json");
-  await writeFile(receiptPath, JSON.stringify(result.job.receipt, null, 2));
-  await test.info().attach("captured-react-receipt", {
-    path: receiptPath,
-    contentType: "application/json",
-  });
-  expect(result.job.receipt.executed, JSON.stringify(result.job.receipt)).toBe(
-    true,
-  );
-  expect(result.job.receipt.exitCode, JSON.stringify(result.job.receipt)).toBe(
-    0,
-  );
-  expect(JSON.parse(result.job.receipt.stdout).domText).toBe("Count 1");
-  expect(result.time).toBeGreaterThan(before);
-  expect(result.evidence).toBe(0);
-  expect(result.state).toBe("available");
-  expect(JSON.stringify(result.history)).not.toContain("base64");
-  await page.locator("#world").focus();
-  await page.keyboard.press("e");
-  await expect(page.locator("#workspace")).toHaveValue(
-    "export default ()=> <p>later draft</p>",
-  );
-  await page.locator("#execution-results summary").click();
-  await expect(page.locator("#execution-output")).toContainText(
-    "1 of 1 attempted task checks matched",
-  );
-  await expect(page.locator("#execution-output")).toContainText(
-    "Visible text:\nCount 1",
-  );
-  await expect(page.locator("#execution-preview img")).toBeVisible();
-  expect(
-    await page
-      .locator("#execution-preview img")
-      .evaluate(
-        (img: HTMLImageElement) => img.complete && img.naturalWidth === 640,
-      ),
-  ).toBe(true);
-  await expect(page.locator("#execution-preview figcaption")).toContainText(
-    "does not establish correctness",
-  );
-  await page.locator("#leave").click();
-  await openGameMenu(page);
-  await page.getByRole("button", { name: "Save run", exact: true }).click();
-  await expect(page.locator("#notice")).toContainText("Run saved locally");
-  await page.locator("#resume-game").click();
-  await page.reload();
-  await page.waitForFunction(() => !!(window as any).__deadAir);
-  await page.locator("#world").focus();
-  await page.keyboard.press("e");
-  await page.locator("#execution-results summary").click();
-  await expect(page.locator("#execution-preview img")).toHaveAttribute(
-    "src",
-    result.job.preview.dataUrl,
-  );
-  await page.locator("#execution-preview").scrollIntoViewIfNeeded();
-  await page.screenshot({ path: "docs/evidence/react-execution-preview.png" });
-  // Imported backups cannot turn a saved preview into an outbound image request.
-  let leaked = false;
-  await page.route("https://example.invalid/**", (route) => {
-    leaked = true;
-    return route.abort();
-  });
-  await page.evaluate(() => {
-    const e = (window as any).__deadAir.game.encounters["f0-room0"];
-    e.executions[0].preview.dataUrl = "https://example.invalid/forged-preview";
-  });
-  await expect(page.locator("#execution-preview")).toBeHidden();
-  expect(leaked).toBe(false);
+        { initialLearner, reconcileGates } = await import(
+          /* @vite-ignore */ root + "learner.ts"
+        ),
+        { claimStation } = await import(/* @vite-ignore */ root + "engine.ts");
+      const l = initialLearner(r, "test");
+      for (const o of r.tracks.PE.objectives) l.cells[o.id].states[0] = "P";
+      l.reviews = {};
+      l.cycleOffset = 1;
+      reconcileGates(r, l);
+      g.study = initialStudy(r, "live");
+      g.study.learner = l;
+      const contract = eligible(r, g.study);
+      if (contract.track !== "PE" || contract.depth !== 2)
+        throw Error("Requires synthetic PE D2");
+      const e = g.encounters["f0-room0"],
+        s = g.floors[0].stations.find((s: any) => s.encounter === e.id);
+      e.problem = {
+        title: "Synthetic React task / real browser execution",
+        prompt: "Runtime API integration fixture only",
+        starter: "",
+        rubric: [],
+        provenance: "study-mode",
+        contract,
+        runtime: {
+          language: "typescript",
+          environment: "react",
+          steps: [
+            { kind: "click", selector: "button" },
+            { kind: "expect-text", selector: "button", text: "Count 1" },
+          ],
+        },
+      };
+      Object.assign(g.survivors[0], { floor: 0, x: s.x, y: s.y });
+      for (const a of g.survivors.slice(1)) a.escaped = true;
+      g.zombies = [];
+      g.nextSpawn = Number.MAX_SAFE_INTEGER;
+      g.surge.anchor = Number.MAX_SAFE_INTEGER;
+      claimStation(g, g.survivors[0], s.id);
+    });
+    const code =
+      "import {useState} from 'react';export default function App(){const[n,setN]=useState(0);return <button onClick={()=>setN(n+1)}>Count {n}</button>}";
+    const before = await page.evaluate(async (code) => {
+      const d = (window as any).__deadAir,
+        g = d.game,
+        e = g.encounters["f0-room0"],
+        root = "/src/";
+      const { edit } = await import(/* @vite-ignore */ root + "ai.ts"),
+        { runWorkspace } = await import(
+          /* @vite-ignore */ root + "execution.ts"
+        );
+      edit(g, e, code, e.revision, d.roadmap);
+      void runWorkspace(g, e, d.roadmap);
+      return { time: g.time, status: e.executions[0].status };
+    }, code);
+    expect(before.status).toBe("pending");
+    const draft = "export default ()=> <p>later draft</p>";
+    await page.evaluate(async (draft) => {
+      const d = (window as any).__deadAir,
+        e = d.game.encounters["f0-room0"],
+        root = "/src/",
+        { edit } = await import(/* @vite-ignore */ root + "ai.ts");
+      edit(d.game, e, draft, e.revision, d.roadmap);
+      d.game.survivors[0].x = 21.5;
+      d.game.survivors[0].y = 31.5;
+    }, draft);
+    await expect(page.locator("#terminal")).toBeHidden();
+    await expect
+      .poll(
+        () =>
+          page.evaluate(
+            () =>
+              (window as any).__deadAir.game.encounters["f0-room0"]
+                .executions[0].status,
+          ),
+        { timeout: 30000 },
+      )
+      .toBe("finished");
+    const result = await page.evaluate(async () => {
+      const g = (window as any).__deadAir.game,
+        e = g.encounters["f0-room0"],
+        job = e.executions[0],
+        root = "/src/",
+        { executionText } = await import(
+          /* @vite-ignore */ root + "execution-presentation.ts"
+        ),
+        { executionEvidence } = await import(
+          /* @vite-ignore */ root + "execution.ts"
+        );
+      // Browser decoding of the actual checked data URL is diagnostic only;
+      // the normal gameplay tab intentionally has no embedded editor/preview.
+      const image = new Image();
+      image.src = job.preview.dataUrl;
+      await image.decode();
+      return {
+        job,
+        time: g.time,
+        evidence: g.study.learner.evidence.length,
+        state: e.state,
+        history: e.history.filter((h: any) => h.kind === "execution"),
+        text: executionText(job),
+        packet: executionEvidence(job),
+        image: { width: image.naturalWidth, height: image.naturalHeight },
+        draft: e.workspace,
+      };
+    });
+    expect(result.job.code).toBe(code);
+    expect(
+      result.job.receipt.executed,
+      JSON.stringify(result.job.receipt),
+    ).toBe(true);
+    expect(
+      result.job.receipt.exitCode,
+      JSON.stringify(result.job.receipt),
+    ).toBe(0);
+    expect(JSON.parse(result.job.receipt.stdout).domText).toBe("Count 1");
+    expect(result.time).toBeGreaterThan(before.time);
+    expect(result.evidence).toBe(0);
+    expect(result.state).toBe("available");
+    expect(result.draft).toBe(draft);
+    expect(result.image).toEqual({ width: 640, height: 400 });
+    expect(JSON.stringify(result.history)).not.toContain("base64");
+    expect(JSON.stringify(result.packet)).not.toContain("base64");
+    expect(result.text).toContain("1 of 1 attempted task checks matched");
+    expect(result.text).toContain("Visible text:\nCount 1");
+    expect(result.text).toContain(
+      "independent understanding remain unassessed",
+    );
+    const receiptPath = test.info().outputPath("captured-react-receipt.json");
+    await writeFile(receiptPath, JSON.stringify(result.job.receipt, null, 2));
+    await test.info().attach("captured-react-receipt", {
+      path: receiptPath,
+      contentType: "application/json",
+    });
+    const previewPath = test.info().outputPath("captured-react-preview.jpg");
+    await writeFile(
+      previewPath,
+      Buffer.from(result.job.preview.dataUrl.split(",")[1], "base64"),
+    );
+    await test.info().attach("actual-captured-react-preview", {
+      path: previewPath,
+      contentType: "image/jpeg",
+    });
+    await openGameMenu(page);
+    await page.getByRole("button", { name: "Save run", exact: true }).click();
+    await expect(page.locator("#notice")).toContainText("Run saved locally");
+    await page.locator("#resume-game").click();
+    await page.reload();
+    await page.waitForFunction(() => !!(window as any).__deadAir);
+    const saved = await page.evaluate(() => {
+      const e = (window as any).__deadAir.game.encounters["f0-room0"];
+      return { job: e.executions[0], draft: e.workspace };
+    });
+    expect(saved.job).toEqual(result.job);
+    expect(saved.draft).toBe(draft);
+    await expect(page.locator("#terminal")).toBeHidden();
+    // A forged HTTP preview in a new response is rejected by the real runtime
+    // validator before it can enter the saved job or cause an image request.
+    let leaked = false;
+    await page.route("https://example.invalid/**", (route) => {
+      leaked = true;
+      return route.abort();
+    });
+    await page.route("**/api/execute", (route) =>
+      route.fulfill({
+        json: {
+          ...result.job.receipt,
+          preview: {
+            ...result.job.preview,
+            dataUrl: "https://example.invalid/forged-preview",
+          },
+        },
+      }),
+    );
+    await page.evaluate(async (code) => {
+      const d = (window as any).__deadAir,
+        e = d.game.encounters["f0-room0"],
+        root = "/src/",
+        { edit } = await import(/* @vite-ignore */ root + "ai.ts"),
+        { runWorkspace } = await import(
+          /* @vite-ignore */ root + "execution.ts"
+        );
+      edit(d.game, e, code, e.revision, d.roadmap);
+      await runWorkspace(d.game, e, d.roadmap);
+    }, code);
+    const rejected = await page.evaluate(
+      () => (window as any).__deadAir.game.encounters["f0-room0"].executions[1],
+    );
+    expect(rejected.status).toBe("error");
+    expect(rejected.error).toContain("Invalid browser preview");
+    expect(rejected.preview).toBeUndefined();
+    expect(leaked).toBe(false);
+  } finally {
+    server.closeAllConnections();
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
 });

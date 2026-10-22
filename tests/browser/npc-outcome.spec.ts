@@ -1,92 +1,86 @@
-import { restoreTerminalMode } from "./helpers/terminal-mode";
-// Actual consumed-terminal UI, synthetic generation/validation. No native identity claim.
+// Explicit supported inspection APIs and native conversations. Consumed world
+// stations no longer open the retired editor/chat panel.
 import { expect, test } from "@playwright/test";
 import { enterLegacyBuilding } from "./helpers/legacy-world";
+import { openGameMenu } from "./helpers/game-menu";
+import { mockNativeStudy } from "./native-study-harness";
+
 for (const provider of ["study-mode", "chatgpt-handoff"])
   for (const failure of [false, true])
-    test(`NPC-only solution inspection ${provider}: ${failure ? "deferred validation and exact retry" : "saved validated reconstruction"}`, async ({
+    test(`NPC outcome API ${provider}: ${failure ? "deferred validation and exact saved retry" : "validated reconstruction persists without credit"}`, async ({
       page,
     }) => {
       let materializations = 0,
-        validations = 0,
-        tutors = 0;
+        validations = 0;
       let firstValidation: any;
-      await page.route("**/api/status", (route) =>
-        route.fulfill({
-          json: {
+      await page.route("**/api/**", async (route) => {
+        const request = route.request(),
+          url = new URL(request.url());
+        const json = (body: unknown, status = 200) =>
+          route.fulfill({ status, json: body });
+        if (url.pathname === "/api/status")
+          return json({
             mode: provider,
-            label: "Synthetic outcome fixture",
-            detail: "Not native verification",
+            label: "Synthetic explicit outcome API",
+            detail: "No native identity or learner claim",
             capabilities: ["materialize-outcome", "complete", "tutor"],
-          },
-        }),
-      );
-      await page.route("**/api/bridge", async (route) => {
-        const { operation, payload } = route.request().postDataJSON();
+          });
+        if (url.pathname === "/api/handoff/status")
+          return json({
+            enabled: true,
+            queued: 0,
+            working: 0,
+            done: 0,
+            public: { configured: false },
+          });
+        if (url.pathname !== "/api/bridge")
+          return json({ error: "Unused synthetic route" }, 404);
+        const { operation, payload } = request.postDataJSON();
         if (operation === "materialize-outcome") {
-          expect(payload.provider).toBe(provider);
           materializations++;
-          const c = payload.contract;
+          expect(payload.provider).toBe(provider);
           expect(JSON.stringify(payload)).not.toContain(
             "PRIVATE_OUTCOME_SECRET",
           );
-          await route.fulfill({
-            json: {
-              requestId: payload.requestId,
-              problem: {
-                title: "Synthetic completed task",
-                prompt: "Explain this synthetic boundary.",
-                starter: "",
-                rubric: [],
-                provenance: provider,
-                contract: c,
-                scopeDefinitions: c.objectiveIds.map(
-                  (id: string, i: number) => ({
-                    id: `${id}/D${c.depth}`,
-                    objectiveId: id,
-                    depth: c.depth,
-                    sourceScope: c.scopes[i],
-                    facets: [{ id: "scope", description: "Synthetic scope" }],
-                  }),
-                ),
-              },
-              solution:
-                "Synthetic saved survivor reasoning <img src=x onerror=window.outcomeInjected=true>",
-              authors: [payload.speakers[0].id],
-              refs: [payload.commitment.work[0].seq],
-              execution: "not-run",
+          const c = payload.contract;
+          return json({
+            requestId: payload.requestId,
+            problem: {
+              title: "Synthetic completed task",
+              prompt: "Explain this synthetic boundary.",
+              starter: "",
+              rubric: ["Synthetic scope"],
+              provenance: provider,
+              contract: c,
+              scopeDefinitions: c.objectiveIds.map((id: string, i: number) => ({
+                id: `${id}/D${c.depth}`,
+                objectiveId: id,
+                depth: c.depth,
+                sourceScope: c.scopes[i],
+                facets: [{ id: "scope", description: "Synthetic scope" }],
+              })),
             },
+            solution:
+              "Synthetic saved survivor reasoning <img src=x onerror=window.outcomeInjected=true>",
+            authors: [payload.speakers[0].id],
+            refs: [payload.commitment.work[0].seq],
+            execution: "not-run",
           });
-        } else if (operation === "complete") {
-          expect(payload.provider).toBe(provider);
+        }
+        if (operation === "complete") {
           validations++;
+          expect(payload.provider).toBe(provider);
           expect(payload.mode).toBe("retrospective-npc-outcome");
           if (validations === 1) firstValidation = payload;
           else expect(payload).toEqual(firstValidation);
-          await route.fulfill({
-            json: {
-              requestId: payload.requestId,
-              complete: !failure || validations > 1,
-              feedback: "Synthetic semantic review only",
-              execution: "not-run",
-            },
+          return json({
+            requestId: payload.requestId,
+            complete: !failure || validations > 1,
+            feedback: "Synthetic semantic review, not past execution",
+            execution: "not-run",
           });
-        } else if (operation === "tutor") {
-          tutors++;
-          expect(payload.retrospectiveOutcome).toContain(
-            "Reconstruction authored now",
-          );
-          expect(payload.workspace).toContain("saved survivor reasoning");
-          await route.fulfill({
-            json: {
-              text: "Synthetic tutor: Which boundary changes your reasoning?",
-            },
-          });
-        } else
-          await route.fulfill({
-            status: 503,
-            json: { error: "Unused fixture route" },
-          });
+        }
+        return json({ error: "Unused synthetic operation" }, 503);
       });
       await enterLegacyBuilding(page);
       const before = await page.evaluate(async () => {
@@ -95,12 +89,15 @@ for (const provider of ["study-mode", "chatgpt-handoff"])
           e = g.encounters["f0-room0"],
           a = g.survivors[0],
           npc = g.survivors[1],
-          s = g.floors[0].stations.find((s: any) => s.encounter === e.id);
-        const root = "/src/";
-        const { recordNpcWork } = await import(root + "npc-cognition.ts"),
-          { complete } = await import(root + "engine.ts");
+          s = g.floors[0].stations.find((s: any) => s.encounter === e.id),
+          root = "/src/";
+        const { recordNpcWork } = await import(
+            /* @vite-ignore */ root + "npc-cognition.ts"
+          ),
+          { complete } = await import(/* @vite-ignore */ root + "engine.ts");
         g.study.profile = "live";
-        g.nextSpawn = 999999;
+        g.nextSpawn = Number.MAX_SAFE_INTEGER;
+        g.surge.anchor = Number.MAX_SAFE_INTEGER;
         g.zombies = [];
         g.survivors = [a, npc];
         npc.milestone = 1;
@@ -113,7 +110,6 @@ for (const provider of ["study-mode", "chatgpt-handoff"])
           e.contributors,
           "Simulated NPC-only fixture",
         );
-        // Private text is deliberately absent from the commitment and request.
         e.tutor.push({
           id: "private-fixture",
           author: "human",
@@ -124,7 +120,7 @@ for (const provider of ["study-mode", "chatgpt-handoff"])
           provenance: "private",
         });
         npc.escaped = true;
-        Object.assign(a, { x: s.x, y: s.y });
+        Object.assign(a, { floor: 0, x: s.x, y: s.y });
         return {
           accepted: e.accepted,
           revision: e.revision,
@@ -135,51 +131,83 @@ for (const provider of ["study-mode", "chatgpt-handoff"])
       });
       await page.locator("#world").focus();
       await page.keyboard.press("e");
-      await expect(page.locator("#npc-outcome")).toBeVisible();
+      await expect(page.locator("#terminal")).toBeHidden();
+      await expect(page.locator("#notice")).toContainText("complete");
       expect(materializations).toBe(0);
-      await page
-        .getByRole("button", { name: "Inspect survivor solution", exact: true })
-        .click();
+      const inspect = (retry = false) =>
+        page.evaluate(async (retry) => {
+          const d = (window as any).__deadAir,
+            root = "/src/";
+          const { inspectCompletedNpcWork } = await import(
+            /* @vite-ignore */ root + "ai.ts"
+          );
+          await inspectCompletedNpcWork(
+            d.game,
+            d.game.encounters["f0-room0"],
+            d.roadmap,
+            retry,
+          );
+        }, retry);
+      const state = () =>
+        page.evaluate(async () => {
+          const d = (window as any).__deadAir,
+            e = d.game.encounters["f0-room0"],
+            root = "/src/";
+          const { outcomeIsVisible } = await import(
+            /* @vite-ignore */ root + "npc-outcome.ts"
+          );
+          return {
+            inspection: e.outcomeInspection,
+            notice: e.outcomeNotice,
+            valid: outcomeIsVisible(d.game, e, d.roadmap),
+          };
+        });
+      const save = async () => {
+        await openGameMenu(page);
+        await page
+          .getByRole("button", { name: "Save run", exact: true })
+          .click();
+        await expect(page.locator("#notice")).toContainText(
+          "Run saved locally",
+        );
+        await page.locator("#resume-game").click();
+      };
+      await inspect();
       if (failure) {
-        await expect(page.locator("#npc-outcome-status")).toContainText(
+        const rejected = await state();
+        expect(rejected.inspection.state).toBe("failed");
+        expect(rejected.valid).toBe(false);
+        expect(rejected.inspection.validatedContent).toBeUndefined();
+        expect(rejected.notice).toContain(
           "does not have a compatible validation",
         );
-        await expect(page.locator("#npc-outcome-body")).toBeEmpty();
-        await page.locator("#leave").click();
+        const hash = rejected.inspection.candidateHash;
+        await save();
         await page.reload();
-        await page.locator("#world").focus();
-        await page.keyboard.press("e");
-        await page
-          .getByRole("button", { name: "Retry saved solution inspection" })
-          .click();
+        await page.waitForFunction(() => !!(window as any).__deadAir);
+        await inspect(true);
+        expect((await state()).inspection.candidateHash).toBe(hash);
       }
-      await expect(page.locator("#npc-outcome-body")).toContainText(
-        "Synthetic saved survivor reasoning",
+      const reconstructed = await state();
+      expect(reconstructed.valid).toBe(true);
+      expect(reconstructed.inspection.state).toBe("applied");
+      expect(reconstructed.inspection.candidate.solution).toContain(
+        "Synthetic saved survivor reasoning <img",
       );
       expect(materializations).toBe(1);
       expect(validations).toBe(failure ? 2 : 1);
-      if (!failure)
-        await page
-          .locator("#npc-outcome")
-          .screenshot({ path: "test-results/npc-outcome-inspection.png" });
+      // API retrieval does not pretend the normal gameplay interface displayed
+      // a reconstruction, nor render its text as active HTML.
       expect(
         await page.evaluate(() => (window as any).outcomeInjected),
       ).toBeUndefined();
-      expect(await page.locator("#npc-outcome-body img").count()).toBe(0);
-      await expect(page.locator("#workspace")).toHaveAttribute("readonly", "");
-      await restoreTerminalMode(page, "tutor");
-      await page.locator("#chat-input").fill("Can you explain the boundary?");
-      await page.locator("#chat-form button").click();
-      await expect(page.locator("#messages")).toContainText(
-        "Which boundary changes your reasoning?",
-      );
-      expect(tutors).toBe(1);
-      await page.locator("#leave").click();
+      expect(await page.locator('img[src="x"]').count()).toBe(0);
+      await save();
       await page.reload();
-      await page.locator("#world").focus();
-      await page.keyboard.press("e");
-      await expect(page.locator("#npc-outcome-body")).toContainText(
-        "Synthetic saved survivor reasoning",
+      await page.waitForFunction(() => !!(window as any).__deadAir);
+      await inspect();
+      expect((await state()).inspection.candidate).toEqual(
+        reconstructed.inspection.candidate,
       );
       expect(materializations).toBe(1);
       expect(validations).toBe(failure ? 2 : 1);
@@ -209,10 +237,128 @@ for (const provider of ["study-mode", "chatgpt-handoff"])
       expect(after.access).toEqual(before.access);
       expect(after.attempts).toEqual([]);
       expect(after.evidence).toEqual([]);
-      expect(after.exposures).toHaveLength(1);
-      await expect(page.locator("#npc-outcome-status")).toContainText(
-        provider === "chatgpt-handoff"
-          ? "through ChatGPT handoff"
-          : "through configured Study Mode bridge",
-      );
+      expect(after.exposures).toEqual([]);
+      await expect(page.locator("#terminal")).toBeHidden();
     });
+
+test("native study cannot steal an NPC's solo terminal; an NPC's later accepted answer stays intact while native learning is retained", async ({
+  page,
+}) => {
+  const relay = await mockNativeStudy(page);
+  await enterLegacyBuilding(page);
+  const ids = await page.evaluate(() => {
+    const d = (window as any).__deadAir,
+      g = d.game,
+      h = g.survivors[0],
+      npc = g.survivors[1],
+      stations = g.floors[0].stations,
+      s = stations[0],
+      other = stations.find((s: any) => s.encounter !== stations[0].encounter);
+    const owned = g.encounters[s.encounter];
+    owned.mode = "solo";
+    owned.owner = npc.id;
+    for (const a of g.survivors.slice(1)) a.escaped = true;
+    g.nextSpawn = Number.MAX_SAFE_INTEGER;
+    g.surge.anchor = Number.MAX_SAFE_INTEGER;
+    g.zombies = [];
+    Object.assign(h, { floor: 0, x: s.x, y: s.y });
+    return {
+      owned: owned.id,
+      available: other.encounter,
+      station: other.id,
+      npc: npc.id,
+    };
+  });
+  await page.locator("#world").focus();
+  await page.keyboard.press("e");
+  await expect(page.locator("#notice")).toContainText("another survivor");
+  expect(relay.calls).toHaveLength(0);
+  expect(
+    await page.evaluate(
+      (id) => (window as any).__deadAir.game.encounters[id].owner,
+      ids.owned,
+    ),
+  ).toBe(ids.npc);
+  await page.evaluate(async (ids) => {
+    const d = (window as any).__deadAir,
+      g = d.game,
+      e = g.encounters[ids.available],
+      s = g.floors[0].stations.find((s: any) => s.id === ids.station),
+      root = "/src/";
+    e.mode = "shared";
+    delete e.owner;
+    Object.assign(g.survivors[0], { floor: 0, x: s.x, y: s.y });
+    const { ensureProblem } = await import(/* @vite-ignore */ root + "ai.ts");
+    await ensureProblem(g, e, d.roadmap);
+    await d.interact();
+  }, ids);
+  await expect.poll(() => relay.calls.length).toBe(1);
+  const accepted = await page.evaluate(async (ids) => {
+    const g = (window as any).__deadAir.game,
+      e = g.encounters[ids.available],
+      root = "/src/",
+      { complete } = await import(/* @vite-ignore */ root + "engine.ts");
+    e.submissions.push({
+      id: "synthetic-npc-native-acceptance",
+      author: ids.npc,
+      revision: e.revision + 1,
+      content: "Synthetic accepted survivor work",
+      seq: ++g.seq,
+      status: "pending",
+      feedback: "",
+    });
+    complete(
+      g,
+      e.id,
+      "synthetic-npc-native-acceptance",
+      [ids.npc],
+      "Synthetic accepted NPC solution",
+    );
+    return {
+      accepted: e.accepted,
+      workspace: e.workspace,
+      revision: e.revision,
+      submissions: e.submissions,
+      access: [...g.survivors[0].access],
+      cycle: g.study.learner.cycle,
+    };
+  }, ids);
+  relay.finish(relay.calls[0].payload.requestId);
+  await expect
+    .poll(() =>
+      page.evaluate(
+        (id) => (window as any).__deadAir.game.encounters[id].directStudy.state,
+        ids.available,
+      ),
+    )
+    .toBe("applied");
+  const after = await page.evaluate((id) => {
+    const g = (window as any).__deadAir.game,
+      e = g.encounters[id];
+    return {
+      accepted: e.accepted,
+      workspace: e.workspace,
+      revision: e.revision,
+      submissions: e.submissions,
+      access: g.survivors[0].access,
+      cycle: g.study.learner.cycle,
+      evidence: g.study.learner.evidence,
+      tutor: e.tutor,
+    };
+  }, ids.available);
+  expect(after.accepted).toBe(accepted.accepted);
+  expect(after.workspace).toBe(accepted.workspace);
+  expect(after.revision).toBe(accepted.revision);
+  expect(after.submissions).toEqual(accepted.submissions);
+  expect(after.access).toEqual(accepted.access);
+  expect(after.cycle).toBe(accepted.cycle);
+  expect(after.evidence).toEqual([]);
+  expect(
+    after.tutor.some(
+      (m: any) =>
+        m.kind === "human" && m.provenance === "chatgpt-host-model-transcript",
+    ),
+  ).toBe(true);
+  await expect(page.locator("#terminal")).toBeHidden();
+  await expect(page.locator("#reward-toast")).toBeHidden();
+});

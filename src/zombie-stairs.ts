@@ -8,7 +8,9 @@ import {
   type Zombie,
   distance,
 } from "./model";
-import { inFurniture, line, wall } from "./spatial";
+import { inFurniture, line, solid, wall } from "./spatial";
+import { walkSegment } from "./navigation";
+import { STAIRWELL_RADIUS } from "./stairwell";
 import { canSee, playerCanSee, sightRadius } from "./visibility";
 import type { ZombieIndex } from "./zombie-index";
 export type StairArrival =
@@ -16,8 +18,8 @@ export type StairArrival =
   | { kind: "arrive"; floor: number; position: Point }
   | { kind: "furniture"; floor: number; position: Point; object: Furniture }
   | { kind: "survivor"; floor: number; position: Point; actor: Actor };
-/** The point portal is one physical exit. Oldest completed flight keeps contact
- * through its cooldown; queued bodies cannot take turns multiplying damage. */
+/** Carved wells admit parallel arrivals across their width. An obstructed
+ * exit retains one contact owner so queued bodies cannot multiply damage. */
 export function zombieStairArrival(
   g: Game,
   z: Zombie,
@@ -30,11 +32,53 @@ export function zombieStairArrival(
     !source ||
     !next ||
     z.floor >= CONFIG.floors ||
-    distance(z, source.stairs) > 0.8
+    distance(z, source.stairs) >
+      (source.layout === "pursuit" ? STAIRWELL_RADIUS : 0.8)
   )
     return { kind: "cancel" };
   if (g.time + 1e-8 < z.stairUntil) return { kind: "wait" };
-  const ahead = (crowd?.near(z.floor, source.stairs, 0.8) ?? g.zombies).some(
+  const p = next.entry,
+    floor = next.index;
+  // Stay within the actual well: never skip a barricade or arrive through a
+  // wall into the lobby. Body occupancy is checked afresh for every arrival.
+  if (next.layout === "pursuit") {
+    const points = [
+      { x: p.x - 0.5, y: p.y - 0.5 },
+      { x: p.x + 0.5, y: p.y - 0.5 },
+      { x: p.x - 0.5, y: p.y + 0.5 },
+      { x: p.x + 0.5, y: p.y + 0.5 },
+      p,
+    ];
+    const position = points.find(
+      (point) =>
+        !solid(next, point, 0.25, undefined, true) &&
+        walkSegment(next, p, point) &&
+        !g.effects.some(
+          (e) =>
+            e.kind === "bubble" &&
+            e.until > g.time &&
+            e.floor === floor &&
+            canSee(next, e, point, e.radius + 0.5),
+        ) &&
+        !(crowd?.near(floor, point, 0.55) ?? g.zombies).some(
+          (other) =>
+            other !== z &&
+            other.hp > 0 &&
+            other.floor === floor &&
+            distance(other, point) < 0.55,
+        ) &&
+        !g.survivors.some(
+          (a) =>
+            a.alive &&
+            !a.escaped &&
+            a.floor === floor &&
+            distance(a, point) < 0.55,
+        ),
+    );
+    if (position) return { kind: "arrive", floor, position: { ...position } };
+  }
+  const radius = source.layout === "pursuit" ? STAIRWELL_RADIUS : 0.8;
+  const ahead = (crowd?.near(z.floor, source.stairs, radius) ?? g.zombies).some(
     (other) =>
       other !== z &&
       other.floor === z.floor &&
@@ -42,13 +86,11 @@ export function zombieStairArrival(
       other.stagger <= 0 &&
       other.stairUntil !== undefined &&
       other.stairUntil <= g.time + 1e-8 &&
-      distance(other, source.stairs) <= 0.8 &&
+      distance(other, source.stairs) <= radius &&
       (other.stairUntil < z.stairUntil! ||
         (other.stairUntil === z.stairUntil && other.id < z.id)),
   );
   if (ahead) return { kind: "wait" };
-  const p = next.entry,
-    floor = next.index;
   if (
     [-0.22, 0.22].some((dx) =>
       [-0.22, 0.22].some((dy) => wall(next, p.x + dx, p.y + dy)),

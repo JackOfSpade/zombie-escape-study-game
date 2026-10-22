@@ -484,3 +484,66 @@ test("benchmark compares legacy and current on identical synthetic bursts with e
     report.currentDocumentSerializations <= report.legacySerializations,
   );
 });
+test("repeated unchanged ended captures cannot evict earlier live diagnostics", () => {
+  const logs = new RunLogs(memory()),
+    { g } = scene();
+  g.id = "ended-repeat";
+  for (let i = 1; i <= 30; i++) {
+    g.time = i * 2.5;
+    logs.capture(g);
+  }
+  const run = logs.runs[0];
+  const live = run.entries.filter(
+    (e) =>
+      e.type === "snapshot" &&
+      (e.data as { status: string }).status === "playing",
+  ).length;
+  assert.equal(live, 30);
+  g.status = "dead";
+  g.endedAt = g.time;
+  g.seq++;
+  g.events.push({
+    seq: g.seq,
+    at: g.time,
+    type: "death",
+    floor: 0,
+    actor: "human",
+    text: "lost",
+  });
+  logs.capture(g, true);
+  const afterEnd = run.entries.length;
+  // A browser frame loop forcing captures of an unchanged ended world.
+  for (let i = 0; i < LOG_LIMITS.entries * 2; i++) logs.capture(g, true);
+  assert.equal(run.entries.length, afterEnd);
+  const deaths = run.entries.filter(
+    (e) => e.type === "world" && (e.data as { type: string }).type === "death",
+  );
+  assert.equal(deaths.length, 1);
+  // Pause transition is genuine and recorded once; repeats are not.
+  g.paused = true;
+  logs.capture(g, true);
+  logs.capture(g, true);
+  assert.equal(run.entries.length, afterEnd + 1);
+  assert.equal((run.entries.at(-1)!.data as { paused: boolean }).paused, true);
+  g.paused = false;
+  // The world keeps running after death: sampled at the normal 2s cadence.
+  g.time += 1;
+  logs.capture(g);
+  assert.equal(run.entries.length, afterEnd + 2); // un-pause transition
+  g.time += 0.5;
+  logs.capture(g);
+  assert.equal(run.entries.length, afterEnd + 2); // throttled
+  g.time += 2;
+  logs.capture(g);
+  assert.equal(run.entries.length, afterEnd + 3);
+  assert.equal(
+    run.entries.filter(
+      (e) =>
+        e.type === "snapshot" &&
+        (e.data as { status: string }).status === "playing",
+    ).length,
+    30,
+  );
+  assert.equal(run.summary!.outcome, "dead");
+  assert.equal(run.summary!.duration, 75);
+});

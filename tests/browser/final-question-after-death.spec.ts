@@ -1,113 +1,224 @@
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test } from "@playwright/test";
+import {
+  enterNativeGame,
+  flushNativeSave,
+  killHumanInStep,
+  mockNativeStudy,
+  nativeState,
+  openNativeQuestion,
+} from "./native-study-harness";
 
-/** A solo station question beside the player, with no threats or tutor network. */
-async function openSoloQuestion(page: Page) {
-  await page.goto("/");
-  await page.getByRole("button", { name: "Enter the building" }).click();
-  await page.evaluate(async () => {
-    const { game: g, roadmap: r } = (window as any).__deadAir;
-    const root = "/src/";
-    const { ensureProblem } = await import(/* @vite-ignore */ root + "ai.ts");
-    g.zombies = [];
-    g.nextSpawn = Number.MAX_SAFE_INTEGER;
-    g.surge.anchor = Number.MAX_SAFE_INTEGER;
+test("combat death preserves the pending native question without forcing a menu; final answers still count", async ({
+  page,
+}) => {
+  const relay = await mockNativeStudy(page);
+  await enterNativeGame(page);
+  const id = await openNativeQuestion(page);
+  await expect.poll(() => relay.calls.length).toBe(1);
+  const pending = await nativeState(page, id),
+    payload = relay.calls[0].payload;
+  await killHumanInStep(page);
+  await expect(page.locator("body")).toHaveClass(/spectating/);
+  await expect(page.locator("#start-card")).toBeHidden();
+  await expect(page.locator("#terminal")).toBeHidden();
+  await expect(page.locator("#native-study-status")).toContainText(
+    "Continue in ChatGPT",
+  );
+  const died = await nativeState(page, id);
+  expect(died.session.questionFingerprint).toBe(
+    pending.session.questionFingerprint,
+  );
+  expect(died.session.state).toBe("pending");
+  expect(died.alive).toBe(false);
+  expect(died.station).toBeUndefined();
+  expect(typeof died.endedAt).toBe("number");
+  await expect
+    .poll(async () => (await nativeState(page, id)).time)
+    .toBeGreaterThan(died.time + 0.25);
+  await page.getByRole("button", { name: "Run summary" }).click();
+  await expect(
+    page.getByRole("button", { name: "Continue in ChatGPT" }),
+  ).toBeVisible();
+  await page.getByRole("button", { name: "Continue in ChatGPT" }).click();
+  await expect(page.locator("#start-card")).toBeHidden();
+  expect(relay.calls).toHaveLength(1);
+  relay.finish(payload.requestId, "gap");
+  await expect
+    .poll(async () => (await nativeState(page, id)).session.state)
+    .toBe("applied");
+  const finished = await nativeState(page, id);
+  expect(finished.keys).toBe(pending.keys);
+  expect(finished.gaps).toHaveLength(1);
+  expect(
+    finished.tutor.some(
+      (m: any) => m.kind === "human" && m.text.includes("do not know"),
+    ),
+  ).toBe(true);
+  expect(finished.endedAt).toBe(died.endedAt);
+  await expect(page.locator("#reward-toast")).toBeHidden();
+  await flushNativeSave(page);
+  await page.reload();
+  const restored = await nativeState(page, id);
+  expect(restored.keys).toBe(pending.keys);
+  expect(restored.gaps).toHaveLength(1);
+  expect(restored.session.state).toBe("applied");
+});
+
+test("a pending native question resumes after death and page reload with the same snapshot", async ({
+  page,
+}) => {
+  const relay = await mockNativeStudy(page);
+  await enterNativeGame(page);
+  const id = await openNativeQuestion(page);
+  await expect.poll(() => relay.calls.length).toBe(1);
+  const payload = relay.calls[0].payload;
+  await killHumanInStep(page);
+  await expect(page.locator("#start-card")).toBeHidden();
+  await flushNativeSave(page);
+  await page.reload();
+  await expect.poll(() => relay.calls.length).toBe(2);
+  expect(relay.calls[1].payload).toEqual(payload);
+  await expect(page.locator("#start-card")).toBeHidden();
+  await expect(page.locator("#spectator")).toBeVisible();
+  relay.finish(payload.requestId);
+  await expect
+    .poll(async () => (await nativeState(page, id)).session.state)
+    .toBe("applied");
+  expect((await nativeState(page, id)).keys).toBe(0);
+});
+
+test("delayed generation survives combat death and reload, resumes its exact request, then opens native study without a menu", async ({
+  page,
+}) => {
+  const relay = await mockNativeStudy(page);
+  const generations: any[] = [];
+  let generated: any;
+  await page.route("**/api/bridge", async (route) => {
+    const body = route.request().postDataJSON();
+    if (body.operation !== "generate") return route.fallback();
+    generations.push(body);
+    await route.fulfill({
+      status: 202,
+      json: {
+        handoff: {
+          id: "synthetic-delayed-generation",
+          hash: "synthetic-exact-generation",
+        },
+      },
+    });
+  });
+  await page.route("**/api/bridge/result**", async (route) => {
+    if (
+      new URL(route.request().url()).searchParams.get("id") !==
+      "synthetic-delayed-generation"
+    )
+      return route.fallback();
+    await route.fulfill({
+      status: generated ? 200 : 202,
+      json: generated ?? { status: "pending" },
+    });
+  });
+  await enterNativeGame(page);
+  const id = await page.evaluate(() => {
+    const d = (window as any).__deadAir,
+      g = d.game;
+    g.study.profile = "live";
     const st = g.floors[0].stations[0],
       e = g.encounters[st.encounter];
+    for (const peer of Object.values(g.encounters) as any[])
+      if (
+        peer === e ||
+        (e.questionRoom && peer.questionRoom === e.questionRoom)
+      ) {
+        delete peer.problem;
+        delete peer.problemPresentedSequence;
+        peer.workspace = "";
+        peer.revision = 0;
+        peer.state = "available";
+      }
     e.mode = "solo";
     e.owner = "human";
-    Object.assign(g.survivors[0], { x: st.x, y: st.y });
-    await ensureProblem(g, e, r);
+    Object.assign(g.survivors[0], { floor: 0, x: st.x, y: st.y });
+    return e.id as string;
   });
   await page.locator("#world").focus();
   await page.keyboard.press("e");
-  await expect(page.locator("#terminal")).toBeVisible();
-  return page.evaluate(() => {
-    const g = (window as any).__deadAir.game;
-    return g.encounters[g.floors[0].stations[0].encounter].id as string;
-  });
-}
-async function die(page: Page) {
-  await page.evaluate(() => {
-    const g = (window as any).__deadAir.game;
-    Object.assign(g.survivors[0], { alive: false, hp: 0 });
-    g.status = "dead";
-  });
-}
-const keysHeld = (page: Page) =>
-  page.evaluate(() => (window as any).__deadAir.game.survivors[0].keys ?? 0);
-
-test("A: dying with the tutor terminal open keeps the question answerable", async ({
-  page,
-}) => {
-  const id = await openSoloQuestion(page);
-  const keysBefore = await keysHeld(page);
-  await die(page);
-  // The end-of-run pass runs in the UI tick; wait for spectating to begin.
-  await expect(page.locator("body")).toHaveClass(/spectating/);
-  await expect(page.locator("#terminal")).toBeVisible();
-  await expect(page.locator("#final-question-notice")).toBeVisible();
+  await expect.poll(() => generations.length).toBe(1);
+  await expect(page.locator("#native-study-status")).toContainText(
+    "Preparing your saved question",
+  );
+  await expect(page.locator("#native-study-retry")).toBeHidden();
+  const original = generations[0];
+  expect(original.payload.requestId).toBeTruthy();
+  await killHumanInStep(page);
   await expect(page.locator("#start-card")).toBeHidden();
-  const input = page.locator("#chat-input");
-  await expect(input).toBeEnabled();
-  await input.fill("My final reasoning");
-  await expect(input).toHaveValue("My final reasoning");
-  await page.locator("#leave").click();
-  await expect(page.locator("#terminal")).toBeHidden();
-  await expect(
-    page.getByRole("button", { name: "Begin another run" }),
-  ).toBeVisible();
-  const after = await page.evaluate((encounter) => {
-    const g = (window as any).__deadAir.game;
-    return { status: g.status, state: g.encounters[encounter].state };
-  }, id);
-  expect(after.status).toBe("dead");
-  expect(after.state).not.toBe("consumed");
-  expect(await keysHeld(page)).toBe(keysBefore);
-});
-
-test("B: the end card reopens an unfinished last question without a station", async ({
-  page,
-}) => {
-  await openSoloQuestion(page);
-  await page.locator("#leave").click();
-  await expect(page.locator("#terminal")).toBeHidden();
-  await die(page);
-  const finish = page.getByRole("button", {
-    name: "Finish your last question",
+  await expect(page.locator("#spectator")).toBeVisible();
+  await page.evaluate(async () => {
+    const root = "/src/",
+      { save, flushSaves } = await import(
+        /* @vite-ignore */ root + "persistence.ts"
+      );
+    await save((window as any).__deadAir.game);
+    await flushSaves();
   });
-  await expect(finish).toBeVisible();
-  await finish.click();
+  await page.reload();
+  await expect.poll(() => generations.length).toBe(2);
+  expect(generations[1]).toEqual(original);
   await expect(page.locator("#start-card")).toBeHidden();
-  await expect(page.locator("#terminal")).toBeVisible();
-  await expect(page.locator("#final-question-notice")).toBeVisible();
-  expect(
-    await page.evaluate(
-      () => (window as any).__deadAir.game.survivors[0].station,
+  await expect(page.locator("#native-study-status")).toContainText(
+    "Preparing your saved question",
+  );
+  await expect(page.locator("#spectator")).toBeVisible();
+  expect(relay.calls).toHaveLength(0);
+  const contract = original.payload.contract;
+  generated = {
+    title: "Synthetic delayed question",
+    prompt:
+      "Explain the issued contract and its boundary. Synthetic transport fixture.",
+    starter: "",
+    rubric: ["Explain the captured source scope"],
+    contract,
+    scopeDefinitions: contract.objectiveIds.map(
+      (objectiveId: string, i: number) =>
+        original.payload.existingScopeDefinitions?.[
+          `${objectiveId}/D${contract.depth}`
+        ] ?? {
+          id: `${objectiveId}/D${contract.depth}`,
+          objectiveId,
+          depth: contract.depth,
+          sourceScope: contract.scopes[i],
+          facets: [
+            {
+              id: `delayed-scope-${i}`,
+              description: "Captured source scope and its boundary",
+            },
+          ],
+        },
     ),
-  ).toBeUndefined();
-  // Escape from inside the composer leaves the terminal, not a pause menu.
-  await page.locator("#chat-input").focus();
-  await page.keyboard.press("Escape");
+  };
+  await expect.poll(() => relay.calls.length).toBe(1);
+  const native = relay.calls[0].payload;
+  expect(native.problem.title).toBe("Synthetic delayed question");
+  expect(native.problem.contract).toEqual(contract);
+  await expect(page.locator("#start-card")).toBeHidden();
   await expect(page.locator("#terminal")).toBeHidden();
-  await expect(page.locator("#pause-menu")).toBeHidden();
-  await expect(
-    page.getByRole("button", { name: "Begin another run" }),
-  ).toBeVisible();
-  await expect(finish).toBeVisible();
-});
-
-test("C: a consumed last question offers no finish button", async ({
-  page,
-}) => {
-  const id = await openSoloQuestion(page);
-  await page.locator("#leave").click();
-  await page.evaluate((encounter) => {
-    (window as any).__deadAir.game.encounters[encounter].state = "consumed";
-  }, id);
-  await die(page);
-  await expect(
-    page.getByRole("button", { name: "Begin another run" }),
-  ).toBeVisible();
-  await expect(page.locator("#finish-question")).toHaveCount(0);
-  await expect(page.locator("#terminal")).toBeHidden();
+  await expect(page.locator("#native-study-status")).toContainText(
+    "Continue in ChatGPT",
+  );
+  relay.finish(native.requestId, "gap");
+  await expect
+    .poll(async () => (await nativeState(page, id)).session.state)
+    .toBe("applied");
+  const result = await nativeState(page, id);
+  expect(result.status).toBe("dead");
+  expect(result.keys).toBe(0);
+  expect(result.gaps).toHaveLength(1);
+  expect(generations).toHaveLength(2);
+  expect(relay.calls.filter((call) => call.operation === "tutor")).toHaveLength(
+    1,
+  );
+  expect(
+    relay.calls.filter((call) => call.operation === "assess"),
+  ).toHaveLength(1);
+  await expect(page.locator("#reward-toast")).toBeHidden();
 });

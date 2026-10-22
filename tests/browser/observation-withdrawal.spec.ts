@@ -43,6 +43,9 @@ test("reviewed source invalidation withdraws a prior imported pass without learn
     initial,
     readIdentifierCounters(initial, false).counters,
   );
+  await page.route("**/api/**", (route) =>
+    route.fulfill({ status: 503, json: { error: "Unused synthetic route" } }),
+  );
   await page.route("**/api/status", (route) =>
     route.fulfill({
       json: {
@@ -136,6 +139,16 @@ test("reviewed source invalidation withdraws a prior imported pass without learn
       if (job.state !== "ready") throw Error(job.error);
       await adoptReconciledRoadmap(g, r, job.id);
       await (await import(root + "persistence.ts")).save(g);
+      const { prepareRoadmapExport } = await import(root + "roadmap-export.ts");
+      const checked = await prepareRoadmapExport(
+        r,
+        g.study.learner,
+        g.study.roadmapExport,
+      );
+      if (checked.hash !== g.study.roadmapExport.hash)
+        throw Error(
+          "A focused adoption must retain its exact reviewed source hash without an administrative export revision",
+        );
       return g.study.roadmapExport;
     },
     {

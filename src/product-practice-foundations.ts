@@ -195,7 +195,7 @@ Write the update message (under 150 words) to stakeholders. It must state the ne
   },
   "PE:T04.1": {
     title: "Recipe page navigation / loading trace",
-    prompt: `A user clicks a link to https://recipes.example/pasta for the first time. The server returns this HTML in 300 ms:
+    prompt: `A user clicks a link to https://recipes.example/pasta for the first time. Setup facts (already done; not part of the question): the DNS lookup and the HTTPS connection to recipes.example are complete, and the server returns this HTML in 300 ms:
 
 <head>
   <link rel="stylesheet" href="/app.css">
@@ -207,13 +207,15 @@ Write the update message (under 150 words) to stakeholders. It must state the ne
   <div id="steps"></div>
 </body>
 
-app.js (120 KB) fetches /api/steps and renders the steps into #steps. Assume no caching and no service worker.
+app.js (120 KB) runs when the synchronous script loads and registers a DOMContentLoaded callback. That callback waits until the DOM is ready (DOMContentLoaded), then fetches /api/steps and inserts the returned steps into #steps; the callback never accesses #steps before it exists. Assume no caching and no service worker.
 
-Trace, in order, what happens from the click to the moment the user can read the steps: connection setup, document response, parsing, how the stylesheet and the synchronous script affect parsing and first paint, the image, and the API call. Then name one change to this HTML that would let the heading appear sooner, and explain why.`,
+Answer two things:
+1. Explain how /app.css and the synchronous /app.js in the head affect when the "Pasta" heading can first appear on screen, and name one change to this HTML that would let the heading appear sooner, with the reason.
+2. Put these events in order and say briefly why: the /api/steps response arrives, app.js finishes downloading and runs, the steps appear in #steps.`,
     rubric: [
-      "Orders connection setup, document response, parsing, and each resource request correctly",
-      "Explains how the stylesheet and the synchronous head script each affect parsing and first paint",
-      "Places the steps rendering correctly relative to app.js and the API call, and justifies one earlier-paint change",
+      "Explains how the stylesheet and the synchronous head script each delay the heading's first appearance",
+      "Justifies one HTML change that lets the heading appear sooner",
+      "Orders app.js running, the /api/steps response and the steps appearing in #steps, with a reason",
     ],
   },
   "PE:T04.2": {

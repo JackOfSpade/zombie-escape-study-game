@@ -1,72 +1,115 @@
-// Real UI lifecycle with a synthetic provider; no native identity/semantic claim.
+// Real issuance/persistence lifecycle with a synthetic native conversation.
 import { expect, test } from "@playwright/test";
 import { enterLegacyBuilding } from "./helpers/legacy-world";
-test("unanswered native task keeps its ID through leave/reload/death and gets a fresh linked question", async ({
+import { openGameMenu } from "./helpers/game-menu";
+import { killHumanInStep } from "./native-study-harness";
+
+test("unanswered native task retains its formal ID through death and restart; archived completion unlocks a fresh linked task without rewarding the new run", async ({
   page,
 }) => {
   let generations = 0;
-  await page.route("**/api/status", (route) =>
-    route.fulfill({
-      json: {
-        mode: "study-mode",
-        label: "Synthetic issuance fixture",
-        detail: "Not native certification",
-        capabilities: ["generate", "assess"],
-      },
-    }),
-  );
-  await page.route("**/api/bridge", async (route) => {
-    const { operation, payload } = route.request().postDataJSON();
+  const nativeCalls: any[] = [];
+  const assessmentCalls: any[] = [];
+  const results = new Map<string, unknown>();
+  await page.route("**/api/**", async (route) => {
+    const request = route.request(),
+      url = new URL(request.url());
+    const json = (body: unknown, status = 200) =>
+      route.fulfill({ status, json: body });
+    if (url.pathname === "/api/status")
+      return json({
+        mode: "chatgpt-handoff",
+        label: "Synthetic native issuance",
+        detail: "Synthetic fixture; no real AI",
+        capabilities: ["generate", "assess", "tutor", "direct-study"],
+      });
+    if (url.pathname === "/api/bridge/result") {
+      const id = url.searchParams.get("id")!;
+      return results.has(id)
+        ? json(results.get(id))
+        : json({ handoff: { id, status: "working" } }, 202);
+    }
+    if (url.pathname === "/api/handoff/status")
+      return json({
+        enabled: true,
+        queued: 0,
+        working: nativeCalls.length,
+        done: 0,
+        public: { terminalRelay: { activeSessions: 1 } },
+      });
+    if (url.pathname !== "/api/bridge")
+      return json({ error: "Unused synthetic route" }, 404);
+    const { operation, payload } = request.postDataJSON();
     if (operation === "generate") {
       generations++;
       const c = payload.contract;
-      await route.fulfill({
-        json: {
-          title: "Synthetic unanswered task",
-          prompt: `Read-only question ${generations}`,
-          starter: "Supplied starter",
-          rubric: [],
-          contract: c,
-          scopeDefinitions: c.objectiveIds.map((id: string, i: number) => ({
-            id: `${id}/D${c.depth}`,
-            objectiveId: id,
-            depth: c.depth,
-            sourceScope: c.scopes[i],
-            facets: [{ id: "scope", description: "Synthetic scope" }],
-          })),
+      return json({
+        title: "Synthetic unanswered native task",
+        prompt: `Read-only question ${generations}`,
+        starter: "",
+        rubric: ["Synthetic scope"],
+        contract: c,
+        scopeDefinitions: c.objectiveIds.map((id: string, i: number) => ({
+          id: `${id}/D${c.depth}`,
+          objectiveId: id,
+          depth: c.depth,
+          sourceScope: c.scopes[i],
+          facets: [{ id: "scope", description: "Synthetic scope" }],
+        })),
+      });
+    }
+    if (operation === "tutor" && payload.mode === "terminal-direct") {
+      nativeCalls.push(payload);
+      return json(
+        {
+          handoff: {
+            id: payload.requestId,
+            hash: `synthetic-${payload.requestId}`,
+          },
         },
-      });
-    } else if (operation === "assess")
-      await route.fulfill({
-        json: { visitOutcome: "unresolved", findings: [] },
-      });
-    else
-      await route.fulfill({
-        status: 503,
-        json: { error: "Unused fixture operation" },
-      });
+        202,
+      );
+    }
+    if (operation === "assess") {
+      assessmentCalls.push(payload);
+      return json({ visitOutcome: "unresolved", findings: [] });
+    }
+    return json({ error: "Unused synthetic operation" }, 503);
   });
   await enterLegacyBuilding(page);
+  const position = () =>
+    page.evaluate(() => {
+      const g = (window as any).__deadAir.game,
+        a = g.survivors[0],
+        s = g.floors[0].stations[0];
+      g.survivors = [a];
+      g.zombies = [];
+      g.nextSpawn = Number.MAX_SAFE_INTEGER;
+      g.surge.anchor = Number.MAX_SAFE_INTEGER;
+      Object.assign(a, { floor: 0, x: s.x, y: s.y });
+      return s.encounter as string;
+    });
   const baseline = await page.evaluate(() => {
-    const g = (window as any).__deadAir.game,
-      a = g.survivors[0],
-      s = g.floors[0].stations.find((s: any) => s.encounter === "f0-room0");
+    const g = (window as any).__deadAir.game;
     g.study.profile = "live";
-    g.survivors = [a];
-    g.zombies = [];
-    g.nextSpawn = 999999;
-    Object.assign(a, { x: s.x, y: s.y });
     return {
       cycle: g.study.learner.cycle,
       tracks: JSON.stringify(g.study.learner.tracks),
     };
   });
+  const id = await position();
   await page.locator("#world").focus();
   await page.keyboard.press("e");
-  await expect(page.locator("#problem")).toContainText("Read-only question 1");
-  const issued = await page.evaluate(() => {
+  await expect(page.locator("#native-study-title")).toHaveText(
+    "Synthetic unanswered native task",
+  );
+  await expect.poll(() => nativeCalls.length).toBe(1);
+  await expect(page.locator("#terminal")).toBeHidden();
+  await expect(page.locator("#chat-input")).toBeHidden();
+  const issued = await page.evaluate((id) => {
     const g = (window as any).__deadAir.game,
-      l = g.study.learner;
+      l = g.study.learner,
+      e = g.encounters[id];
     return {
       id: l.attempts[0]?.id,
       attempts: l.attempts.length,
@@ -74,92 +117,221 @@ test("unanswered native task keeps its ID through leave/reload/death and gets a 
       evidence: l.evidence.length,
       tracks: JSON.stringify(l.tracks),
       run: g.id,
+      problem: e.problem,
+      session: e.directStudy,
     };
-  });
+  }, id);
   expect(issued.id).toBeTruthy();
   expect(issued.attempts).toBe(1);
   expect(issued.cycle).toBe(baseline.cycle);
   expect(issued.tracks).toBe(baseline.tracks);
   expect(issued.evidence).toBe(0);
-  await page.locator("#leave").click();
-  await page.reload();
-  await expect(page.locator("#world")).toBeVisible();
-  await page.locator("#world").focus();
-  await page.keyboard.press("e");
-  await expect(page.locator("#problem")).toContainText("Read-only question 1");
-  expect(generations).toBe(1);
-  expect(
-    await page.evaluate(() =>
-      (window as any).__deadAir.game.study.learner.attempts.map(
-        (a: any) => a.id,
-      ),
-    ),
-  ).toEqual([issued.id]);
-  await page.locator("#leave").click();
-  // Real contact damage from outside-origin zombies ends the run.
+  // Walking away closes only physical station use. The ordinary ChatGPT
+  // conversation and its immutable question stay available.
   await page.evaluate(() => {
-    const g = (window as any).__deadAir.game,
-      a = g.survivors[0];
-    a.x = 21.5;
-    a.y = 31.5;
-    a.hp = 1;
-    g.nextSpawn = 999999;
-    g.zombies = [
-      {
-        id: "outside-issuance-fixture",
-        floor: 0,
-        x: a.x,
-        y: a.y + 0.4,
-        hp: 60,
-        path: [],
-        repath: 0,
-        cooldown: 0,
-        memory: 0,
-        stagger: 0,
-        origin: "outside",
-      },
-    ];
+    const h = (window as any).__deadAir.game.survivors[0];
+    h.x = 21.5;
+    h.y = 31.5;
   });
-  await expect(
-    page.getByRole("button", { name: "Begin another run" }),
-  ).toBeVisible({ timeout: 10000 });
-  await page.getByRole("button", { name: "Begin another run" }).click();
-  // A new run starts once the last run's learning is saved.
+  await expect
+    .poll(() =>
+      page.evaluate(() => (window as any).__deadAir.game.survivors[0].station),
+    )
+    .toBeUndefined();
+  await openGameMenu(page);
+  await page.getByRole("button", { name: "Save run", exact: true }).click();
+  await expect(page.locator("#notice")).toContainText("Run saved locally");
+  await page.locator("#resume-game").click();
+  await page.reload();
+  await page.waitForFunction(() => !!(window as any).__deadAir);
+  await expect.poll(() => nativeCalls.length).toBe(2);
+  expect(nativeCalls[1]).toEqual(nativeCalls[0]);
+  expect(generations).toBe(1);
+  const resumed = await page.evaluate((id) => {
+    const g = (window as any).__deadAir.game;
+    return {
+      ids: g.study.learner.attempts.map((a: any) => a.id),
+      problem: g.encounters[id].problem,
+      session: g.encounters[id].directStudy,
+    };
+  }, id);
+  expect(resumed.ids).toEqual([issued.id]);
+  expect(resumed.problem).toEqual(issued.problem);
+  expect(resumed.session.id).toBe(issued.session.id);
+  await killHumanInStep(page);
   await expect(page.locator("#start-card")).toBeHidden();
+  await expect(page.locator("#native-study-status")).toContainText(
+    "Continue in ChatGPT",
+  );
+  await page.getByRole("button", { name: "Run summary", exact: true }).click();
+  await page.getByRole("button", { name: "Begin another run" }).click();
+  await expect(page.locator("#start-card")).toBeHidden();
+  const nextId = await position();
   const after = await page.evaluate(() => {
-    const g = (window as any).__deadAir.game,
-      a = g.survivors[0],
-      s = g.floors[0].stations.find((s: any) => s.encounter === "f0-room0");
-    g.survivors = [a];
-    g.zombies = [];
-    g.nextSpawn = 999999;
-    Object.assign(a, { x: s.x, y: s.y });
+    const g = (window as any).__deadAir.game;
     return {
       run: g.id,
       archives: g.study.archives,
       attempts: g.study.learner.attempts,
       cycle: g.study.learner.cycle,
       evidence: g.study.learner.evidence,
+      keys: g.survivors[0].keys ?? 0,
     };
   });
   expect(after.run).not.toBe(issued.run);
   expect(after.attempts[0].status).toBe("interrupted");
-  expect(
-    after.archives.some(
-      (e: any) =>
-        e.problem?.prompt === "Read-only question 1" &&
-        e.workspace === "Supplied starter",
-    ),
-  ).toBe(true);
+  const archive = after.archives.find(
+    (e: any) => e.directStudy?.id === issued.session.id,
+  );
+  expect(archive.problem.prompt).toBe("Read-only question 1");
+  expect(archive.workspace).toBe("");
+  expect(archive.directStudy.payloadJson).toBe(issued.session.payloadJson);
   expect(after.cycle).toBe(baseline.cycle);
   expect(after.evidence).toEqual([]);
+  expect(after.keys).toBe(0);
+  const unopened = await page.evaluate((id) => {
+    const e = (window as any).__deadAir.game.encounters[id];
+    return {
+      state: e.state,
+      problem: e.problem,
+      workspace: e.workspace,
+      revision: e.revision,
+      history: e.history,
+      submissions: e.submissions,
+    };
+  }, nextId);
   await page.locator("#world").focus();
   await page.keyboard.press("e");
-  await expect(page.locator("#problem")).toContainText("Read-only question 2");
-  const child = await page.evaluate(
-    () => (window as any).__deadAir.game.study.learner.attempts[1],
+  await expect(page.locator("#notice")).toContainText(
+    "Finish your current question in ChatGPT before opening another station",
   );
-  expect(child.parentAttempt).toBe(issued.id);
-  expect(child.id).not.toBe(issued.id);
-  await expect(page.locator("#workspace")).toHaveValue("Supplied starter");
+  await expect(page.locator("#native-study-status")).toContainText(
+    "Finish the previous run's question in ChatGPT",
+  );
+  expect(generations).toBe(1);
+  expect(nativeCalls).toEqual([nativeCalls[0], nativeCalls[0]]);
+  expect(assessmentCalls).toEqual([]);
+
+  // Finish the exact archived conversation, rather than replacing it with a
+  // new station's question. Its native transcript and gap belong to the old
+  // run; the reused encounter ID must not reward or alter this run's station.
+  const original = nativeCalls[0],
+    facet = original.probe.facets[0],
+    statement = "I do not know this part yet.",
+    text = "That gap is recorded for later study.";
+  expect(facet).toBeTruthy();
+  results.set(issued.session.id, {
+    text,
+    complete: true,
+    outcome: "gap",
+    questionFingerprint: issued.session.questionFingerprint,
+    transcript: [
+      { role: "assistant", text: original.problem.prompt },
+      { role: "user", text: statement },
+      { role: "assistant", text },
+    ],
+    knowledge: { facets: [{ id: facet.id, status: "gap" }] },
+  });
+  await expect
+    .poll(() =>
+      page.evaluate(
+        (session) =>
+          (window as any).__deadAir.game.study.archives.find(
+            (e: any) => e.directStudy?.id === session,
+          )?.directStudy.state,
+        issued.session.id,
+      ),
+    )
+    .toBe("applied");
+  await expect.poll(() => assessmentCalls.length).toBe(1);
+  await expect
+    .poll(() =>
+      page.evaluate(() => {
+        const a = (window as any).__deadAir.game.study.assessments[0];
+        return a?.status;
+      }),
+    )
+    .toBe("applied");
+  const continued = await page.evaluate(
+    ({ session, id }) => {
+      const g = (window as any).__deadAir.game,
+        e = g.encounters[id],
+        archive = g.study.archives.find(
+          (e: any) => e.directStudy?.id === session,
+        );
+      return {
+        run: g.id,
+        keys: g.survivors[0].keys ?? 0,
+        archive,
+        gaps: g.study.knowledgeGaps,
+        cycle: g.study.learner.cycle,
+        evidence: g.study.learner.evidence,
+        attempts: g.study.learner.attempts,
+        assessment: g.study.assessments[0],
+        current: {
+          state: e.state,
+          problem: e.problem,
+          workspace: e.workspace,
+          revision: e.revision,
+          history: e.history,
+          submissions: e.submissions,
+        },
+      };
+    },
+    { session: issued.session.id, id: nextId },
+  );
+  expect(continued.run).toBe(after.run);
+  expect(continued.keys).toBe(0);
+  expect(continued.current).toEqual(unopened);
+  expect(continued.archive.problem).toEqual(issued.problem);
+  expect(continued.archive.directStudy.payloadJson).toBe(
+    issued.session.payloadJson,
+  );
+  expect(continued.archive.accepted).toBeUndefined();
+  expect(continued.archive.submissions).toEqual([]);
+  expect(
+    continued.archive.tutor
+      .filter((m: any) => m.requestId === issued.session.id)
+      .map((m: any) => [m.kind, m.text]),
+  ).toEqual([
+    ["tutor", original.problem.prompt],
+    ["human", statement],
+    ["tutor", text],
+  ]);
+  expect(continued.gaps).toEqual([
+    expect.objectContaining({
+      runId: issued.run,
+      requestId: issued.session.id,
+      statement,
+      facet: expect.objectContaining({ id: facet.id }),
+    }),
+  ]);
+  expect(continued.cycle).toBe(baseline.cycle);
+  expect(continued.evidence).toEqual([]);
+  expect(continued.attempts).toHaveLength(1);
+  expect(continued.attempts[0].status).toBe("interrupted");
+  expect(continued.assessment.visitOutcome).toBe("unresolved");
+  expect(continued.assessment.findings).toEqual([]);
+  expect(assessmentCalls[0].packet.problem).toEqual(issued.problem);
+  const beforeFresh = nativeCalls.length;
+  await page.locator("#world").focus();
+  await page.keyboard.press("e");
+  await expect.poll(() => generations).toBe(2);
+  await expect.poll(() => nativeCalls.length).toBe(beforeFresh + 1);
+  const child = await page.evaluate(() => {
+    const g = (window as any).__deadAir.game;
+    return {
+      attempt: g.study.learner.attempts[1],
+      question: (Object.values(g.encounters) as any[]).find(
+        (e: any) => e.directStudy,
+      )?.problem,
+    };
+  });
+  expect(child.attempt.parentAttempt).toBe(issued.id);
+  expect(child.attempt.id).not.toBe(issued.id);
+  expect(child.question.prompt).toBe("Read-only question 2");
+  expect(child.question.starter).toBe("");
+  expect(nativeCalls.at(-1).questionFingerprint).not.toBe(
+    nativeCalls[0].questionFingerprint,
+  );
 });

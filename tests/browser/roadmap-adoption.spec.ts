@@ -19,6 +19,12 @@ for (const scenario of [
   test(`roadmap adoption UI: explicit review, exact proposal and ${scenario}`, async ({
     page,
   }) => {
+    await page.route("**/api/**", (route) =>
+      route.fulfill({
+        status: 503,
+        json: { error: "Isolated synthetic roadmap-adoption fixture" },
+      }),
+    );
     const r = JSON.parse(await readFile("public/curriculum.json", "utf8"));
     let incoming = r.raw
       .replace(/^revision: 9$/m, "revision: 10")
@@ -229,9 +235,26 @@ for (const scenario of [
       "pending",
     );
     const t = await page.evaluate(() => (window as any).__deadAir.game.time);
+    await page.waitForTimeout(300);
+    expect(await page.evaluate(() => (window as any).__deadAir.game.time)).toBe(
+      t,
+    );
+    expect(
+      await page.evaluate(() => (window as any).__deadAir.game.paused),
+    ).toBe(true);
+    // The inspector pauses survival, while its captured review request stays
+    // pending. Explicitly resume to check that background work never freezes
+    // the playable clock, then return to the same proposal.
+    await page.locator("#close-inspector").click();
+    await page.locator("#resume-game").click();
     await expect
       .poll(() => page.evaluate(() => (window as any).__deadAir.game.time))
       .toBeGreaterThan(t + 0.2);
+    await openGameMenu(page);
+    await page.locator("#curriculum-button").click();
+    await expect(page.locator("#roadmap-adoption-controls")).toContainText(
+      "pending",
+    );
     release();
     await expect(
       page.getByRole("button", { name: "Adopt reviewed roadmap", exact: true }),

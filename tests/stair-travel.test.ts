@@ -350,3 +350,37 @@ test("a fresh force-field floor carves the well into the north wall and a surviv
   assert.ok(distance(locked.a, locked.g.floors[0].stairs) < 1.15);
   assert.equal(lockedEvents(locked.g), 1);
 });
+
+test("human and NPC flights complete together even with a visible zombie near departure", () => {
+  const { g, a } = fixture();
+  a.access.push(0);
+  const npc = Object.assign(actor("parallel-npc", "Parallel NPC", 1), {
+    ...g.floors[0].stairs,
+    x: a.x + 0.6,
+    access: [0],
+  });
+  g.survivors.push(npc);
+  assert.ok(stairs(g, a));
+  assert.ok(stairs(g, npc));
+  g.zombies = [
+    {
+      id: "visible-threat",
+      floor: 0,
+      x: a.x,
+      y: a.y + 3,
+      hp: 60,
+      path: [],
+      repath: 100,
+      cooldown: 0,
+      memory: 0,
+      stagger: 100,
+      origin: "outside",
+    },
+  ];
+  tick(g, 61);
+  assert.equal(a.floor, 1);
+  assert.equal(npc.floor, 1);
+  assert.equal(npc.stairTravel, undefined);
+  assert.equal(g.events.filter((e) => e.type === "climb").length, 2);
+  assert.ok(distance(a, npc) >= 0.55);
+});

@@ -210,6 +210,16 @@ test("contact-limited damage: a queue behind one attacker cannot reach through i
     g.zombies = Array.from({ length: n }, (_, i) =>
       zombie(`z${i}`, 20.5, 11.3 + i * 0.46),
     );
+    // Pressure is driven by an audible source at the near face, rather than
+    // knowledge of the hidden stairs beyond this opaque barricade.
+    g.effects.push({
+      kind: "decoy",
+      floor: 0,
+      x: 20.5,
+      y: 11.25,
+      radius: 10,
+      until: g.time + 20,
+    });
     return g;
   }
   const single = fixture(1),

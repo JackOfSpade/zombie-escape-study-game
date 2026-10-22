@@ -4,9 +4,44 @@ import { expect, test } from "@playwright/test";
 import { readFile } from "node:fs/promises";
 import { reviewRoadmap } from "../../src/roadmap-review";
 import { enterLegacyBuilding } from "./helpers/legacy-world";
+
+// The editor was removed from normal gameplay. These scoped API fixtures keep
+// reconciliation's captured-work transaction covered through the actual browser
+// module/transport boundary; native-study.spec.ts covers the player conversation.
+async function capturedWork(
+  page: import("@playwright/test").Page,
+  text: string,
+  id = "f0-room0",
+) {
+  await page.evaluate(
+    async ({ text, id }) => {
+      const d = (window as any).__deadAir,
+        root = "/src/";
+      const { ensureProblem, presentProblem, edit } = await import(
+        root + "ai.ts"
+      );
+      const e = d.game.encounters[id];
+      await ensureProblem(d.game, e, d.roadmap);
+      presentProblem(d.game, e, d.roadmap);
+      edit(d.game, e, text, e.revision, d.roadmap);
+    },
+    { text, id },
+  );
+}
+const workspace = (page: import("@playwright/test").Page) =>
+  page.evaluate(
+    () => (window as any).__deadAir.game.encounters["f0-room0"].workspace,
+  );
+
 for (const scenario of ["unchanged", "stale", "new-work"])
   test(`current attempt reconciliation: ${scenario}`, async ({ page }) => {
     const stale = scenario === "stale";
+    await page.route("**/api/**", (route) =>
+      route.fulfill({
+        status: 503,
+        json: { error: "Isolated roadmap fixture" },
+      }),
+    );
     const r = JSON.parse(await readFile("public/curriculum.json", "utf8"));
     let release!: () => void,
       assessCalls = 0,
@@ -166,13 +201,8 @@ for (const scenario of ["unchanged", "stale", "new-work"])
       g.nextSpawn = Number.MAX_SAFE_INTEGER;
       Object.assign(g.survivors[0], { x: s.x, y: s.y });
     });
-    await page.locator("#world").focus();
-    await page.keyboard.press("e");
-    await expect(page.locator("#problem")).toContainText(
-      "Synthetic task for f0-room0",
-    );
-    await page.locator("#workspace").fill("PRIVATE_ACTIVE_BROWSER_DRAFT");
-    await page.locator("#leave").click();
+    await capturedWork(page, "PRIVATE_ACTIVE_BROWSER_DRAFT");
+    await expect(page.locator("#terminal")).toBeHidden();
     const source = await page.evaluate(async () => {
       const d = (window as any).__deadAir,
         g = d.game,
@@ -233,12 +263,10 @@ for (const scenario of ["unchanged", "stale", "new-work"])
     if (stale) {
       await page.locator("#close-inspector").click();
       await page.locator("#resume-game").click();
-      await page.locator("#world").focus();
-      await page.keyboard.press("e");
-      await page
-        .locator("#workspace")
-        .fill("PRIVATE_ACTIVE_BROWSER_DRAFT plus newer actual typing");
-      await page.locator("#leave").click();
+      await capturedWork(
+        page,
+        "PRIVATE_ACTIVE_BROWSER_DRAFT plus newer actual typing",
+      );
       await openGameMenu(page);
       await page.locator("#curriculum-button").click();
       release();
@@ -258,11 +286,10 @@ for (const scenario of ["unchanged", "stale", "new-work"])
       ).toBe("in-progress");
       await page.locator("#close-inspector").click();
       await page.locator("#resume-game").click();
-      await page.locator("#world").focus();
-      await page.keyboard.press("e");
-      await expect(page.locator("#workspace")).toHaveValue(
+      expect(await workspace(page)).toBe(
         "PRIVATE_ACTIVE_BROWSER_DRAFT plus newer actual typing",
       );
+      await expect(page.locator("#terminal")).toBeHidden();
       return;
     }
     release();
@@ -282,14 +309,13 @@ for (const scenario of ["unchanged", "stale", "new-work"])
     );
     await page.locator("#close-inspector").click();
     await page.locator("#resume-game").click();
-    await page.locator("#world").focus();
-    await page.keyboard.press("e");
-    await expect(page.locator("#workspace")).toHaveValue(
-      "PRIVATE_ACTIVE_BROWSER_DRAFT",
-    );
-    await expect(page.locator("#terminal-provenance")).toContainText(
-      "Resolved in your imported roadmap",
-    );
+    expect(await workspace(page)).toBe("PRIVATE_ACTIVE_BROWSER_DRAFT");
+    expect(
+      await page.evaluate(
+        () => (window as any).__deadAir.game.study.learner.attempts[0].status,
+      ),
+    ).toBe("externally-resolved");
+    await expect(page.locator("#terminal")).toBeHidden();
     expect(
       await page.evaluate(() =>
         (window as any).__deadAir.game.encounters["f0-room0"].history.some(
@@ -313,12 +339,16 @@ for (const scenario of ["unchanged", "stale", "new-work"])
       scenario === "new-work"
         ? "PRIVATE_ACTIVE_BROWSER_DRAFT with new technical work after import"
         : "PRIVATE_ACTIVE_BROWSER_DRAFT";
-    if (scenario === "new-work")
-      await page.locator("#workspace").fill(retainedDraft);
+    if (scenario === "new-work") await capturedWork(page, retainedDraft);
     await page.screenshot({
       path: `test-results/active-roadmap-world-task-${scenario}.png`,
     });
-    await page.locator("#submit").click();
+    await page.evaluate(async () => {
+      const d = (window as any).__deadAir,
+        root = "/src/";
+      const { submit } = await import(root + "ai.ts");
+      await submit(d.game, d.game.encounters["f0-room0"], d.roadmap);
+    });
     await expect
       .poll(() =>
         page.evaluate(
@@ -376,12 +406,14 @@ for (const scenario of ["unchanged", "stale", "new-work"])
         s = g.floors[0].stations.find((s: any) => s.encounter === "f0-room3");
       Object.assign(g.survivors[0], { x: s.x, y: s.y, station: undefined });
     });
-    await page.locator("#world").focus();
-    await page.keyboard.press("e");
-    await expect(page.locator("#problem")).toContainText(
-      "Synthetic task for f0-room3",
-    );
-    await page.locator("#workspace").fill("Fresh next eligible question draft");
+    await capturedWork(page, "Fresh next eligible question draft", "f0-room3");
+    expect(
+      await page.evaluate(
+        () =>
+          (window as any).__deadAir.game.encounters["f0-room3"].problem.prompt,
+      ),
+    ).toContain("Synthetic task for f0-room3");
+    await expect(page.locator("#terminal")).toBeHidden();
     expect(
       await page.evaluate(() => {
         const s = (window as any).__deadAir.game.study;

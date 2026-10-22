@@ -179,8 +179,15 @@ test("decoys require actual acoustic reach, prefer nearer audible noise and stop
       until: g.time + 20,
     },
   ];
+  const withoutSound = structuredClone(g);
+  withoutSound.effects = [];
+  step(withoutSound, 1 / 30);
   step(g, 1 / 30);
-  assert.deepEqual(target.path.at(-1), f.stairs);
+  assert.deepEqual(
+    target.path,
+    withoutSound.zombies[0].path,
+    "a muffled decoy does not replace the zombie's own search",
+  );
   cover.open = true;
   cover.door!.latched = false;
   cover.door!.swung = true;
@@ -203,8 +210,15 @@ test("decoys require actual acoustic reach, prefer nearer audible noise and stop
   assert.deepEqual(target.path.at(-1), { x: 16.5, y: 15.5 });
   for (const effect of g.effects) effect.until = g.time;
   target.repath = 0;
+  const afterExpiry = structuredClone(g);
+  afterExpiry.effects = [];
+  step(afterExpiry, 1 / 30);
   step(g, 1 / 30);
-  assert.deepEqual(target.path.at(-1), f.stairs);
+  assert.deepEqual(
+    target.path,
+    afterExpiry.zombies[0].path,
+    "expired noise returns to the same personal search as having no sound",
+  );
   assert.equal(g.effects.length, 0);
 });
 test("bubble expiry disperses before an immediate attack, respects walls and cannot kill or damage allies", () => {

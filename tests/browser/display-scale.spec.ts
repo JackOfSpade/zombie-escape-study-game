@@ -1,7 +1,12 @@
 import { expect, test, type Page } from "@playwright/test";
-import { enterLegacyBuilding } from "./helpers/legacy-world";
-import { isolateRunnerBridge } from "./helpers/runner-bridge";
 import { openPlayerMenu } from "./helpers/game-menu";
+import {
+  enterNativeGame,
+  mockNativeStudy,
+  nativeState,
+  openNativeQuestion,
+  seedLegacyDraft,
+} from "./native-study-harness";
 
 async function openSettings(page: Page) {
   await openPlayerMenu(page);
@@ -75,7 +80,7 @@ async function displayedSizes(page: Page) {
 }
 
 test.beforeEach(async ({ page }) => {
-  await isolateRunnerBridge(page);
+  await mockNativeStudy(page);
 });
 
 test("one size slider scales text and the rendered world together and survives reload", async ({
@@ -142,35 +147,24 @@ test("maximum size keeps Settings and study controls usable on a narrow screen",
   page,
 }) => {
   await page.setViewportSize({ width: 390, height: 844 });
-  await enterLegacyBuilding(page);
-  await page.evaluate(() => {
-    const g = (window as any).__deadAir.game,
-      a = g.survivors[0],
-      floor = g.floors[0];
-    g.survivors = [a];
-    g.zombies = [];
-    g.nextSpawn = Number.MAX_SAFE_INTEGER;
-    g.surge.anchor = Number.MAX_SAFE_INTEGER;
-    floor.tiles = Array.from({ length: 34 }, () => Array(44).fill(0));
-    floor.furniture = [];
-    Object.assign(a, { x: 10, y: 10 });
-    floor.stations = [{ ...floor.stations[0], x: 10.8, y: 10 }];
-  });
-  await page.locator("#world").focus();
-  await page.keyboard.press("e");
-  await expect(page.locator("#terminal")).toBeVisible();
-  await page.locator("#workspace").fill("Draft kept while resizing");
+  await enterNativeGame(page);
+  await seedLegacyDraft(page, "Draft kept while resizing");
+  const id = await openNativeQuestion(page);
+  await expect
+    .poll(async () => (await nativeState(page, id)).session?.state)
+    .toBe("pending");
+  const captured = (await nativeState(page, id)).session.payloadJson;
   await openSettings(page);
   await setScale(page, 150);
   await expect(page.locator("#settings")).toBeInViewport({ ratio: 0.98 });
   await page.locator("#settings-close").click();
   await expect(page.locator("#settings")).toBeHidden();
   await page.locator("#resume-game").click();
-  await expect(page.locator("#workspace")).toHaveValue(
-    "Draft kept while resizing",
-  );
+  expect((await nativeState(page, id)).session.payloadJson).toBe(captured);
+  expect(JSON.parse(captured).workspace).toBe("Draft kept while resizing");
+  await expect(page.locator("#terminal")).toBeHidden();
 
-  for (const id of ["workspace", "submit", "chat-input", "leave"]) {
+  for (const id of ["native-study-copy", "pause-toggle"]) {
     const control = page.locator(`#${id}`);
     await control.scrollIntoViewIfNeeded();
     await expect(control).toBeInViewport();
@@ -180,6 +174,5 @@ test("maximum size keeps Settings and study controls usable on a narrow screen",
       () => document.documentElement.scrollWidth <= innerWidth + 1,
     ),
   ).toBe(true);
-  await page.locator("#leave").click();
   await expect(page.locator("#terminal")).toBeHidden();
 });

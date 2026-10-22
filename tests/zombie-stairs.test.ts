@@ -5,11 +5,11 @@ import { step } from "../src/engine";
 import { type Roadmap, type Zombie, distance } from "../src/model";
 import { decode, encode, recover } from "../src/persistence";
 import { inFurniture, solid } from "../src/spatial";
-import { createGame } from "../src/world";
+import { createGame, createPlayableGame } from "../src/world";
 import { stairContactCues } from "../src/zombie-stairs";
 const r: Roadmap = JSON.parse(readFileSync("public/curriculum.json", "utf8"));
-function fixture() {
-  const g = createGame(3, r);
+function fixture(fresh = false) {
+  const g = fresh ? createPlayableGame(3, r) : createGame(3, r);
   g.status = "playing";
   g.nextSpawn = 999999;
   g.surge.anchor = 999999;
@@ -260,4 +260,48 @@ test("player stair impact cues show through cover, but walls, floor and sight ra
   g.time += 1;
   assert.equal(stairContactCues(g, a).length, 0);
   assert.equal(z.origin, "outside");
+});
+
+test("parallel carved-well arrivals use a free lane without overlapping an occupied lane", () => {
+  const { g, z, next } = fixture(true);
+  const upper: Zombie = {
+    ...z,
+    id: "occupied-lane",
+    floor: 1,
+    x: next.entry.x - 0.5,
+    y: next.entry.y - 0.5,
+    stairUntil: undefined,
+    stagger: 100,
+    path: [],
+  };
+  g.zombies.push(upper);
+  step(g, 1 / 30);
+  assert.equal(z.floor, 1);
+  assert.ok(distance(z, upper) >= 0.55);
+  assert.equal(solid(next, z), false);
+});
+
+test("parallel carved-well arrivals respect a full barricade and protective bubble", () => {
+  const { g, z, next } = fixture(true);
+  const ob = next.furniture.find((o) => !o.field && !o.door)!;
+  Object.assign(ob, { ...next.entry, w: 2, h: 2 });
+  const hp = ob.hp;
+  step(g, 1 / 30);
+  assert.equal(z.floor, 0);
+  assert.equal(ob.hp, hp - 4);
+  ob.destroyed = true;
+  ob.hp = 0;
+  g.effects.push({
+    kind: "bubble",
+    floor: 1,
+    ...next.entry,
+    until: 10,
+    radius: 3,
+  });
+  step(g, 1 / 30);
+  assert.equal(z.floor, 0);
+  g.effects = [];
+  step(g, 1 / 30);
+  assert.equal(z.floor, 1);
+  assert.equal(solid(next, z), false);
 });

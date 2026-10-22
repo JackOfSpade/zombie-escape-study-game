@@ -463,15 +463,15 @@ test("the probe contract assumes knowledge, asks the apex question first, and co
     assert.match(text, /mark Y and Z implied by X/);
     assert.match(text, /Read how the answer is given/);
     assert.match(text, /do not lecture and do not withhold the reward/);
-    assert.match(text, /probe Y and Z next, one level down/);
-    assert.match(text, /only the parts actually missing/);
+    assert.match(text, /at most one level below an original question facet/);
+    assert.match(text, /leave all unasked siblings unknown/);
     assert.match(text, /return to the apex and ask it again/);
     assert.match(text, /known parts never imply the apex/);
-    assert.match(text, /since established clears the way to re-ask/);
+    assert.match(text, /since-established part clears the way to re-ask/);
   }
   assert.match(
     TERMINAL_DIALOGUE_INSTRUCTION,
-    /no lower-level facet is left to probe/,
+    /do not require a prerequisite tree/,
   );
   assert.match(TERMINAL_DIALOGUE_INSTRUCTION, /outcome:"gap"/);
   assert.match(TERMINAL_DIALOGUE_INSTRUCTION, /knowledge\.signal/);
@@ -836,7 +836,7 @@ test("cumulative state re-judges per facet and conceding records only unestablis
   assert.equal(next.encounters[e.id]?.probe, undefined);
 });
 
-test("conceding without naming facets records every facet not yet established", async () => {
+test("conceding without naming facets leaves unasked facets unknown", async () => {
   const g = createPlayableGame(77, r);
   const e = g.encounters[g.floors[0].stations[0].encounter];
   await ensureProblem(g, e, r);
@@ -874,14 +874,12 @@ test("conceding without naming facets records every facet not yet established", 
       statement: "no idea",
     },
   );
-  assert.deepEqual(
-    created.map((c) => c.facet.id),
-    facets.slice(1).map((f) => f.id),
-  );
+  assert.deepEqual(created, []);
+  assert.equal(g.study.knowledgeGaps, undefined);
   assert.ok(
-    created.every(
-      (c) => c.provider === "study-mode" && c.statement === "no idea",
-    ),
+    probeState(e)
+      .facets.slice(1)
+      .every((f) => f.status === "open"),
   );
   // A plain solved completion records nothing.
   const g2 = createPlayableGame(78, r);

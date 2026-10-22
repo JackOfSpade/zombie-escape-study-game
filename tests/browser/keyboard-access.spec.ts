@@ -1,8 +1,15 @@
 import { openGameMenu, openPlayerMenu } from "./helpers/game-menu";
 import { expect, test, type Page } from "./helpers/offline-test";
 import { enterLegacyBuilding } from "./helpers/legacy-world";
+import {
+  mockNativeStudy,
+  nativeState,
+  openNativeQuestion,
+  seedLegacyDraft,
+} from "./native-study-harness";
 
 async function safeRun(page: Page) {
+  await mockNativeStudy(page);
   await enterLegacyBuilding(page);
   await page.evaluate(() => {
     const g = (window as any).__deadAir.game,
@@ -69,14 +76,16 @@ test("curriculum dropdown owns navigation and shortcuts while survival stays pau
   ]);
 });
 
-test("settings has keyboard focus and explicit close preserves the terminal", async ({
+test("settings has keyboard focus and explicit close preserves the native study snapshot", async ({
   page,
 }) => {
   await safeRun(page);
-  await page.locator("#world").focus();
-  await page.keyboard.press("e");
-  await expect(page.locator("#terminal")).toBeVisible();
-  await page.locator("#workspace").fill("preserved while changing settings");
+  await seedLegacyDraft(page, "preserved while changing settings");
+  const id = await openNativeQuestion(page);
+  await expect
+    .poll(async () => (await nativeState(page, id)).session?.state)
+    .toBe("pending");
+  const captured = (await nativeState(page, id)).session.payloadJson;
   await openPlayerMenu(page);
   const toggle = page.getByRole("button", { name: "Settings", exact: true });
   await toggle.focus();
@@ -91,16 +100,18 @@ test("settings has keyboard focus and explicit close preserves the terminal", as
   await expect(page.locator("#settings")).toBeHidden();
   await expect(page.locator("#pause-home")).toBeVisible();
   await expect(toggle).toBeFocused();
-  await expect(page.locator("#terminal")).toBeVisible();
-  await expect(page.locator("#workspace")).toHaveValue(
+  await expect(page.locator("#terminal")).toBeHidden();
+  expect((await nativeState(page, id)).session.payloadJson).toBe(captured);
+  expect(JSON.parse(captured).workspace).toBe(
     "preserved while changing settings",
   );
   const after = await survivor(page);
   expect([after.x, after.y]).toEqual([before.x, before.y]);
   expect(after.time).toBe(before.time);
   await page.locator("#resume-game").click();
-  await page.locator("#leave").click();
   await expect(page.locator("#terminal")).toBeHidden();
+  await expect(page.locator("#pause-toggle")).toBeFocused();
+  await page.locator("#world").focus();
   await expect(page.locator("#world")).toBeFocused();
   await page.keyboard.down("w");
   await page.waitForTimeout(200);

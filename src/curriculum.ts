@@ -1,4 +1,5 @@
 import { adoptedSourceText } from "./imported-proof";
+import { effectiveTarget, roleFocused, studyFocus } from "./career-profile";
 import {
   assistanceSources,
   beginLearningAttempt,
@@ -66,6 +67,12 @@ export function eligible(
     t = r.tracks[track];
   // One bounded review on a track turn, followed by breadth work before another review.
   const last = s.visits.filter((v) => v.contract.track === track).at(-1);
+  // A role focus (explicitly activated) filters development work the same way
+  // as the live scheduler; undefined/full keeps the original behavior.
+  const focus = studyFocus(s),
+    focused = roleFocused(focus),
+    required = (o: (typeof t.objectives)[number]) =>
+      !focused || effectiveTarget(o, focus) >= 1;
   const due = last?.contract.review
     ? undefined
     : t.objectives
@@ -73,14 +80,30 @@ export function eligible(
           (o) =>
             o.reviewDue &&
             o.reviewDue <= today &&
-            !s.reviewsServed.includes(o.id),
+            !s.reviewsServed.includes(o.id) &&
+            required(o),
         )
         .sort((a, b) => a.reviewDue!.localeCompare(b.reviewDue!))[0];
-  const topic = s.queues[track][0] ?? t.rotation[0];
+  const open = (name: string) =>
+    t.objectives.some(
+      (o) =>
+        o.id.startsWith(`${track}:${name}.`) &&
+        o.cells[0] !== "P" &&
+        required(o),
+    );
+  const topic = focused
+    ? (s.queues[track].find(open) ??
+      t.rotation.find(open) ??
+      s.queues[track][0] ??
+      t.rotation[0])
+    : (s.queues[track][0] ?? t.rotation[0]);
   const objects = due
     ? [due]
     : t.objectives.filter(
-        (o) => o.id.startsWith(`${track}:${topic}.`) && o.cells[0] !== "P",
+        (o) =>
+          o.id.startsWith(`${track}:${topic}.`) &&
+          o.cells[0] !== "P" &&
+          required(o),
       );
   const selected = objects.slice(0, 1);
   return {

@@ -80,7 +80,10 @@ export class RunLogs {
   private queue = Promise.resolve();
   private dirty = false;
   private caches = new WeakMap<RunLog, RunCache>();
-  private observed = new Map<string, { seq: number; time: number }>();
+  private observed = new Map<
+    string,
+    { seq: number; time: number; status: Game["status"]; paused: boolean }
+  >();
   constructor(private storage: LogStorage) {}
   async load() {
     try {
@@ -210,7 +213,9 @@ export class RunLogs {
     run.summary = {
       duration: Math.max(
         run.summary?.duration ?? 0,
-        Math.round(g.time * 100) / 100,
+        // The human's run lasts until death/extraction even though the
+        // world (and spectator sampling) continues afterwards.
+        Math.round((g.endedAt ?? g.time) * 100) / 100,
       ),
       outcome: type === "restart" ? "restarted" : g.status,
       deaths: g.stats.deaths,
@@ -234,10 +239,24 @@ export class RunLogs {
   capture(g: Game, force = false) {
     if (g.status === "ready") return;
     const previous = this.observed.get(g.id);
+    const paused = !!g.paused;
+    const transition =
+      !previous || previous.status !== g.status || previous.paused !== paused;
+    // An unchanged world (same time, event sequence, status and pause) adds no
+    // information; repeated ended/paused captures must never evict history.
+    if (
+      previous &&
+      !transition &&
+      previous.seq === g.seq &&
+      previous.time === g.time
+    )
+      return;
+    // The world keeps running after the human's run ends, so the normal 2s
+    // sampling applies to every active status; transitions always record.
     if (
       !force &&
-      g.status === "playing" &&
       previous &&
+      !transition &&
       g.time - previous.time < 2 &&
       previous.time <= g.time
     )
@@ -329,7 +348,12 @@ export class RunLogs {
           hp: round(z.hp),
         })),
     });
-    this.observed.set(g.id, { seq: g.seq, time: g.time });
+    this.observed.set(g.id, {
+      seq: g.seq,
+      time: g.time,
+      status: g.status,
+      paused,
+    });
     this.flush();
   }
   export() {

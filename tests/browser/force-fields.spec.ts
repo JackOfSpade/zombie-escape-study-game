@@ -1,8 +1,10 @@
 import { expect, test } from "@playwright/test";
-test("fresh run uses force fields, personal keys and a solo study workspace", async ({
+import { mockNativeStudy, nativeState } from "./native-study-harness";
+test("fresh run uses force fields, personal keys and native ChatGPT study", async ({
   page,
 }) => {
   const errors: string[] = [];
+  const relay = await mockNativeStudy(page);
   page.on("pageerror", (e) => errors.push(e.message));
   await page.goto("/");
   await page.getByRole("button", { name: "Enter the building" }).click();
@@ -11,6 +13,10 @@ test("fresh run uses force fields, personal keys and a solo study workspace", as
     const r = await (await fetch("/curriculum.json")).json();
     const root = "/src/";
     const { ensureProblem } = await import(/* @vite-ignore */ root + "ai.ts");
+    const { ROOM_CATALOG } = await import(
+      /* @vite-ignore */ root + "office-layout.ts"
+    );
+    const officeKinds = new Set(Object.values(ROOM_CATALOG).flat());
     const st = g.floors[0].stations[0],
       e = g.encounters[st.encounter];
     for (const a of g.survivors.slice(1)) a.escaped = true;
@@ -26,7 +32,10 @@ test("fresh run uses force fields, personal keys and a solo study workspace", as
         f.furniture.every((o: any) =>
           o.field
             ? !o.door
-            : /^f\d-(room\d|entry|lobby)-[a-z]+\d+-/.test(o.id) && o.speed > 0,
+            : !o.door &&
+              officeKinds.has(o.kind) &&
+              o.floor === f.index &&
+              o.speed > 0,
         ),
       ),
       inventory: g.survivors[0].inventory.length,
@@ -52,29 +61,29 @@ test("fresh run uses force fields, personal keys and a solo study workspace", as
   });
   await page.locator("#world").focus();
   await page.keyboard.press("e");
-  // Solo stations use the single Terminal AI conversation, with no separate
-  // answer editor; keys are shown in the in-frame HUD, not a side panel.
-  await expect(page.locator("#chat-input")).toBeVisible();
+  // The generated question leaves the gameplay canvas for native ChatGPT.
+  await expect.poll(() => relay.calls.length).toBe(1);
+  const payload = relay.calls[0].payload;
+  expect(payload.problem.title).toBeTruthy();
+  expect(payload.mode).toBe("terminal-direct");
+  expect(
+    (await nativeState(page, payload.encounterId)).session.questionFingerprint,
+  ).toBe(payload.questionFingerprint);
+  await expect(page.locator("#terminal")).toBeHidden();
+  await expect(page.locator("#chat-input")).toBeHidden();
   await expect(page.locator("#workspace")).toBeHidden();
-  await expect(page.locator("#conversation-title")).toHaveText("Terminal AI");
-  await expect(page.locator("#conversation-context")).toContainText("@study");
+  await expect(page.locator("#native-study-status")).toContainText("ChatGPT");
   await expect(page.locator("#hud-keys")).toHaveText("0 keys");
   await expect(page.locator(".dashboard")).toBeHidden();
-  const answer = page.locator(".answer-panel"),
-    chat = page.locator(".conversation-panel");
-  const a = (await answer.boundingBox())!,
-    c = (await chat.boundingBox())!;
-  expect(c.x).toBeGreaterThan(a.x + a.width);
-  await page.locator("#chat-input").fill("A synthetic answer draft");
-  await expect(page.locator("#chat-input")).toHaveValue(
-    "A synthetic answer draft",
-  );
+  const world = (await page.locator(".world").boundingBox())!;
+  expect(world.width).toBeGreaterThan(1000);
   await page.screenshot({
     path: ".artifacts/force-fields-desktop.png",
     fullPage: true,
   });
   await page.setViewportSize({ width: 390, height: 844 });
-  await expect(page.locator("#chat-input")).toBeVisible();
+  await expect(page.locator("#native-study-copy")).toBeVisible();
+  await expect(page.locator("#terminal")).toBeHidden();
   expect(
     await page.evaluate(
       () => document.documentElement.scrollWidth <= innerWidth,

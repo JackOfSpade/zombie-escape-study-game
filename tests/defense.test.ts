@@ -515,6 +515,17 @@ test("long-study pressure on unrelated room furniture cannot certify pressure on
     o.maxHp = 1000;
     o.moved = 1;
   }
+  const cover = unrelated.find((o) => o.kind === "fridge")!;
+  // A finite, local audible cue supplies actual pressure on the unrelated
+  // defense; it does not reveal the hidden human or prepared room.
+  g.effects.push({
+    kind: "decoy",
+    floor: 0,
+    x: cover.x,
+    y: cover.y - cover.h / 2 - 0.3,
+    radius: 10,
+    until: g.time + 20,
+  });
   const before = unrelated.reduce((n, o) => n + o.hp, 0);
   const report = siegeScenario(scenario, 50);
   assert.ok(

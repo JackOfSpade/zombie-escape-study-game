@@ -122,6 +122,7 @@ Maps contain `{ "floor": 0, "rows": [...] }`: exactly 34 strings of 44 cells, wi
 
 Actions:
 
+- `decoy`: `floor`, `x`, `y`; places the native 20-second, 10-tile audible decoy in game simulation. Acoustics, walls and furniture still bound hearing. Use an explicit sensory cue when a scenario needs directed zombie pressure.
 - `move`: `id`, `x`, `y` (−1 to +1); persists until another move action. Game mode controls only `human`; motor mode can control any character. A zero vector stops its motor. Movement updates facing before a same-tick vault.
 - `door`, `grip`, `vault`: survivor `id` and `target` entity ID. They use the actual game's reach/interaction checks. A failed interaction fails the test. `vault` accepts target `auto` for the game's faced-surface selection.
 - `spawn`: an `entity` specification, allowing timed arrivals.
@@ -131,15 +132,15 @@ Checks have `name`, `mode`, `query`, `op` and `expected`. Operators are `eq`, `g
 
 Queries:
 
-| Type             | Parameters                              | Result                                                                                    |
-| ---------------- | --------------------------------------- | ----------------------------------------------------------------------------------------- |
-| `property`       | `id`, `field`                           | `x`, `y`, `hp`, `maxHp` (furniture), `floor`, `alive`, `latched`, or `absAngle` (radians) |
-| `count`          | `kind`: `npc` or `zombie`               | Living, active population                                                                 |
-| `region`         | `kind`, `floor`, `x1`, `y1`, `x2`, `y2` | Living population inside the rectangle                                                    |
-| `separation`     | At least two distinct entity `ids`      | Smallest same-floor center-to-center distance                                             |
-| `event`          | `event` type                            | Number of matching game events                                                            |
-| `soundConnected` | `floor`, points `a` and `b`             | Whether an open acoustic path exists                                                      |
-| `buildingLayoutErrors` | None | Number of randomized-building validation errors: a shared footprint, contained structure and aligned stairs. Missing footprint metadata is an error. |
+| Type                   | Parameters                              | Result                                                                                                                                               |
+| ---------------------- | --------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `property`             | `id`, `field`                           | `x`, `y`, `hp`, `maxHp` (furniture), `floor`, `alive`, `latched`, or `absAngle` (radians)                                                            |
+| `count`                | `kind`: `npc` or `zombie`               | Living, active population                                                                                                                            |
+| `region`               | `kind`, `floor`, `x1`, `y1`, `x2`, `y2` | Living population inside the rectangle                                                                                                               |
+| `separation`           | At least two distinct entity `ids`      | Smallest same-floor center-to-center distance                                                                                                        |
+| `event`                | `event` type                            | Number of matching game events                                                                                                                       |
+| `soundConnected`       | `floor`, points `a` and `b`             | Whether an open acoustic path exists                                                                                                                 |
+| `buildingLayoutErrors` | None                                    | Number of randomized-building validation errors: a shared footprint, contained structure and aligned stairs. Missing footprint metadata is an error. |
 
 Use `template: "building", layout: "randomized", rules: "force-fields"` for the current randomized building generator. `layout: "forward"` keeps its historical geometry for existing regressions. The `building-footprint-consistency.json` scenario checks every floor throughout a normal simulation and across a JSON/physics checkpoint.
 
@@ -194,3 +195,14 @@ Friendly local steering forecasts closest approach over 0.65 seconds, tests at m
 Fresh runs in the browser use version 5 randomized buildings (office floor plans) with one shared footprint, movable office furniture, force-field doors and gates, solo stations with the single Terminal AI conversation (no separate editor), personal keys, and swarm spawning in batches. Browser specs that exercise those rules enter the building directly. Specs that exercise legacy building mechanics (chairs and vaults, shared rooms with the one-workspace editor, twenty first-floor opportunities, legacy spawn counts) call `enterLegacyBuilding(page)` from `tests/browser/helpers/legacy-world.ts`, which enters the building and swaps the live run for a legacy-layout world with the same roadmap and study state and no rules flag. Starting a live study run creates a fresh force-field world again, so such specs call `useLegacyWorld(page)` after that click. Scenario-based specs that assign a `TestRunner` game into the page must also copy the scenario's `rules`, because a fresh run's force-field rules otherwise survive the swap and disable vaulting.
 
 The rooftop extraction spec (`late-extraction.spec.ts`) drives the survivor with real keyboard input in real time; its outcome depends on per-frame render cost. The play frame is capped at the historical size (`.world` max-width 1034px, viewport height `100vh - 250px`) partly for that reason. Keep other browser pages and heavy processes idle while running it.
+
+### Study pacing and live spectator scenarios
+
+A game scenario may set `pacing: "study"` to use the fresh playable timing profile; omitted pacing preserves historical fixture timing. Game simulation supports `{ "type": "pause", "paused": true }` (and false to resume) as a tick action. Assertions can query `worldTime`, `humanEnded`, or `sinceEnd` with metric `time`, `npcTravel`, or `zombieTravel`. These compare real engine progress after the human outcome; they do not replace combat or evaluate JSON code. See `spectator-live-world.json` for actual zombie combat death, continued world travel and pause/resume, and `study-opening-window.json` for the three-minute opening and gradual spawn cadence.
+
+
+## Individual zombie search
+
+Zombies do not receive a building map or an automatic stair/roof destination. Each plans inside a six-tile visible neighborhood, keeps at most 96 recent personal search cells, and chooses its own search directions from a seed derived from the run and its ID. Visible survivors update that zombie's last seen position for nine seconds. Audible footsteps give a coarse two-tile location for five seconds; decoys use normal acoustic reach. Neither clues nor search history are shared. Reaching or losing a trail resumes exploration. Physical stair discovery still starts the normal saved flight.
+
+`zombie-search-no-stair-knowledge.json` exercises local exploration across a checkpoint with no same-floor sensory cue. `tests/zombie-search.test.ts` checks hidden survivors and geometry, independent witnesses, approximate hearing, stale visual trails, bounded memory and save continuity. Furniture pressure scenarios must provide an actual visible target or audible lure; silent people behind opaque barricades are not an instruction to attack.

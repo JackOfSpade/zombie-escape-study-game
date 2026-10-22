@@ -10,7 +10,13 @@ import {
   importedEnvironmentEvidence,
   importedMappingValid,
 } from "./imported-proof";
-import { eligibleLearning, localDate } from "./learner";
+import {
+  eligibleLearning,
+  localDate,
+  reconcileGates,
+  restoreFullQueues,
+} from "./learner";
+import { roleFocused } from "./career-profile";
 import type { LearnerLedger, LearningAttempt } from "./learning-model";
 import { learningAttemptRoot, servedLearningAttempts } from "./learning-model";
 import type { Roadmap, Track } from "./model";
@@ -418,7 +424,28 @@ function projectEnvironment(raw: string, r: Roadmap, l: LearnerLedger) {
   return replaceBlock(raw, "PE_PROGRESS", p);
 }
 
-export async function roadmapSemanticFingerprint(l: LearnerLedger) {
+/** Full-source view of an active ledger. Administrative role settings and its
+ * narrower operational gates never change the original document's meaning. */
+export function sourceLedgerProjection(r: Roadmap, ledger: LearnerLedger) {
+  const l = structuredClone(ledger);
+  if (roleFocused(l.careerFocus)) {
+    l.careerFocus = "full";
+    restoreFullQueues(r, l);
+    reconcileGates(r, l);
+  }
+  delete l.careerFocus;
+  delete (l as LearnerLedger & { careerCarryover?: unknown }).careerCarryover;
+  delete (l as LearnerLedger & { careerFullTrack?: unknown }).careerFullTrack;
+  return l;
+}
+/** Pass the source to project an active ledger. The export path already holds
+ * a sourceLedgerProjection and hashes it directly; raw fallback is retained
+ * for compatibility, not used for active production adoption caches. */
+export async function roadmapSemanticFingerprint(
+  ledger: LearnerLedger,
+  r?: Roadmap,
+) {
+  const l = r ? sourceLedgerProjection(r, ledger) : ledger;
   const semantic = {
     ...l,
     projection: "canonical-attempts-and-shared-identifiers-v1",
@@ -461,7 +488,11 @@ export async function prepareRoadmapExport(
   cache?: RoadmapExport,
   at = new Date().toISOString(),
 ): Promise<RoadmapExport> {
-  const l = structuredClone(ledger);
+  const l = sourceLedgerProjection(r, ledger);
+  // The source file represents the original curriculum. A role-profile gate
+  // is useful scheduling state, but is never proof that its deferred original
+  // objectives passed. Recompute only this disposable projection under the
+  // original requirements; the active profile and learner records stay intact.
   if ((await sha256(r.raw)) !== r.sourceHash)
     throw Error("Original roadmap integrity failure");
   validate(r, l);

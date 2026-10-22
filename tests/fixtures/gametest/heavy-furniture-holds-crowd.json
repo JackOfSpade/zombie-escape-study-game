@@ -1,7 +1,7 @@
 {
   "version": 1,
   "id": "heavy-furniture-holds-crowd",
-  "name": "A fridge behind a doorway holds eight pressing zombies for 60 s; they must break it, not shove it",
+  "name": "A noise lure brings eight zombies against a fridge; it holds for 60 s while they attack instead of shoving",
   "seed": 7,
   "template": "arena",
   "simulation": "game",
@@ -113,6 +113,27 @@
     }
   ],
   "actions": [
+    {
+      "type": "decoy",
+      "tick": 1,
+      "floor": 0,
+      "x": 22.65,
+      "y": 16.5
+    },
+    {
+      "type": "decoy",
+      "tick": 601,
+      "floor": 0,
+      "x": 22.65,
+      "y": 16.5
+    },
+    {
+      "type": "decoy",
+      "tick": 1201,
+      "floor": 0,
+      "x": 22.65,
+      "y": 16.5
+    },
     {
       "tick": 900,
       "type": "checkpoint"

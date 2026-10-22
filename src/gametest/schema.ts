@@ -36,7 +36,9 @@ export type Action = { tick: number } & (
   | { type: "move"; id: string; x: number; y: number }
   | { type: "door" | "grip" | "vault"; id: string; target: string }
   | { type: "spawn"; entity: Spawn }
+  | { type: "pause"; paused: boolean }
   | { type: "checkpoint" }
+  | { type: "decoy"; floor: number; x: number; y: number }
 );
 export interface Check {
   name: string;
@@ -70,7 +72,17 @@ export interface Check {
     | { type: "separation"; ids: string[] }
     | { type: "event"; event: string }
     | { type: "buildingLayoutErrors" }
-    | { type: "soundConnected"; floor: number; a: Point; b: Point };
+    | { type: "soundConnected"; floor: number; a: Point; b: Point }
+    /** Simulated world time in seconds. */
+    | { type: "worldTime" }
+    /** Whether the human's run has ended (dead or escaped). */
+    | { type: "humanEnded" }
+    /**
+     * World advancement after the human died/escaped: seconds since
+     * `endedAt`, or cumulative same-floor travel of living NPCs/zombies.
+     * Returns -1 until the run has ended.
+     */
+    | { type: "sinceEnd"; metric: "time" | "npcTravel" | "zombieTravel" };
   op: "eq" | "gte" | "lte";
   expected: number | boolean;
 }
@@ -82,6 +94,8 @@ export interface Scenario {
   template: "arena" | "building";
   layout?: "legacy" | "forward" | "randomized";
   rules?: "force-fields";
+  /** Optional fresh-run study tempo; omitted keeps legacy timing. */
+  pacing?: "study";
   simulation: "game" | "physics";
   maxTicks: number;
   startTime: number;
@@ -233,6 +247,7 @@ export function parseScenario(value: string | unknown): Scenario {
     "template",
     "layout",
     "rules",
+    "pacing",
     "simulation",
     "maxTicks",
     "startTime",
@@ -246,6 +261,10 @@ export function parseScenario(value: string | unknown): Scenario {
   requireThat(
     s.rules === undefined || s.rules === "force-fields",
     "Invalid gameplay rules.",
+  );
+  requireThat(
+    s.pacing === undefined || s.pacing === "study",
+    'Invalid pacing; only "study" may be set.',
   );
   requireThat(
     integer(s.seed, 0, 0xffffffff) &&
@@ -309,8 +328,33 @@ export function parseScenario(value: string | unknown): Scenario {
       isRecord(a) && integer(a.tick, 1, s.maxTicks as number),
       "Action tick is outside the test duration.",
     );
-    keys(a, ["tick", "type", "id", "target", "entity", "x", "y"]);
-    if (a.type === "spawn") spawn(a.entity);
+    keys(a, [
+      "tick",
+      "type",
+      "id",
+      "target",
+      "entity",
+      "x",
+      "y",
+      "paused",
+      "floor",
+    ]);
+    if (a.type === "decoy")
+      requireThat(
+        s.simulation === "game" &&
+          floor(a.floor) &&
+          point(a) &&
+          Object.keys(a).length === 5,
+        "Decoy actions require game simulation, a floor and an in-bounds position.",
+      );
+    else if (a.type === "spawn") spawn(a.entity);
+    else if (a.type === "pause")
+      requireThat(
+        s.simulation === "game" &&
+          typeof a.paused === "boolean" &&
+          Object.keys(a).length === 3,
+        "Pause actions require game simulation and a boolean paused value.",
+      );
     else if (a.type === "move")
       requireThat(
         id(a.id) &&
@@ -364,8 +408,24 @@ export function parseScenario(value: string | unknown): Scenario {
       "event",
       "a",
       "b",
+      "metric",
     ]);
-    if (q.type === "property")
+    if (q.type === "worldTime" || q.type === "humanEnded")
+      requireThat(
+        Object.keys(q).length === 1 &&
+          (q.type === "worldTime"
+            ? typeof c.expected === "number"
+            : typeof c.expected === "boolean"),
+        "World time/ended checks take no parameters and a matching expected type.",
+      );
+    else if (q.type === "sinceEnd")
+      requireThat(
+        Object.keys(q).length === 2 &&
+          ["time", "npcTravel", "zombieTravel"].includes(String(q.metric)) &&
+          typeof c.expected === "number",
+        "Invalid sinceEnd check.",
+      );
+    else if (q.type === "property")
       requireThat(
         id(q.id) &&
           [

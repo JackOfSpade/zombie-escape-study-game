@@ -1,0 +1,151 @@
+import { H, W, distance, type Game, type Point, type Zombie } from "./model";
+import { furnitureNear, inFurniture, wall } from "./spatial";
+import { blocksSight, canSee, sightRadius } from "./visibility";
+
+/** Short local plans, not a floor plan. Recent footsteps are personal and
+ * bounded; they encourage searching new branches without an omniscient map. */
+export const ZOMBIE_SEARCH = { radius: 6, trail: 96 };
+const cell = (p: Point) => Math.floor(p.y) * W + Math.floor(p.x);
+const point = (n: number): Point => ({
+  x: (n % W) + 0.5,
+  y: Math.floor(n / W) + 0.5,
+});
+function hash(text: string) {
+  let n = 2166136261;
+  for (let i = 0; i < text.length; i++)
+    n = Math.imul(n ^ text.charCodeAt(i), 16777619);
+  return n >>> 0;
+}
+/** A zombie's choices do not consume another zombie's random sequence. */
+export function zombieSearchRandom(g: Game, z: Zombie, salt: number) {
+  return (
+    hash(`${g.seed}/${z.id}/${z.floor}/${z.search?.decisions ?? 0}/${salt}`) /
+    4294967296
+  );
+}
+export function prepareZombieSearch(g: Game, z: Zombie) {
+  if (z.search?.floor === z.floor) return z.search;
+  const angle = zombieSearchRandom(g, z, 0) * Math.PI * 2;
+  z.search = {
+    floor: z.floor,
+    trail: [],
+    heading: { x: Math.cos(angle), y: Math.sin(angle) },
+    decisions: 0,
+  };
+  // Old saves may contain a route calculated using the entire building.
+  z.path = [];
+  z.repath = 0;
+  return z.search;
+}
+
+/** Only cells this zombie can currently inspect enter the graph. A sensed
+ * location biases the local search; it never supplies a route behind walls.
+ * The first visible barricade may be approached and attacked, but its far
+ * side and the rooms behind it are not revealed. */
+export function planZombieRoute(g: Game, z: Zombie, cue?: Point): Point[] {
+  const f = g.floors[z.floor],
+    search = prepareZombieSearch(g, z),
+    start = cell(z),
+    radius = Math.min(ZOMBIE_SEARCH.radius, sightRadius(f)),
+    known = new Uint8Array(W * H),
+    blocked = new Uint8Array(W * H);
+  if (search.trail.at(-1) !== start) search.trail.push(start);
+  if (search.trail.length > ZOMBIE_SEARCH.trail)
+    search.trail.splice(0, search.trail.length - ZOMBIE_SEARCH.trail);
+  search.decisions++;
+  for (
+    let y = Math.max(1, Math.floor(z.y - radius));
+    y <= Math.min(H - 2, Math.floor(z.y + radius));
+    y++
+  ) {
+    for (
+      let x = Math.max(1, Math.floor(z.x - radius));
+      x <= Math.min(W - 2, Math.floor(z.x + radius));
+      x++
+    ) {
+      const p = { x: x + 0.5, y: y + 0.5 },
+        n = y * W + x;
+      if (distance(z, p) > radius || wall(f, p.x, p.y)) continue;
+      const object = (furnitureNear(f, p, 0.22) ?? f.furniture).find((o) =>
+        inFurniture(p, o, 0.22),
+      );
+      if (
+        !canSee(
+          f,
+          z,
+          p,
+          radius,
+          object && blocksSight(object) ? object.id : undefined,
+        )
+      )
+        continue;
+      known[n] = 1;
+      blocked[n] = object ? 1 : 0;
+    }
+  }
+  known[start] = 1;
+  const costs = new Float64Array(W * H).fill(Infinity),
+    previous = new Int32Array(W * H).fill(-1),
+    open = [start],
+    closed = new Uint8Array(W * H);
+  costs[start] = 0;
+  // The graph contains at most a small disk of visible cells. Penalize props
+  // so a zombie walks around a visible desk instead of knowing a hidden detour.
+  for (let i = 0; open.length && i < W * H; i++) {
+    open.sort((a, b) => costs[b] - costs[a] || b - a);
+    const n = open.pop()!;
+    if (closed[n]) continue;
+    closed[n] = 1;
+    for (const next of [n - W, n + W, n - 1, n + 1]) {
+      if (!known[next] || closed[next]) continue;
+      const cost = costs[n] + 1 + blocked[next] * 18;
+      if (cost >= costs[next]) continue;
+      costs[next] = cost;
+      previous[next] = n;
+      open.push(next);
+    }
+  }
+  let goal = start,
+    best = -Infinity;
+  const cueCell = cue ? cell(cue) : -1;
+  if (cueCell === start) return [];
+  for (let n = 0; n < known.length; n++) {
+    if (n === start || previous[n] < 0) continue;
+    const p = point(n),
+      d = distance(z, p);
+    if (d < 0.7 && n !== cueCell) continue;
+    let revisit = 0;
+    for (const visited of search.trail) {
+      const gap = distance(p, point(visited));
+      if (gap < 2) revisit += (2 - gap) * 1.5;
+    }
+    const forward =
+      ((p.x - z.x) * search.heading.x + (p.y - z.y) * search.heading.y) / d;
+    const frontier = [n - W, n + W, n - 1, n + 1].some((v) => !known[v]);
+    const score = cue
+      ? (distance(z, cue) - distance(p, cue)) * 4 -
+        costs[n] * 0.16 -
+        revisit * 0.25 +
+        (n === cueCell ? 2 : 0)
+      : d * 0.6 +
+        forward * 1.4 +
+        (frontier ? 1.5 : 0) -
+        revisit -
+        costs[n] * 0.22 +
+        zombieSearchRandom(g, z, n) * 1.5;
+    if (score > best) {
+      best = score;
+      goal = n;
+    }
+  }
+  if (goal === start) return [];
+  const destination = point(goal),
+    d = distance(z, destination) || 1;
+  search.heading = {
+    x: (destination.x - z.x) / d,
+    y: (destination.y - z.y) / d,
+  };
+  const route: Point[] = [];
+  for (let n = goal; n !== start; n = previous[n]) route.push(point(n));
+  return route.reverse();
+}

@@ -17,6 +17,7 @@ import {
   W,
 } from "./model";
 import { makeNpcProfile } from "./npc-cognition";
+import { applyStudyPacing } from "./study-pacing";
 export function actor(id: string, name: string, index: number): Actor {
   const result: Actor = {
     id,
@@ -91,7 +92,9 @@ export function createPlayableGame(
 ): Game {
   const g = createGame(seed, r, study, { layout: "forward" });
   redesign(g, r, { randomized: true });
-  return g;
+  // Fresh live runs use the study-friendly world tempo; legacy factories keep
+  // historical timing for reproducible fixtures.
+  return applyStudyPacing(g);
 }
 /** Legacy layout remains the default for existing scenario/benchmark compatibility. */
 export function createGame(

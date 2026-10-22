@@ -36,10 +36,93 @@ export function settleTutorRequest(
   releaseRequestContext(job);
 }
 
+/** Saved direct ChatGPT question session (structural; mirrors the model type). */
+interface SavedDirectStudy {
+  id: string;
+  provider: string;
+  payloadJson: string;
+  questionFingerprint: string;
+  state: "pending" | "interrupted" | "applied" | "superseded";
+  responseDigest?: string;
+  error?: string;
+  transportPhase?: unknown;
+  transportPhaseAt?: number;
+}
+const directOf = (e: Encounter) =>
+  (e as { directStudy?: SavedDirectStudy }).directStudy;
+
 export function releaseSettledRequests(e: Encounter, all = false): void {
   for (const job of e.tutorRequests ?? [])
     if (all || job.state === "applied" || job.state === "superseded")
       releaseRequestContext(job);
+  // A pending/interrupted direct question keeps its exact frozen payload even
+  // when archived; only settled sessions may drop static context.
+  const direct = directOf(e);
+  if (
+    direct &&
+    typeof direct.payloadJson === "string" &&
+    (direct.state === "applied" || direct.state === "superseded")
+  )
+    releaseRequestContext(direct);
+}
+
+const DIRECT_STATES = new Set([
+  "pending",
+  "interrupted",
+  "applied",
+  "superseded",
+]);
+/** Validate a saved direct session as data; malformed sessions become interrupted. */
+export function recoverDirectStudy(e: Encounter): void {
+  const holder = e as { directStudy?: unknown };
+  if (holder.directStudy === undefined) return;
+  const s = holder.directStudy as Record<string, unknown> | null;
+  if (!s || typeof s !== "object" || Array.isArray(s)) {
+    delete holder.directStudy;
+    return;
+  }
+  const malformed = (reason: string) => {
+    if (s.state === "applied" || s.state === "superseded") return;
+    s.state = "interrupted";
+    s.error = `Saved ChatGPT question is malformed (${reason}); it cannot be retried.`;
+  };
+  delete s.transportPhase;
+  delete s.transportPhaseAt;
+  if (typeof s.state !== "string" || !DIRECT_STATES.has(s.state)) {
+    s.state = "interrupted";
+    s.error = "Saved ChatGPT question had an unknown state; retry is required.";
+  }
+  if (
+    typeof s.id !== "string" ||
+    !s.id ||
+    typeof s.questionFingerprint !== "string" ||
+    !/^[0-9a-f]{64}$/.test(s.questionFingerprint) ||
+    typeof s.payloadJson !== "string"
+  )
+    return malformed("identity");
+  let payload: unknown;
+  try {
+    payload = JSON.parse(s.payloadJson);
+  } catch {
+    return malformed("payload");
+  }
+  const p = payload as Record<string, unknown> | null;
+  if (
+    !p ||
+    typeof p !== "object" ||
+    Array.isArray(p) ||
+    p.requestId !== s.id ||
+    p.questionFingerprint !== s.questionFingerprint ||
+    p.mode !== "terminal-direct" ||
+    !p.problem ||
+    typeof p.problem !== "object"
+  )
+    return malformed("payload binding");
+  if (s.state === "pending") {
+    s.state = "interrupted";
+    s.error =
+      "Application restarted while the ChatGPT question was open; it resumes with the exact saved question.";
+  }
 }
 
 /** Preserve actual human context, including an issued but unanswered question. */
@@ -47,6 +130,7 @@ export function retainRunLearning(g: Game, archive = false) {
   const retained = Object.values(g.encounters).filter(
     (e) =>
       e.problemPresentedSequence !== undefined ||
+      directOf(e) !== undefined ||
       e.history.some((h) => h.author === "human") ||
       e.contributors.includes("human") ||
       (e.executions?.length ?? 0) > 0 ||

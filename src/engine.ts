@@ -1,3 +1,8 @@
+import {
+  planZombieRoute,
+  prepareZombieSearch,
+  zombieSearchRandom,
+} from "./zombie-search";
 import { doorwayMotion } from "./door-traffic";
 import { studyLoopDecision } from "./npc-study-loop";
 import {
@@ -48,6 +53,13 @@ import {
   rand,
 } from "./model";
 import { survivorPath, walkSegment } from "./navigation";
+import { humanActive, markEnded, simulationActive } from "./simulation-state";
+import {
+  helicopterInterval,
+  npcThinkingScale,
+  spawnGrace,
+  swarmPacing,
+} from "./study-pacing";
 import {
   hasHumanStudyContext,
   npcReasoningAvailable,
@@ -83,11 +95,10 @@ import {
 import {
   advanceStairs,
   beginStairs,
-  cancelStairs,
   enterStairs,
   stairwellAt,
 } from "./stair-travel";
-import { stairwell } from "./stairwell";
+import { STAIRWELL_RADIUS, stairwell } from "./stairwell";
 import {
   chooseRetreat,
   routeContacts,
@@ -240,6 +251,7 @@ function death(g: Game, a: Actor) {
       revision: g.encounters[a.intent].revision,
     });
   if (a.id === "human") {
+    if (g.status === "playing") markEnded(g);
     g.status = "dead";
     g.notice =
       "The run ended. Your terminal work and learning evidence are preserved.";
@@ -298,6 +310,7 @@ export function board(g: Game, a: Actor) {
     a.id,
   );
   if (a.id === "human") {
+    if (g.status === "playing") markEnded(g);
     g.status = "escaped";
     g.notice = "You made it. Your work survives with you.";
   }
@@ -1446,7 +1459,11 @@ function npc(g: Game, a: Actor, dt: number) {
     delete a.station;
     follow(g, a, studyLoop.target, dt);
     if (a.intent && npcReasoningAvailable(g.encounters[a.intent], a))
-      a.thought += dt * 0.2 * npcThinkingRate(a, g.encounters[a.intent]);
+      a.thought +=
+        dt *
+        0.2 *
+        npcThinkingRate(a, g.encounters[a.intent]) *
+        npcThinkingScale(g);
     return;
   }
   const loopWork = studyLoop?.mode === "work";
@@ -1745,7 +1762,7 @@ function npc(g: Game, a: Actor, dt: number) {
       ) {
         a.activity = "defending";
         if (npcReasoningAvailable(e, a))
-          a.thought += dt * 0.15 * npcThinkingRate(a, e);
+          a.thought += dt * 0.15 * npcThinkingRate(a, e) * npcThinkingScale(g);
         return;
       }
       // Reserve a stable physical station. Re-sorting and indexing on every frame
@@ -1879,6 +1896,7 @@ function npc(g: Game, a: Actor, dt: number) {
       dt *
       attention *
       npcThinkingRate(a, g.encounters[a.intent]) *
+      npcThinkingScale(g) *
       (1 + (a.role === "analyst" ? 0.2 : 0));
 }
 export function complete(
@@ -1905,7 +1923,13 @@ export function complete(
   e.chatOpen = false;
   for (const id of new Set(contributors)) {
     const a = g.survivors.find((s) => s.id === id);
-    if (!a || !a.alive || a.escaped) continue;
+    if (
+      !a ||
+      !a.alive ||
+      a.escaped ||
+      (a.id === "human" && (g.status === "dead" || g.status === "escaped"))
+    )
+      continue;
     if (g.rules === "force-fields") a.keys = (a.keys ?? 0) + 1;
     if (e.reward === "stairs" && !a.access.includes(e.floor))
       a.access.push(e.floor);
@@ -2153,6 +2177,7 @@ function zombie(
     }
   }
   const f = g.floors[z.floor];
+  prepareZombieSearch(g, z);
   let prey = g.survivors
     .filter(
       (a) =>
@@ -2193,14 +2218,18 @@ function zombie(
             )
         : undefined;
     if (heard) {
-      z.target = { x: heard.x, y: heard.y };
+      // Sound gives a rough location, not the survivor's exact live position.
+      z.target = {
+        x: Math.floor(heard.x / 2) * 2 + 1,
+        y: Math.floor(heard.y / 2) * 2 + 1,
+      };
       z.memory = g.time + 5;
-    } else if (g.time > z.memory) z.target = undefined;
+    } else if (z.target && (g.time > z.memory || distance(z, z.target) < 0.8)) {
+      z.target = undefined;
+      z.repath = 0;
+    }
   }
-  let target =
-    decoy ??
-    z.target ??
-    (z.floor === CONFIG.floors ? { x: 21.5, y: 10.5 } : f.stairs);
+  const target = decoy ?? z.target;
   const bubble = g.effects.find(
     (e) =>
       e.kind === "bubble" &&
@@ -2230,8 +2259,8 @@ function zombie(
   }
   z.repath -= dt;
   if (z.repath <= 0) {
-    z.path = path(f, z, target, true);
-    z.repath = 1.2 + rand(g) * 0.6;
+    z.path = planZombieRoute(g, z, target);
+    z.repath = 1.2 + zombieSearchRandom(g, z, -1) * 0.6;
   }
   let p = z.path[0];
   if (p && distance(z, p) < 0.17) {
@@ -2251,7 +2280,14 @@ function zombie(
     p = { x: Math.floor(z.x) + 0.5, y: Math.floor(z.y) + 0.5 };
   // Grid search has no edge when both positions share a cell. Finish the
   // remaining physical distance instead of freezing just outside attack range.
-  if (!p && !solid(f, target) && line(f, z, target, true)) p = target;
+  if (
+    !p &&
+    target &&
+    !solid(f, target) &&
+    canSee(f, z, target, 12) &&
+    clearWallSegment(f, z, target)
+  )
+    p = target;
   if (p) {
     const d = distance(z, p) || 1,
       dx = (p.x - z.x) / d,
@@ -2276,10 +2312,7 @@ function zombie(
       return;
     }
     if (ob) {
-      const surface = {
-        x: Math.max(ob.x - ob.w / 2, Math.min(z.x, ob.x + ob.w / 2)),
-        y: Math.max(ob.y - ob.h / 2, Math.min(z.y, ob.y + ob.h / 2)),
-      };
+      const surface = surfacePoint(z, ob);
       // Objects lighter than one zombie's push (chairs, plants) are shoved
       // aside while being struck; heavier ones stop the zombie to attack.
       const shove =
@@ -2330,7 +2363,10 @@ function zombie(
         : CONFIG.zombieSpeed * (surge ? 1.35 : 1)) * dt;
     moveZombie(g, z, p, Math.min(step, d), crowd);
   }
-  if (z.floor < CONFIG.floors && distance(z, f.stairs) < 0.75) {
+  if (
+    z.floor < CONFIG.floors &&
+    distance(z, f.stairs) < (f.layout === "pursuit" ? STAIRWELL_RADIUS : 0.75)
+  ) {
     z.stairUntil = g.time + CONFIG.stairSeconds;
     event(
       g,
@@ -2442,8 +2478,13 @@ export function step(
   dt: number,
   input: Input = { x: 0, y: 0, grab: false },
 ) {
-  if (g.status !== "playing" || g.paused || !Number.isFinite(dt) || dt <= 0)
+  // The world keeps running after the human's death/extraction; pause and
+  // not-yet-started runs still freeze it.
+  if (!simulationActive(g) || g.paused || !Number.isFinite(dt) || dt <= 0)
     return;
+  // Historical ended saves predate endedAt. Their saved world time is the
+  // best available human end time, before spectator advancement resumes.
+  if (!humanActive(g)) markEnded(g);
   dt = Math.min(dt, 0.1);
   beginPhysics(g);
   beginFurnitureIndex(g.floors);
@@ -2468,7 +2509,7 @@ function advanceStep(
   dt: number,
   input: Input = { x: 0, y: 0, grab: false },
 ) {
-  if (g.status !== "playing" || g.paused) return;
+  if (!simulationActive(g) || g.paused) return;
   dt = Math.min(dt, 0.1);
   g.time += dt;
   g.tick = (g.tick ?? 0) + 1;
@@ -2496,7 +2537,8 @@ function advanceStep(
       o.movers = [];
       if (o.turning > 0) o.turning = Math.max(0, o.turning - dt);
     }
-  if (a.alive && !a.escaped) {
+  // Human input ends with the human's run; the world keeps advancing.
+  if (humanActive(g) && a.alive && !a.escaped) {
     a.cooldown = Math.max(0, a.cooldown - dt);
     enterStairs(g, a);
     // Walking out of the staircase cancels a flight; walking inside it does not.
@@ -2530,19 +2572,11 @@ function advanceStep(
       }
     } else if (!input.grab && !a.grip) delete a.handling;
   }
+  const thinkingScale = npcThinkingScale(g);
   for (const b of g.survivors.slice(1)) {
     if (!b.alive || b.escaped) continue;
     b.cooldown = Math.max(0, b.cooldown - dt);
     const previous = { activity: b.activity, intent: b.intent, floor: b.floor };
-    if (
-      b.stairTravel &&
-      g.time >= b.stairTravel.until &&
-      g.zombies.some(
-        (z) =>
-          z.hp > 0 && z.floor === b.floor && canSee(g.floors[b.floor], b, z, 4),
-      )
-    )
-      cancelStairs(g, b);
     enterStairs(g, b);
     if (advanceStairs(g, b)) {
       if (
@@ -2550,7 +2584,8 @@ function advanceStep(
         g.encounters[b.intent]?.state !== "consumed" &&
         npcReasoningAvailable(g.encounters[b.intent], b)
       )
-        b.thought += dt * 0.2 * npcThinkingRate(b, g.encounters[b.intent]);
+        b.thought +=
+          dt * 0.2 * npcThinkingRate(b, g.encounters[b.intent]) * thinkingScale;
     } else if (b.vault) {
       advanceVault(b, dt);
       if (
@@ -2558,19 +2593,21 @@ function advanceStep(
         g.encounters[b.intent]?.state !== "consumed" &&
         npcReasoningAvailable(g.encounters[b.intent], b)
       )
-        b.thought += dt * 0.2 * npcThinkingRate(b, g.encounters[b.intent]);
+        b.thought +=
+          dt * 0.2 * npcThinkingRate(b, g.encounters[b.intent]) * thinkingScale;
     } else npc(g, b, dt);
     recordNpcActivity(g, b, previous);
   }
-  if (g.time >= CONFIG.spawnGraceSeconds && g.time >= g.nextSpawn) {
+  if (g.time >= spawnGrace(g) && g.time >= g.nextSpawn) {
+    const swarm = swarmPacing(g);
     g.nextSpawn =
       g.time +
-      (g.rules === "force-fields" ? SWARM.interval : CONFIG.spawnInterval);
+      (g.rules === "force-fields" ? swarm.interval : CONFIG.spawnInterval);
     if (g.rules === "force-fields")
       g.zombies = g.zombies.filter((z) => z.hp > 0);
     const batch =
       g.rules === "force-fields"
-        ? Math.min(SWARM.batch, Math.max(0, SWARM.cap - g.zombies.length))
+        ? Math.min(swarm.batch, Math.max(0, swarm.cap - g.zombies.length))
         : g.spawned < CONFIG.openingHorde
           ? Math.min(CONFIG.openingBatch, CONFIG.openingHorde - g.spawned)
           : CONFIG.reinforcementBatch;
@@ -2616,7 +2653,7 @@ function advanceStep(
     h.trip++;
     h.passengers = [];
     h.until = g.time + CONFIG.boardingWindow;
-    h.next = g.time + CONFIG.helicopterInterval;
+    h.next = g.time + helicopterInterval(g);
     event(
       g,
       "helicopter",

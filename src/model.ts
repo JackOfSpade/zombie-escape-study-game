@@ -93,6 +93,7 @@ export interface StudyState {
   /** Topic spawn variety: disabled topics and recent spawns; carried across runs. */
   topicSpawn?: import("./topic-spawn").TopicSpawn;
   profile?: "development" | "live";
+  careerFocus?: "product-feature-owner" | "full";
   learner?: LearnerLedger;
   version: number;
   cycle: number;
@@ -263,6 +264,13 @@ export interface Zombie extends Point {
   stagger: number;
   origin: "outside";
   stairUntil?: number;
+  /** This zombie's own recent search, retained across checkpoints. */
+  search?: {
+    floor: number;
+    trail: number[];
+    heading: Point;
+    decisions: number;
+  };
 }
 export type FurnitureKind =
   | "chair"
@@ -457,7 +465,22 @@ export interface TutorRequest {
   error?: string;
   responseMessageId?: string;
 }
+export interface DirectStudySession {
+  id: string;
+  createdAt?: number;
+  responseReceivedAt?: number;
+  appliedAt?: number;
+  provider: Provider;
+  payloadJson: string;
+  questionFingerprint: string;
+  state: "pending" | "interrupted" | "applied" | "superseded";
+  responseDigest?: string;
+  error?: string;
+  transportPhase?: import("./bridge-client").HandoffProgress;
+  transportPhaseAt?: number;
+}
 export interface Encounter {
+  directStudy?: DirectStudySession;
   chatDraft?: string;
   /** One question per room; answers, ownership and rewards remain per station. */
   questionRoom?: string;
@@ -559,7 +582,13 @@ export interface Game {
   time: number;
   seq: number;
   status: "ready" | "playing" | "dead" | "escaped";
+  /** World time when the human died or escaped; captured once, world continues. */
+  endedAt?: number;
+  /** Undefined keeps historical timing; fresh playable runs use "study". */
+  pacing?: "study" | "legacy";
   paused?: boolean;
+  /** Last question actually opened by the human; stable across page reload. */
+  lastStudyEncounter?: string;
   floors: Floor[];
   survivors: Actor[];
   zombies: Zombie[];

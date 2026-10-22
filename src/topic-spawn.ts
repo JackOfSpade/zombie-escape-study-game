@@ -1,4 +1,5 @@
 import { eligible } from "./curriculum";
+import { effectiveTarget, studyFocus } from "./career-profile";
 import { openContinuation, practiceContract } from "./learner";
 import type { Contract, Roadmap, StudyState, Track } from "./model";
 
@@ -80,8 +81,9 @@ export function spawnCandidates(
       (o) =>
         topicOf(o.id) === topic &&
         (live
-          ? o.target >= tier && s.learner!.cells[o.id]?.states[tier - 1] !== "P"
-          : o.cells[0] !== "P"),
+          ? effectiveTarget(o, studyFocus(s)) >= tier &&
+            s.learner!.cells[o.id]?.states[tier - 1] !== "P"
+          : effectiveTarget(o, studyFocus(s)) >= 1 && o.cells[0] !== "P"),
     );
   const seen = new Set<string>();
   const out: string[] = [];
@@ -186,7 +188,10 @@ function devPracticeContract(
   formalTopic: string,
 ): Contract | undefined {
   const objective = r.tracks[track].objectives.find(
-    (o) => topicOf(o.id) === topic && o.cells[0] !== "P",
+    (o) =>
+      topicOf(o.id) === topic &&
+      effectiveTarget(o, studyFocus(s)) >= 1 &&
+      o.cells[0] !== "P",
   );
   if (!objective) return undefined;
   return {

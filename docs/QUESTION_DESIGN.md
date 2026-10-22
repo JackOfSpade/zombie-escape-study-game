@@ -1,5 +1,13 @@
 # Development question design (PE track)
 
+## Role focus and tutor depth
+
+The active role is a product engineer who owns consumer/creative web features end to end, with strong UI craft and appropriate working backend knowledge. `career-profile.ts` overlays 51 core PE objectives at a maximum required depth of 3; it does not rewrite the 112-objective source bank or its original targets. Reference and optional objectives remain available as source material but are excluded from focused gates and automatic practice. The Full original curriculum setting reverses the overlay. Python interview fundamentals are unchanged.
+
+New D1 tutor exchanges allow at most one directly relevant prerequisite level. The parser still understands older saved two-level observations; new exchanges cannot create those deeper branches. An unspecified gap outcome does not mark every unknown sibling as missing. Only explicit findings are recorded, and unasked facets remain unassessed.
+
+The recipe-loading question now supplies DNS/HTTPS setup as completed facts, states DOM readiness behavior, and asks about stylesheet/script blocking, earlier heading paint and API/render ordering. Transport connection-order recall is outside that question. New live generation and native chat receive the role's bounded scope guidance; switching profiles does not reroll an already issued question.
+
 ## Root cause of the old questions
 
 `productPractice` used to pick one of a few shared feature cases per objective
@@ -36,7 +44,7 @@ the same facts. Declared gaps were also appended as extra "cover it too" chores.
 ## Development vs live
 
 `devProblem` returns `provenance: "development"`, the exact scheduled contract
-(unchanged scopes, scheduler, ledger and curriculum) and `starter: ""`. Its
+(unchanged source scopes and curriculum; the selected role overlay controls future scheduling) and `starter: ""`. Its
 random draws are unchanged. Live questions are written by the tutor under
 `PROBE_STANCE`: one focused question whose correct answer genuinely depends on
 its prerequisite facets, never a wider question or extra task. The synthetic

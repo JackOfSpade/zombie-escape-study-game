@@ -190,8 +190,11 @@ test("model-facing tool descriptions carry no tutoring policy; every directive t
     modelFacing.map((t) => t.name),
     [
       "open_study_terminal",
+      "get_current_study_question",
       "read_study_terminal_context",
       "reply_study_terminal_job",
+      "finish_study_preparation",
+      "finish_study_question",
     ],
   );
   for (const tool of modelFacing) {
@@ -235,10 +238,13 @@ test("live relay tools are separate from the demo and legacy worker tools", () =
     tools.map((t) => t.name),
     [
       "open_study_terminal",
+      "get_current_study_question",
       "claim_study_terminal_turn",
       "read_study_terminal",
       "read_study_terminal_context",
       "reply_study_terminal_job",
+      "finish_study_preparation",
+      "finish_study_question",
     ],
   );
   assert.equal(tools[0]._meta.ui.resourceUri, TERMINAL_RELAY_URI);
@@ -444,7 +450,11 @@ test("stopping sharing releases app claims; a relay restart recovers its own wor
   // Relay process restart: in-memory sessions are lost but the queue persists.
   const restarted = createTerminalRelayApp({ queue });
   const fresh = state(restarted.call("open_study_terminal", {}, owner));
-  assert.notEqual(fresh.relayId, s.relayId);
+  assert.equal(
+    fresh.relayId,
+    s.relayId,
+    "the owner relay remains addressable after restart",
+  );
   const recovered = state(
     restarted.call(
       "claim_study_terminal_turn",

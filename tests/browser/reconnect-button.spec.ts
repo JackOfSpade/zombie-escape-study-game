@@ -1,43 +1,45 @@
 import { expect, test, type Page } from "@playwright/test";
+import {
+  enterNativeGame,
+  mockNativeStudy,
+  nativeState,
+  openNativeQuestion,
+} from "./native-study-harness";
 
-/** Tests never reach the real ChatGPT: popups land on a local stub page. */
-async function stubChatGpt(page: Page) {
-  await page
-    .context()
-    .route("https://chatgpt.com/**", (route) =>
-      route.fulfill({ contentType: "text/html", body: "<title>stub</title>" }),
-    );
-}
-async function openSoloTerminal(page: Page, resume = false) {
-  await stubChatGpt(page);
-  await page.goto("/");
-  // A saved run in progress resumes without the start card.
-  if (!resume)
-    await page.getByRole("button", { name: "Enter the building" }).click();
-  await page.evaluate(async () => {
-    const root = "/src/";
-    const { ensureProblem } = await import(/* @vite-ignore */ root + "ai.ts");
-    const r = await (await fetch("/curriculum.json")).json();
-    const g = (window as any).__deadAir.game,
-      st = g.floors[0].stations[0],
-      e = g.encounters[st.encounter];
-    for (const a of g.survivors.slice(1)) a.escaped = true;
-    g.zombies = [];
-    g.nextSpawn = Number.MAX_SAFE_INTEGER;
-    Object.assign(g.survivors[0], { x: st.x, y: st.y });
-    await ensureProblem(g, e, r);
-    e.mode = "solo";
-    e.owner = "human";
-  });
-  await page.locator("#world").focus();
-  await page.keyboard.press("e");
-  await expect(page.locator("#chat-input")).toBeVisible();
+async function noOptionalWidget(page: Page) {
+  await page.route("**/api/handoff/status", (route) =>
+    route.fulfill({
+      json: {
+        enabled: true,
+        queued: 0,
+        working: 0,
+        done: 0,
+        recent: [],
+        public: {
+          configured: true,
+          linked: true,
+          workerActive: false,
+          terminalRelay: { sessions: 0, activeSessions: 0, pendingTurns: 0 },
+          diagnostics: [],
+        },
+        tunnel: { state: "connected", verified: true, error: null },
+      },
+    }),
+  );
+  await page.context().route("https://chatgpt.com/**", (route) =>
+    route.fulfill({
+      contentType: "text/html",
+      body: "<title>Synthetic ChatGPT stub</title>",
+    }),
+  );
 }
 
 for (const clipboardBlocked of [false, true]) {
-  test(`Reconnect ChatGPT exposes the prompt with clipboard ${clipboardBlocked ? "blocked" : "available"}, keeps Settings closed, reports done and disappears`, async ({
+  test(`unsent question connects through Settings once without a widget, clipboard ${clipboardBlocked ? "blocked" : "available"}`, async ({
     page,
   }) => {
+    const relay = await mockNativeStudy(page, false);
+    await noOptionalWidget(page);
     await page
       .context()
       .grantPermissions(["clipboard-read", "clipboard-write"]);
@@ -50,291 +52,128 @@ for (const clipboardBlocked of [false, true]) {
           },
         });
       });
-    const relay = {
-      enabled: false,
-      verified: false,
-      linked: true,
-      sessions: 0,
-    };
-    const actions: string[] = [];
-    await page.route("**/api/status", (route) =>
-      route.fulfill({
-        json: relay.enabled
-          ? {
-              mode: "chatgpt-handoff",
-              label: "ChatGPT handoff",
-              capabilities: ["tutor"],
-              detail: "Synthetic handoff",
-            }
-          : {
-              mode: "development",
-              label: "Development fallback",
-              capabilities: [],
-              detail: "Synthetic disconnected",
-            },
-      }),
-    );
-    await page.route("**/api/handoff/status", (route) =>
-      route.fulfill({
-        json: {
-          enabled: relay.enabled,
-          autonomousWork: false,
-          heldAutonomous: 0,
-          queued: 0,
-          working: 0,
-          done: 0,
-          recent: [],
-          public: {
-            configured: true,
-            linked: relay.linked,
-            workerActive: false,
-            terminalRelay: {
-              sessions: relay.sessions,
-              activeSessions: relay.sessions,
-              pendingTurns: 0,
-            },
-            mcpUrl: "https://synthetic.lullascape.com/mcp",
-            pairingOpen: false,
-            diagnostics: [],
-          },
-          tunnel: {
-            state: relay.verified ? "connected" : "off",
-            verified: relay.verified,
-            error: null,
-          },
-        },
-      }),
-    );
-    await page.route("**/api/handoff/control", async (route) => {
-      const body = route.request().postDataJSON();
-      actions.push(body.action);
-      if (body.action === "start-public") {
-        setTimeout(() => {
-          relay.verified = true;
-        }, 500);
-        await route.fulfill({ json: { state: "starting", verified: false } });
-      } else if (body.action === "enable") {
-        relay.enabled = body.enabled;
-        await route.fulfill({ json: { enabled: relay.enabled } });
-      } else
-        await route.fulfill({ status: 409, json: { error: "unexpected" } });
-    });
-    await openSoloTerminal(page);
-    const button = page.locator("#connect-completion"),
-      notice = page.locator("#completion-connection");
-    await expect(button).toBeVisible();
-    await expect(notice).toContainText("ChatGPT is disconnected");
-    await expect(button).toHaveText("Connect ChatGPT");
-    const popup = page.waitForEvent("popup");
-    await button.click();
-    const chat = await popup;
-    await expect(page.locator("#settings")).toBeHidden();
-    await expect(button).toBeHidden();
-    await expect(notice).toContainText("Connected and released", {
-      timeout: 15_000,
-    });
-    await expect(notice).toContainText("ChatGPT opened in a new tab");
-    expect(actions).toEqual(["start-public", "enable"]);
-    // The reserved tab now holds a new, empty ChatGPT chat; the request is on
-    // the clipboard so the player picks the thinking level before sending.
-    await chat.waitForURL(/^https:\/\/chatgpt\.com\/$/);
-    await expect(page.locator("#chatgpt-prompt-text")).toHaveValue(
-      "Open my zombie-escape-study-game study terminal so it can serve my game's terminal turns.",
-    );
-    await expect(page.locator("#chatgpt-prompt-text")).toBeVisible();
+    await enterNativeGame(page);
+    const id = await openNativeQuestion(page);
+    const original = await page.evaluate((id) => {
+      const e = (window as any).__deadAir.game.encounters[id];
+      e.chatDraft = "Preserved unsent clarification";
+      return JSON.stringify(e.problem);
+    }, id);
+    expect(relay.calls).toHaveLength(0);
+    expect((await nativeState(page, id)).session).toBeUndefined();
+    await expect(page.locator("#native-study-connect")).toBeVisible();
+    await page.locator("#native-study-copy").click();
     if (clipboardBlocked) {
-      await expect(page.locator("#chatgpt-copy-status")).toContainText(
-        "Select and copy",
-      );
-      // Retrying after permission is restored must copy the same visible prompt.
+      await expect
+        .poll(() => page.evaluate(() => (window as any).__deadAir.game.notice))
+        .toContain("Get my current game study question");
       await page.evaluate(() => {
         delete (navigator.clipboard as any).writeText;
       });
-    } else {
-      await expect(notice).toContainText("paste it, then press Enter");
+      await page.locator("#native-study-copy").click();
     }
-    await page.bringToFront();
-    await page.locator("#copy-chatgpt-prompt").click();
-    await expect(page.locator("#chatgpt-copy-status")).toContainText(
-      "Prompt copied",
+    expect(await page.evaluate(() => navigator.clipboard.readText())).toContain(
+      "get_current_study_question",
     );
-    expect(await page.evaluate(() => navigator.clipboard.readText())).toMatch(
-      /zombie-escape-study-game study terminal/,
+    expect(await page.evaluate(() => navigator.clipboard.readText())).toContain(
+      "finish_study_question",
     );
-    await expect(page.locator("#settings")).toBeHidden();
-    relay.sessions = 1;
-    await expect(notice).toContainText("Done. ChatGPT is connected", {
-      timeout: 15_000,
+    await page.locator("#native-study-connect").click();
+    await expect(page.locator("#settings")).toBeVisible();
+    await page.getByText("ChatGPT handoff connection", { exact: true }).click();
+    await expect(page.locator("#terminal")).toBeHidden();
+    relay.setCapable(true);
+    await page.locator("#reconnect").click();
+    await expect.poll(() => relay.calls.length).toBe(1);
+    await page.locator("#reconnect").click();
+    expect(relay.calls).toHaveLength(1);
+    const payload = relay.calls[0].payload;
+    expect(JSON.stringify(payload.problem)).toBe(original);
+    expect(payload.unsentDraft).toEqual({
+      text: "Preserved unsent clarification",
+      learnerEvidence: false,
     });
-    await expect(button).toBeHidden();
-    await expect(page.locator("#chat-form button")).toBeEnabled();
-    await expect(notice).toBeHidden({ timeout: 15_000 });
-    await expect(page.locator("#chatgpt-prompt")).toBeHidden();
-    expect(actions).toEqual(["start-public", "enable"]);
-    expect(actions).toEqual(["start-public", "enable"]);
+    expect(payload.mode).toBe("terminal-direct");
+    expect((await nativeState(page, id)).keys).toBe(0);
+    await page.locator("#settings-close").click();
+    relay.finish(payload.requestId);
+    await expect
+      .poll(async () => (await nativeState(page, id)).session.state)
+      .toBe("applied");
+    expect((await nativeState(page, id)).keys).toBe(1);
+    expect(relay.calls).toHaveLength(1);
+    expect(page.context().pages()).toHaveLength(1);
   });
 }
 
-test("Reconnect ChatGPT reports what it cannot do on its own when the connector is not paired", async ({
+test("rechecking an unavailable native capability preserves the issued question and unsent work", async ({
   page,
 }) => {
-  const actions: string[] = [];
-  await page.route("**/api/status", (route) =>
-    route.fulfill({
-      json: {
-        mode: "development",
-        label: "Development fallback",
-        capabilities: [],
-        detail: "Synthetic disconnected",
-      },
-    }),
+  const relay = await mockNativeStudy(page, false);
+  await noOptionalWidget(page);
+  await enterNativeGame(page);
+  const id = await openNativeQuestion(page);
+  const before = await page.evaluate((id) => {
+    const e = (window as any).__deadAir.game.encounters[id];
+    e.chatDraft = "Unsent idea remains local";
+    return { problem: e.problem, workspace: e.workspace, revision: e.revision };
+  }, id);
+  await page.locator("#native-study-connect").click();
+  await expect(page.locator("#settings")).toBeVisible();
+  await page.getByText("ChatGPT handoff connection", { exact: true }).click();
+  await page.locator("#reconnect").click();
+  await expect(page.locator("#native-study-status")).toContainText(
+    "direct study support",
   );
-  await page.route("**/api/handoff/status", (route) =>
-    route.fulfill({
-      json: {
-        enabled: false,
-        queued: 0,
-        working: 0,
-        done: 0,
-        recent: [],
-        public: {
-          configured: true,
-          linked: false,
-          workerActive: false,
-          terminalRelay: { sessions: 0, activeSessions: 0, pendingTurns: 0 },
-        },
-        tunnel: { state: "off", verified: false, error: null },
-      },
-    }),
-  );
-  await page.route("**/api/handoff/control", async (route) => {
-    actions.push(route.request().postDataJSON().action);
-    await route.fulfill({ status: 409, json: { error: "unexpected" } });
-  });
-  await openSoloTerminal(page);
-  const popup = page.waitForEvent("popup");
-  await page.locator("#connect-completion").click();
-  const reserved = await popup;
-  await expect(page.locator("#completion-connection")).toContainText(
-    "not paired",
-  );
-  // Setup failed before ChatGPT was needed: the reserved blank tab is closed.
-  await expect.poll(() => reserved.isClosed()).toBe(true);
-  await expect(page.locator("#settings")).toBeHidden();
-  expect(actions).toEqual([]);
-  await expect(page.locator("#connect-completion")).toBeVisible({
-    timeout: 15_000,
-  });
+  expect(relay.calls).toHaveLength(0);
+  expect(
+    await page.evaluate((id) => {
+      const e = (window as any).__deadAir.game.encounters[id];
+      return {
+        problem: e.problem,
+        workspace: e.workspace,
+        revision: e.revision,
+      };
+    }, id),
+  ).toEqual(before);
+  expect((await nativeState(page, id)).session).toBeUndefined();
+  expect((await nativeState(page, id)).keys).toBe(0);
+  expect(
+    await page.evaluate(
+      (id) => (window as any).__deadAir.game.encounters[id].chatDraft,
+      id,
+    ),
+  ).toBe("Unsent idea remains local");
 });
 
-test("a queued terminal message says when nothing in ChatGPT is listening", async ({
+test("rechecking a pending native conversation needs no active widget and never replaces its request", async ({
   page,
 }) => {
-  let activeSessions = 0;
-  await page.route("**/api/status", (route) =>
-    route.fulfill({
-      json: {
-        mode: "chatgpt-handoff",
-        label: "ChatGPT handoff",
-        capabilities: ["tutor"],
-        detail: "Synthetic handoff",
-      },
-    }),
+  const relay = await mockNativeStudy(page);
+  await noOptionalWidget(page);
+  await enterNativeGame(page);
+  const id = await openNativeQuestion(page);
+  await expect.poll(() => relay.calls.length).toBe(1);
+  const payload = relay.calls[0].payload,
+    before = await nativeState(page, id);
+  await page.keyboard.press("Escape");
+  await page.locator("#settings-toggle").click();
+  await expect(page.locator("#settings")).toBeVisible();
+  await page.getByText("ChatGPT handoff connection", { exact: true }).click();
+  await page.locator("#reconnect").click();
+  await page.locator("#reconnect").click();
+  const after = await nativeState(page, id);
+  expect(after.session.id).toBe(before.session.id);
+  expect(after.session.questionFingerprint).toBe(
+    before.session.questionFingerprint,
   );
-  await page.route("**/api/bridge", (route) =>
-    route.fulfill({
-      status: 202,
-      json: { status: "pending", handoff: { id: "synthetic-job", hash: "h" } },
-    }),
-  );
-  await page.route("**/api/bridge/result**", (route) =>
-    route.fulfill({ status: 202, json: { status: "pending" } }),
-  );
-  await page.route("**/api/handoff/status", (route) =>
-    route.fulfill({
-      json: {
-        enabled: true,
-        queued: 1,
-        working: 0,
-        done: 0,
-        recent: [{ id: "synthetic-job", operation: "tutor", status: "queued" }],
-        public: {
-          configured: true,
-          linked: true,
-          workerActive: false,
-          terminalRelay: { sessions: 1, activeSessions, pendingTurns: 0 },
-        },
-        tunnel: { state: "connected", verified: true, error: null },
-      },
-    }),
-  );
-  await openSoloTerminal(page);
-  await page.locator("#chat-input").fill("hi");
-  await page.locator("#chat-form button").click();
-  await expect(page.locator("#tutor-request-status")).toContainText(
-    "nothing is listening in ChatGPT",
-    { timeout: 15_000 },
-  );
-  // One button sets up and opens the ChatGPT chat; no manual steps.
-  const button = page.locator("#connect-completion");
-  await expect(button).toBeVisible();
-  await expect(page.locator("#completion-connection")).toContainText(
-    "isn't listening for this terminal yet",
-  );
-  const popup = page.waitForEvent("popup");
-  await button.click();
-  const chat = await popup;
-  await chat.waitForURL(/^https:\/\/chatgpt\.com\/$/);
-  await expect(page.locator("#completion-connection")).toContainText(
-    "ChatGPT opened in a new tab",
-  );
-  activeSessions = 1;
-  await expect(page.locator("#tutor-request-status")).toContainText(
-    "Queued for ChatGPT. Keep the study terminal app open",
-    { timeout: 15_000 },
-  );
-  await expect(page.locator("#tutor-request-status")).not.toContainText(
-    "nothing is listening",
-  );
-  await expect(page.locator("#completion-connection")).toContainText(
-    "Done. ChatGPT is connected",
-    { timeout: 15_000 },
-  );
-  await expect(button).toBeHidden();
-  expect(chat.isClosed()).toBe(false);
-  // The chat errors out and its app stops calling in while the message is
-  // still queued: the button comes back, and pressing it moves the same
-  // ChatGPT tab to a new chat instead of opening another tab to clean up.
-  const pages = () => page.context().pages().length;
-  const before = pages();
-  await chat.goto("https://chatgpt.com/c/old-chat");
-  activeSessions = 0;
-  await expect(button).toBeVisible({ timeout: 15_000 });
-  await button.click();
-  await chat.waitForURL(/^https:\/\/chatgpt\.com\/$/);
-  await expect(page.locator("#completion-connection")).toContainText(
-    "Your ChatGPT tab moved to a new chat",
-  );
-  expect(pages()).toBe(before);
-  expect(chat.isClosed()).toBe(false);
-  activeSessions = 1;
-  await expect(page.locator("#completion-connection")).toContainText(
-    "Done. ChatGPT is connected",
-    { timeout: 15_000 },
-  );
-  // After the game page itself reloads, the tab is still found by its name:
-  // a new tab is created only when none exists.
-  await chat.goto("https://chatgpt.com/c/older-chat");
-  activeSessions = 0;
-  await openSoloTerminal(page, true);
-  await page.locator("#chat-input").fill("still here");
-  await page.locator("#chat-form button").click();
-  await expect(button).toBeVisible({ timeout: 15_000 });
-  await button.click();
-  await chat.waitForURL(/^https:\/\/chatgpt\.com\/$/);
-  await expect(page.locator("#completion-connection")).toContainText(
-    "Your ChatGPT tab moved to a new chat",
-  );
-  expect(pages()).toBe(before);
-  expect(chat.isClosed()).toBe(false);
+  expect(after.session.state).toBe("pending");
+  expect(relay.calls).toHaveLength(1);
+  await page.locator("#settings-close").click();
+  relay.finish(payload.requestId);
+  await expect
+    .poll(async () => (await nativeState(page, id)).session.state)
+    .toBe("applied");
+  expect((await nativeState(page, id)).keys).toBe(1);
+  expect(page.context().pages()).toHaveLength(1);
 });

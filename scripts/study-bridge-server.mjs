@@ -146,7 +146,13 @@ export function createStudyBridgeServer({ endpoint, key, handoff } = {}) {
             );
             return;
           }
-          handoff.enqueue(req, res, parsed.operation, parsed.payload);
+          handoff.enqueue(
+            req,
+            res,
+            parsed.operation,
+            parsed.payload,
+            parsed.nativeScope,
+          );
           return;
         }
         const response = await fetch(

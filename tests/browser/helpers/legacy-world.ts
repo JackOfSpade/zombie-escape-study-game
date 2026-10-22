@@ -24,9 +24,13 @@ export async function useLegacyWorld(page: Page) {
       (window as any).__deadAir.roadmap,
       g.study,
     );
-    // Legacy worlds carry no rules flag; a fresh run's force-field rules must
-    // not survive the swap, since they change spawning and disable vaulting.
+    // This is the actual historical factory, including its pacing and fresh
+    // lifecycle. Object.assign alone would retain absent optional fields from
+    // the playable world, silently mixing study timing with legacy geometry.
     delete g.rules;
+    delete g.pacing;
+    delete g.endedAt;
+    delete g.lastStudyEncounter;
     Object.assign(g, legacy, { status: "playing" });
   });
 }

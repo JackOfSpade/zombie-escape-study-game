@@ -1,6 +1,6 @@
 import { CONFIG, type Game, H, type Point, W } from "./model";
 import { human } from "./engine";
-/** A free-look over the frozen building after the run ends: which floor is
+/** A free-look over the live building after the human's run ends: which floor is
  * shown, where the camera is centred, and how far it is zoomed. The view is
  * page state only; it is never saved with the game. */
 export interface SpectatorView {

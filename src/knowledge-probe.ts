@@ -29,7 +29,8 @@ export interface ProbeFinding {
   partOf?: string;
   description?: string;
 }
-/** How many prerequisite levels a tutor may declare below a question's own facets. */
+/** Maximum retained legacy depth. New tutor calls explicitly enforce depth 1;
+ * keeping this parser default reads existing observations without erasing them. */
 export const SUB_FACET_DEPTH = 2;
 /** How many sub-facets one reply may declare. */
 export const SUB_FACETS_PER_REPLY = 16;
@@ -108,7 +109,7 @@ export interface ProbeState {
 }
 
 export const PROBE_STANCE =
-  "Assume the learner already has this knowledge; they will tell you when they do not. Before interpreting uncertainty as missing knowledge, check whether the prompt is ambiguous or omits material scenario, implementation, business rules or timing facts. Acknowledge missing facts and clarify only what makes the existing task answerable; identify any added facts as a clarification, without revealing the concept's solution or adding tasks, rubric demands or a new product decision. Distinguish an intentional design choice from an unspecified implementation detail. When the prompt leaves a design choice open, accept reasonable examples or assumptions the learner explicitly chooses and explains; do not demand a hidden preferred implementation. Requesting clarification alone is not evidence of partial knowledge, guessing or a gap. For a clarification-only turn, keep complete:false and omit knowledge findings and knowledge.signal; continue knowledge probing after the task is clear. Do not walk the rubric item by item. Open with the single highest-leverage question: the one whose correct answer necessarily depends on the other facets, so one good answer establishes several at once. Highest leverage means focused reasoning that genuinely entails prerequisites, never breadth inflation: do not widen the question, mark unasked unrelated facets established, or add hidden full-project follow-up demands. When an answer demonstrates facet X and X cannot be answered correctly without Y and Z, mark Y and Z implied by X instead of asking about them. Read how the answer is given, not only whether it is right: precise vocabulary, correct ordering of steps, unprompted boundaries and confident specifics are evidence of knowledge; after checking that the task is clear, vague restatement, hedging or guessed numbers are signals to probe one level down rather than to assume a gap. Ask about a facet only when nothing so far establishes it. When the learner states they do not know a facet, or asks for the answer, do not lecture and do not withhold the reward. If that facet encompasses other facets (it is the apex question X whose answer depends on Y and Z), the gap is not yet fleshed out: probe Y and Z next, one level down, so the recorded gap is only the parts actually missing. When the question never listed Y or Z, declare each as a new facet with partOf naming X and a short description, then probe them; that is how a gap is recorded at the part level (at most two levels below the question's own facets); mark the parts they can answer demonstrated and only the parts they cannot as gaps. If every part turns out to be established, return to the apex and ask it again: known parts never imply the apex, because the apex is also combining them, so the apex is established only when it is answered. The same holds across terminals: a facet recorded as a gap earlier and since established clears the way to re-ask the facet it blocked, so ask that apex again rather than its parts. Once a facet has no parts left to descend to, report it as a gap with their own words and stop probing it. Return complete:true with outcome:\"gap\" once every remaining facet is either established or declared a gap at its lowest level. A declared gap is recorded for later study; it is not a failure and never a reason to keep the learner at the terminal.";
+  'Assume the learner already has this knowledge; they will tell you when they do not. Before interpreting uncertainty as missing knowledge, check whether the prompt is ambiguous or omits material scenario, implementation, business rules or timing facts. Acknowledge missing facts and clarify only what makes the existing task answerable; identify any added facts as a clarification, without revealing the concept\'s solution or adding tasks, rubric demands or a new product decision. Distinguish an intentional design choice from an unspecified implementation detail. When the prompt leaves a design choice open, accept reasonable examples or assumptions the learner explicitly chooses and explains; do not demand a hidden preferred implementation. Requesting clarification alone is not evidence of partial knowledge, guessing or a gap. For a clarification-only turn, keep complete:false and omit knowledge findings and knowledge.signal; continue knowledge probing after the task is clear. Do not walk the rubric item by item. Open with the single highest-leverage question: focused reasoning whose correct answer necessarily entails other facets already in the issued task. Do not widen the question or add hidden project demands. When a demonstrated facet X necessarily entails Y and Z, mark Y and Z implied by X instead of asking them separately. Read how the answer is given, but do not turn uncertainty into a gap without evidence. Ask about a facet only when nothing so far establishes it. At D1 ask for conceptual reasoning on the issued task, not implementation, specialist protocol internals or exhaustive prerequisite recall. A prerequisite clarification may descend at most one level below an original question facet; never recursively drill into prerequisites of prerequisites. Supplied setup facts such as a completed secure connection are not assessment targets. When the learner states they do not know a facet or asks for its answer, do not lecture and do not withhold the reward. Record only the specific facet they explicitly do not know; leave all unasked siblings unknown. If they want to clarify which part is missing, ask at most one directly relevant prerequisite question, one level down, rather than making them finish a diagnostic tree. A correct part does not establish its apex: known parts never imply the apex. If they choose to continue, return to the apex and ask it again; a since-established part clears the way to re-ask the apex. Return complete:true with outcome:"gap" when the learner declares the remaining task unknown or wants to move on, naming only the explicitly established gaps. Unasked details remain unassessed and never prevent completion. A declared gap is a study target, never mastery or a reason to keep the learner at the terminal.';
 
 export const TERMINAL_DIALOGUE_FORMAT = {
   text: "string",
@@ -122,7 +123,7 @@ export const TERMINAL_DIALOGUE_FORMAT = {
         impliedBy: "the demonstrated facet id, for implied only",
         note: "short evidence excerpt or reason",
         partOf:
-          "to declare a prerequisite the question did not list: the known facet id it is part of (new id + description required; at most 2 levels deep)",
+          "to declare a prerequisite the question did not list: the known facet id it is part of (new id + description required; at most one prerequisite level for new conversations)",
         description: "the new sub-facet's description, for declared parts only",
       },
     ],
@@ -136,7 +137,7 @@ export const TERMINAL_DIALOGUE_FORMAT = {
 export const TERMINAL_DIALOGUE_INSTRUCTION =
   "@study: Continue this private puzzle conversation. Judge the learner's accumulated answers against every part of the question and rubric. Return {text,complete,outcome?,knowledge?}. " +
   PROBE_STANCE +
-  ' Ask a focused follow-up with complete:false while a facet is still open. Set complete:true with outcome:"solved" when the learner\'s messages and saved work supply a correct, sufficiently supported solution; set complete:true with outcome:"gap" when the learner has declared they do not know what remains and no lower-level facet is left to probe, and name those facets as gaps in knowledge.facets. In knowledge.facets use ids from probe.facets, or declare a prerequisite part the question did not list as a new id with partOf (a known facet id) and description, with status demonstrated, implied (with impliedBy) or gap; add knowledge.signal only when the learner supplies an answer to assess. Your own explanations are assistance, not learner evidence. Do not demand a separate submission or repeat already demonstrated reasoning. Do not claim execution without matching receipts. Gameplay completion is separate from independent mastery.';
+  ' Ask a focused follow-up with complete:false while a facet is still open. Set complete:true with outcome:"solved" when the learner\'s messages and saved work supply a correct, sufficiently supported solution; set complete:true with outcome:"gap" when the learner has declared they do not know what remains or wants to move on; do not require a prerequisite tree, and name those facets as gaps in knowledge.facets. In knowledge.facets use ids from probe.facets, or declare a prerequisite part the question did not list as a new id with partOf (a known facet id) and description, with status demonstrated, implied (with impliedBy) or gap; add knowledge.signal only when the learner supplies an answer to assess. Your own explanations are assistance, not learner evidence. Do not demand a separate submission or repeat already demonstrated reasoning. Do not claim execution without matching receipts. Gameplay completion is separate from independent mastery.';
 
 const facetId = (value: string) =>
   value
@@ -183,6 +184,7 @@ export function probeContract(
   return {
     stance: PROBE_STANCE,
     facets: structuredClone(facets),
+    maxPrerequisiteDepth: 1,
     findingStatuses: ["demonstrated", "implied", "gap"],
     fluency: ["fluent", "partial", "guessing", "declared-gap"],
   };
@@ -252,6 +254,7 @@ const shortText = (v: unknown, limit: number) =>
 export function parseProbeReply(
   answer: Record<string, unknown>,
   facets: ProbeFacet[],
+  maxPrerequisiteDepth = SUB_FACET_DEPTH,
 ): ProbeReply {
   if (typeof answer.complete !== "boolean")
     throw Error("Invalid tutor reply: complete must be boolean");
@@ -327,7 +330,7 @@ export function parseProbeReply(
             !description ||
             !id ||
             parent === id ||
-            depthOf(parent) >= SUB_FACET_DEPTH ||
+            depthOf(parent) >= maxPrerequisiteDepth ||
             declared >= SUB_FACETS_PER_REPLY
           )
             continue;
@@ -474,11 +477,9 @@ export function recordProbeTurn(
   const declared = new Set(
     reply.findings.filter((f) => f.status === "gap").map((f) => f.id),
   );
-  const gapFacets = state.facets.filter((f) =>
-    declared.size
-      ? declared.has(f.id)
-      : f.status !== "demonstrated" && f.status !== "implied",
-  );
+  // A concession alone does not establish which parts are missing. Unasked
+  // siblings stay unknown; only an explicit, question-bound finding is a gap.
+  const gapFacets = state.facets.filter((f) => declared.has(f.id));
   const encounterRef = `${e.runId ?? g.id}/${e.id}`;
   const existing = new Set(
     (g.study.knowledgeGaps ?? []).map((r) => gapKey(r.encounter, r.facet.id)),

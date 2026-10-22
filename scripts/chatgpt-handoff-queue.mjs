@@ -26,6 +26,225 @@ export const HANDOFF_OPERATIONS = Object.freeze([
 export const HANDOFF_REQUESTER_LIVE_MS = 75_000;
 const object = (value) =>
   value !== null && typeof value === "object" && !Array.isArray(value);
+/** Bounds for a native direct-study transcript returned once at completion. */
+export const DIRECT_TRANSCRIPT_LIMITS = Object.freeze({
+  entries: 100,
+  entryChars: 8000,
+  totalChars: 100_000,
+});
+/** Exact attributed transcript: [{role:user|assistant,text}], >=1 user entry. */
+export function validDirectTranscript(transcript) {
+  if (
+    !Array.isArray(transcript) ||
+    !transcript.length ||
+    transcript.length > DIRECT_TRANSCRIPT_LIMITS.entries
+  )
+    return false;
+  let total = 0,
+    users = 0;
+  for (const entry of transcript) {
+    if (
+      !object(entry) ||
+      Object.keys(entry).some((k) => k !== "role" && k !== "text") ||
+      (entry.role !== "user" && entry.role !== "assistant") ||
+      typeof entry.text !== "string" ||
+      !entry.text.trim() ||
+      entry.text.length > DIRECT_TRANSCRIPT_LIMITS.entryChars
+    )
+      return false;
+    total += entry.text.length;
+    if (entry.role === "user") users++;
+  }
+  return users > 0 && total <= DIRECT_TRANSCRIPT_LIMITS.totalChars;
+}
+const validBinding = (value) =>
+  typeof value === "string" && value.trim().length > 0 && value.length <= 500;
+/** Trusted loopback transport metadata; never part of the frozen job payload/hash. */
+export function validateNativeScope(operation, payload, scope) {
+  if (scope === undefined) return undefined;
+  if (
+    !object(scope) ||
+    Object.keys(scope).some(
+      (k) => !["runId", "encounterId", "questionRoom"].includes(k),
+    ) ||
+    !validBinding(scope.runId) ||
+    !validBinding(scope.encounterId) ||
+    (scope.questionRoom !== undefined && !validBinding(scope.questionRoom)) ||
+    !["generate", "assess", "tutor"].includes(operation) ||
+    (operation === "generate" && payload.encounterId !== scope.encounterId) ||
+    (operation === "assess" &&
+      payload.packet?.encounter !== scope.encounterId) ||
+    (operation === "tutor" &&
+      (payload.mode !== "terminal-direct" ||
+        payload.runId !== scope.runId ||
+        payload.encounterId !== scope.encounterId))
+  )
+    throw Error("Invalid native study scope or captured encounter binding");
+  return {
+    runId: scope.runId,
+    encounterId: scope.encounterId,
+    ...(scope.questionRoom !== undefined
+      ? { questionRoom: scope.questionRoom }
+      : {}),
+  };
+}
+export function nativeJobScope(job) {
+  if (job.nativeScope) return job.nativeScope;
+  if (
+    job.operation === "tutor" &&
+    job.payload?.mode === "terminal-direct" &&
+    validBinding(job.payload.runId) &&
+    validBinding(job.payload.encounterId)
+  )
+    return { runId: job.payload.runId, encounterId: job.payload.encounterId };
+}
+export const nativePreparationJob = (job) =>
+  ["generate", "assess"].includes(job.operation) && !!job.nativeScope;
+export const legacyWorkerJob = (job) =>
+  !nativePreparationJob(job) && job.payload?.mode !== "terminal-direct";
+/** The operation contract without legacy worker-session instructions. */
+export const nativePreparationContract = (operation) => {
+  if (!["generate", "assess"].includes(operation))
+    throw Error("Unsupported native preparation operation");
+  return contracts[operation];
+};
+/** Native completion metadata uses the closed, bounded tool schema. */
+export function validDirectKnowledge(answer, payload) {
+  if (!validProbeKnowledge(answer)) return false;
+  const k = answer.knowledge;
+  if (!object(k) || !Array.isArray(k.facets) || !k.facets.length) return false;
+  if (Object.keys(k).some((key) => !["facets", "signal"].includes(key)))
+    return false;
+  const text = (v, max, required = false) =>
+    v === undefined
+      ? !required
+      : typeof v === "string" && v.length <= max && (!required || !!v.trim());
+  if (
+    (k.facets && new Set(k.facets.map((f) => f.id)).size !== k.facets.length) ||
+    k.facets?.some(
+      (f) =>
+        Object.keys(f).some(
+          (key) =>
+            ![
+              "id",
+              "status",
+              "impliedBy",
+              "note",
+              "partOf",
+              "description",
+            ].includes(key),
+        ) ||
+        !text(f.id, 200, true) ||
+        (f.status === "implied") !== (f.impliedBy !== undefined) ||
+        (f.partOf !== undefined) !== (f.description !== undefined) ||
+        !text(f.impliedBy, 200, f.impliedBy !== undefined) ||
+        !text(f.note, 400) ||
+        !text(f.partOf, 200, f.partOf !== undefined) ||
+        !text(
+          f.description,
+          200,
+          f.partOf !== undefined || f.description !== undefined,
+        ),
+    ) ||
+    (k.signal &&
+      (Object.keys(k.signal).some(
+        (key) => !["fluency", "note"].includes(key),
+      ) ||
+        !text(k.signal.note, 400)))
+  )
+    return false;
+  const gaps = k.facets?.filter((f) => f.status === "gap") ?? [];
+  if (answer.outcome === "gap" ? !gaps.length : gaps.length) return false;
+  if (payload === undefined) return true;
+  const inputFacets = payload.probe?.facets;
+  if (!Array.isArray(inputFacets) || !inputFacets.length) return false;
+  const known = new Map();
+  for (const f of inputFacets) {
+    if (
+      !object(f) ||
+      !text(f.id, 200, true) ||
+      known.has(f.id) ||
+      typeof f.description !== "string" ||
+      !f.description.trim()
+    )
+      return false;
+    known.set(f.id, f);
+  }
+  const normalize = (v) =>
+    typeof v === "string"
+      ? v
+          .trim()
+          .toLowerCase()
+          .replace(/[^a-z0-9]+/g, "-")
+          .replace(/^-+|-+$/g, "")
+          .slice(0, 48)
+      : "";
+  const resolve = (v) =>
+    known.has(v) ? v : known.has(normalize(v)) ? normalize(v) : undefined;
+  const latest = new Map();
+  for (const turn of payload.probeHistory ?? [])
+    for (const f of turn.findings ?? [])
+      if (known.has(f.id)) latest.set(f.id, f);
+  let declared = 0;
+  const seen = new Set();
+  for (const raw of k.facets) {
+    let id = resolve(raw.id);
+    const before = id ? known.get(id) : undefined;
+    if (!id) {
+      const parent = resolve(raw.partOf);
+      id = normalize(raw.id);
+      if (
+        !parent ||
+        !id ||
+        parent === id ||
+        known.get(parent).partOf ||
+        !raw.description ||
+        ++declared > 16
+      )
+        return false;
+      if (!known.has(id))
+        known.set(id, {
+          id,
+          partOf: parent,
+          description: raw.description.trim(),
+        });
+    }
+    if (
+      seen.has(id) ||
+      (before &&
+        raw.partOf !== undefined &&
+        (before.partOf !== raw.partOf ||
+          before.description !== raw.description))
+    )
+      return false;
+    seen.add(id);
+    const impliedBy = resolve(raw.impliedBy);
+    if (raw.status === "implied" && (!impliedBy || impliedBy === id))
+      return false;
+    latest.set(id, { id, status: raw.status, impliedBy });
+  }
+  for (const id of seen) {
+    const f = latest.get(id);
+    if (
+      f.status === "implied" &&
+      latest.get(f.impliedBy)?.status !== "demonstrated"
+    )
+      return false;
+  }
+  if (answer.outcome === "gap") return true;
+  const required = inputFacets.filter((f) => !f.partOf);
+  return (
+    required.length > 0 &&
+    required.every((f) => {
+      const finding = latest.get(f.id);
+      return (
+        finding?.status === "demonstrated" ||
+        (finding?.status === "implied" &&
+          latest.get(finding.impliedBy)?.status === "demonstrated")
+      );
+    })
+  );
+}
 // Only these public NPC jobs are covered by the separate unattended-work opt-in.
 // Retrospective inspection is an explicit human action, never background work.
 export const autonomousHandoff = (operation, payload) =>
@@ -60,7 +279,7 @@ const contracts = {
   generate:
     "Return a JSON problem {title,prompt,starter,rubric,contract,scopeDefinitions}. title, prompt and starter are strings. rubric is an array of strings, never criterion objects; include any facet labels within the strings. Copy the exact eligible contract. Derive complete stable facets from the supplied curriculum; reuse existing definitions. The prompt must stand on its own: include all essential scenario, interface, data, code, implementation, business rules and timing facts needed to answer without tutor chat. State fixed facts explicitly and distinguish them from intentional design choices the learner is asked to make. Ask a concrete, bounded question rather than pasting a curriculum scope. For classification, list the actual items to classify; for tracing or critique, supply the relevant code, event trace or evidence. Make every requested requirement visible in the prompt, never only in the rubric or later chat. Do not grade unstated assumptions or add unrelated generic requests for assumptions, edge cases or a product recommendation. Leave the target reasoning for the learner: supplying necessary facts must not supply the explanation, classification or worked result. Use payload.probeRecords (terminal observations, never mastery): build the question around openGaps inside the eligible scope with the facet they blocked as the apex; only an openGap with reuseInScopeDefinitions:true may add its exact facet id and description to scopeDefinitions, and existing stable scope definitions are copied exactly, never rewritten; do not spend the question on established facets unless the scope requires them; a closedGap means the facet it blocked should be asked again. No static answer-bank question, invented scope, floor-based escalation or supplied full solution. The prompt is player-facing: never mention the scheduled scope, objective IDs, tiers, depth or scheduling; keep that in contract and scopeDefinitions. Follow generationPolicy: D1 is conceptual diagnosis with an empty workspace starter and no unsolicited key-step hints; necessary code-reading material belongs in the question. Optional runtime only when the contract permits implementation. Keep it minimal: the smallest self-contained diagnostic that exercises the objective, with one main problem and at most one or two directly connected follow-ups; essential facts only, never pasted project context or a full-project audit. For code review, include the actual code under review, including any required helper and its authorization semantics; a prose proposal supports design review only. Prefer short snippets, traces or evidence; never turn scope verbs into a D1 implementation task. The visible task and rubric must match without leaking the solution. An honestly integrative objective may stay integrative on a small feature. A narrow example never establishes unrelated facets or mastery. ScopeDefinition: {id,objectiveId,depth,sourceScope,facets:[{id,description}]}.",
   tutor:
-    "For mode terminal-dialogue return {text:string,complete:boolean,outcome?:'solved'|'gap',knowledge?:{facets:[{id,status:'demonstrated'|'implied'|'gap',impliedBy?,note?,partOf?,description?}],signal?:{fluency:'fluent'|'partial'|'guessing'|'declared-gap',note?}}}. Follow payload.probe.stance: assume the learner already knows this and open with the highest-leverage question; one correct answer establishes every facet it depends on (mark those implied with impliedBy) instead of asking each rubric item in turn; read how the answer is given as evidence. Highest leverage means one focused question whose reasoning genuinely entails its prerequisites, never breadth inflation, unasked unrelated facets marked established or hidden full-project follow-up demands. Use complete:false with one focused follow-up while a facet is open. complete:true with outcome:'solved' when the accumulated answers solve it; When the learner does not know a facet that encompasses others, probe its parts next, one level down, so only the parts actually missing become gaps, and if the parts turn out known re-ask that facet itself (known parts never imply it); complete:true with outcome:'gap' when the learner has said they do not know what remains and nothing lower is left to probe, naming those facets as gaps so the game records them and still grants its once-only key. knowledge.facets ids come from payload.probe.facets, or declare a prerequisite part the question did not list as a new id with partOf (a known facet id) and a short description so the gap is recorded at the part level. Never require a separate submission. Your own explanations are assistance, never learner evidence; gameplay rewards do not certify independent mastery. For other modes return {text:string}. Guide the learner's next reasoning step with a useful question or bounded hint. Use the exact task, draft and private transcript. Preserve prior assistance; never pretend supplied reasoning was independently demonstrated. Do not supply a completed solution by default. Tutoring has no gameplay fee or cooldown.",
+    "For mode terminal-dialogue return {text:string,complete:boolean,outcome?:'solved'|'gap',knowledge?:{facets:[{id,status:'demonstrated'|'implied'|'gap',impliedBy?,note?,partOf?,description?}],signal?:{fluency:'fluent'|'partial'|'guessing'|'declared-gap',note?}}}. Follow payload.probe.stance: assume the learner already knows this and open with the highest-leverage question; one correct answer establishes every facet it depends on (mark those implied with impliedBy) instead of asking each rubric item in turn; read how the answer is given as evidence. Highest leverage means one focused question whose reasoning genuinely entails its prerequisites, never breadth inflation, unasked unrelated facets marked established or hidden full-project follow-up demands. Use complete:false with one focused follow-up while a facet is open. complete:true with outcome:'solved' when the accumulated answers solve it; When the learner does not know a facet that encompasses others, probe its parts next, one level down, so only the parts actually missing become gaps, and if the parts turn out known re-ask that facet itself (known parts never imply it); complete:true with outcome:'gap' when the learner has said they do not know what remains and nothing lower is left to probe, naming those facets as gaps so the game records them and still grants its once-only key. knowledge.facets ids come from payload.probe.facets, or declare a prerequisite part the question did not list as a new id with partOf (a known facet id) and a short description so the gap is recorded at the part level. Never require a separate submission. Your own explanations are assistance, never learner evidence; gameplay rewards do not certify independent mastery. For mode terminal-direct (native ChatGPT conversation; intermediate turns are ordinary chat, never per-answer replies) return once at the end {text:string,complete:true,outcome:'solved'|'gap',questionFingerprint:string,transcript:[{role:'user'|'assistant',text:string}],knowledge:{facets:[{id,status,impliedBy?,partOf?,description?}],signal?}} with the exact payload.questionFingerprint. A solved completion establishes every original question facet, using demonstrated findings or implied findings anchored in a demonstrated facet. A gap names only explicit missing facets; unasked siblings remain unknown; at most one directly relevant prerequisite level is permitted; transcript holds the learner's actual verbatim answers as user entries and assistant statements as assistant entries, at least one user entry. For other modes return {text:string}. Guide the learner's next reasoning step with a useful question or bounded hint. Use the exact task, draft and private transcript. Preserve prior assistance; never pretend supplied reasoning was independently demonstrated. Do not supply a completed solution by default. Tutoring has no gameplay fee or cooldown.",
   complete:
     "For mode retrospective-npc-outcome, return {requestId,complete:boolean,feedback:string,execution:'not-run'} with the exact requestId. Review the exact reconstructed candidate independently of simulated world success; no player qualification or reward is requested. For ordinary completion return {complete:boolean,feedback:string,qualified:string[]}. Evaluate the captured solution and actual attributed contributions, including useful physical defense. Do not require equal work or an extra examination for a defender. Gameplay completion is separate from individual mastery. Do not claim execution unless matching actual runner receipts exist.",
   assess:
@@ -303,6 +522,42 @@ function validateAnswer(job, answer) {
             "Terminal dialogue knowledge must be {facets:[{id,status:demonstrated|implied|gap,impliedBy?,note?,partOf?,description?}],signal?:{fluency}}",
           );
       }
+      if (job.payload.mode === "terminal-direct") {
+        if (
+          Object.keys(answer).some(
+            (k) =>
+              ![
+                "text",
+                "complete",
+                "outcome",
+                "knowledge",
+                "questionFingerprint",
+                "transcript",
+              ].includes(k),
+          ) ||
+          answer.complete !== true ||
+          answer.text.length > 8000 ||
+          (answer.outcome !== "solved" && answer.outcome !== "gap")
+        )
+          fail(
+            "Direct study completion requires text, complete:true and outcome solved|gap",
+          );
+        if (
+          typeof answer.questionFingerprint !== "string" ||
+          answer.questionFingerprint !== job.payload.questionFingerprint
+        )
+          fail(
+            "Direct study completion must copy the exact questionFingerprint",
+          );
+        if (!validDirectTranscript(answer.transcript))
+          fail(
+            "Direct study transcript must be bounded [{role:user|assistant,text}] with at least one user entry",
+          );
+        if (!validDirectKnowledge(answer, job.payload))
+          fail(
+            "Direct study knowledge must name valid bounded facets: solved establishes every original question facet; gap names explicit missing facets. Implied findings need a demonstrated anchor; new prerequisites stop at one level",
+          );
+      }
       break;
     case "generate":
       if (
@@ -472,6 +727,7 @@ export function createHandoffQueue({
         )
           throw Error("Corrupt handoff request or answer identity");
         ids.add(job.id);
+        validateNativeScope(job.operation, job.payload, job.nativeScope);
       }
       state = { ...saved, enabled: false, autonomousWork: false }; // Per-launch explicit release; do not restore authorization.
       for (const job of state.jobs)
@@ -535,11 +791,33 @@ export function createHandoffQueue({
       operation: j.operation,
       status: j.status,
       round: j.round ?? 0,
+      ...(j.operation === "tutor" && typeof j.payload?.mode === "string"
+        ? { mode: j.payload.mode }
+        : {}),
+      // Metadata-only timing (never payload, answer or transcript content).
+      ...(typeof j.createdAt === "number" ? { createdAt: j.createdAt } : {}),
+      ...(typeof j.firstPolledAt === "number"
+        ? { firstPolledAt: j.firstPolledAt }
+        : {}),
+      ...(typeof j.claimedAt === "number" ? { claimedAt: j.claimedAt } : {}),
+      ...(typeof j.completedAt === "number"
+        ? { completedAt: j.completedAt }
+        : {}),
+      ...(typeof j.resultReadAt === "number"
+        ? { resultReadAt: j.resultReadAt }
+        : {}),
     })),
   });
-  // When each job's requester last asked for its result. Memory only: after a
-  // relay restart a still-waiting game polls again within a second.
+  // Native enqueue/retry and result reads prove a current requester. Memory
+  // only: restored jobs stay inactive until a new validated POST or result read.
   const polled = new Map();
+  // Only untouched legacy claims restored from a previous bridge instance may
+  // migrate on explicit local native opt-in. A currently active worker wins.
+  const restoredLegacyClaims = new Set(
+    state.jobs
+      .filter((j) => j.status === "working" && !j.worker?.startsWith("app-"))
+      .map((j) => j.id),
+  );
   const requesterLive = (job, windowMs) =>
     now() - (polled.get(job.id) ?? -Infinity) <= windowMs;
   const api = {
@@ -548,6 +826,55 @@ export function createHandoffQueue({
     requesterLive(id, windowMs) {
       const job = state.jobs.find((j) => j.id === id);
       return !!job && requesterLive(job, windowMs);
+    },
+    /** Internal relay recovery, restricted to the same owner-derived worker. */
+    completedDirect(worker, claim) {
+      checkEnabled();
+      const job = state.jobs.find(
+        (j) =>
+          j.worker === worker &&
+          j.claim === claim &&
+          j.status === "done" &&
+          j.operation === "tutor" &&
+          j.payload.mode === "terminal-direct",
+      );
+      return job
+        ? {
+            requestId: job.requestId,
+            completedAt: job.completedAt,
+            answer: structuredClone(job.answer),
+            jobFingerprint: job.hash,
+            nativeScope: nativeJobScope(job),
+          }
+        : undefined;
+    },
+    completedNative(worker, claim) {
+      checkEnabled();
+      const job = state.jobs.find(
+        (j) =>
+          j.worker === worker &&
+          j.claim === claim &&
+          j.status === "done" &&
+          (nativePreparationJob(j) ||
+            (j.operation === "tutor" && j.payload.mode === "terminal-direct")),
+      );
+      if (!job) return;
+      return {
+        requestId: job.requestId,
+        operation: job.operation,
+        jobFingerprint: job.hash,
+        nativeScope: nativeJobScope(job),
+        completedAt: job.completedAt,
+        answer: structuredClone(job.answer),
+        next:
+          job.operation === "generate"
+            ? "tutor"
+            : job.operation === "tutor" &&
+                job.payload.profile === "live" &&
+                !job.payload.problem?.contract?.practice
+              ? "assess"
+              : null,
+      };
     },
     enable(enabled) {
       if (typeof enabled !== "boolean") throw Error("enabled must be boolean");
@@ -565,7 +892,7 @@ export function createHandoffQueue({
       save();
       return snapshot();
     },
-    enqueue(operation, payload) {
+    enqueue(operation, payload, nativeScope) {
       checkEnabled();
       if (
         !HANDOFF_OPERATIONS.includes(operation) ||
@@ -583,7 +910,17 @@ export function createHandoffQueue({
         )
       )
         throw Error("NPC release flags must be explicit booleans");
+      if (
+        operation === "tutor" &&
+        payload.mode === "terminal-direct" &&
+        (!validBinding(payload.sessionId) ||
+          !validBinding(payload.questionFingerprint))
+      )
+        throw Error(
+          "Direct study requests need an exact sessionId and questionFingerprint",
+        );
       checkAutonomous(operation, payload);
+      const scope = validateNativeScope(operation, payload, nativeScope);
       const serialized = JSON.stringify({ operation, payload }),
         digest = hash(serialized);
       if (Buffer.byteLength(serialized) > 6_000_000)
@@ -594,6 +931,35 @@ export function createHandoffQueue({
       if (previous) {
         if (previous.hash !== digest)
           throw Error("Conflicting reuse of a handoff request ID");
+        if (scope) {
+          if (
+            previous.nativeScope &&
+            JSON.stringify(previous.nativeScope) !== JSON.stringify(scope)
+          )
+            throw Error(
+              "Conflicting native study scope for an exact handoff request",
+            );
+          if (!previous.nativeScope) {
+            previous.nativeScope = scope;
+            const migrated =
+              restoredLegacyClaims.has(previous.id) &&
+              ["generate", "assess"].includes(operation);
+            if (migrated) {
+              previous.status = "queued";
+              delete previous.worker;
+              delete previous.claim;
+              delete previous.readParts;
+            }
+            save();
+            if (migrated) restoredLegacyClaims.delete(previous.id);
+          }
+        }
+        if (
+          nativePreparationJob(previous) ||
+          (previous.operation === "tutor" &&
+            previous.payload.mode === "terminal-direct")
+        )
+          polled.set(previous.id, now());
         return { id: previous.id, hash: previous.hash };
       }
       // Answered and abandoned queued jobs expire after a day. An old request
@@ -624,11 +990,17 @@ export function createHandoffQueue({
         payload: structuredClone(payload),
         status: "queued",
         createdAt: now(),
+        ...(scope ? { nativeScope: scope } : {}),
       };
       state.jobs = [...keep, job];
       save();
       const retained = new Set(state.jobs.map((j) => j.id));
       for (const id of polled.keys()) if (!retained.has(id)) polled.delete(id);
+      if (
+        nativePreparationJob(job) ||
+        (job.operation === "tutor" && job.payload.mode === "terminal-direct")
+      )
+        polled.set(job.id, now());
       return { id: job.id, hash: job.hash };
     },
     result(id, digest) {
@@ -637,6 +1009,10 @@ export function createHandoffQueue({
       if (!job) throw Error("Unknown exact handoff request");
       checkAutonomous(job.operation, job.payload);
       polled.set(job.id, now());
+      // Metadata-only timing; persisted with the next state write.
+      if (job.firstPolledAt === undefined) job.firstPolledAt = now();
+      if (job.status === "done" && job.resultReadAt === undefined)
+        job.resultReadAt = now();
       return job.status === "done"
         ? { status: "done", answer: structuredClone(job.answer) }
         : { status: "pending" };
@@ -700,6 +1076,7 @@ export function createHandoffQueue({
                   Math.floor((now() - b.createdAt) / 30_000)) ||
               a.createdAt - b.createdAt,
           )[0];
+      if (own) restoredLegacyClaims.delete(own.id);
       // Idle long polls and repeated reads of an existing claim do not mutate
       // state. Avoid cloning the entire private queue on each 250 ms poll; take
       // a rollback checkpoint only when a claim actually changes.
@@ -716,6 +1093,7 @@ export function createHandoffQueue({
             job.status = "working";
             job.worker = worker;
             job.claim = randomUUID();
+            job.claimedAt = now();
           }
           save();
         } catch (error) {
@@ -736,6 +1114,9 @@ export function createHandoffQueue({
         claim: job.claim,
         operation: job.operation,
         requestHash: job.hash,
+        ...(job.nativeScope
+          ? { nativeScope: structuredClone(job.nativeScope) }
+          : {}),
         instructions: handoffInstructions(job.operation),
         ...(job.corrections?.length
           ? {
@@ -773,6 +1154,7 @@ export function createHandoffQueue({
       )
         throw Error("Wrong worker, job or claim");
       checkAutonomous(job.operation, job.payload);
+      restoredLegacyClaims.delete(job.id);
       const digest = hash(JSON.stringify(answer));
       if (job.status === "done") {
         if (digest !== job.answerHash)
@@ -816,6 +1198,7 @@ export function createHandoffQueue({
       const chunks = chunkPayload(job.payload);
       if (index < 0 || index >= chunks.length)
         throw Error("Unknown payload part");
+      restoredLegacyClaims.delete(job.id);
       job.readParts = [...new Set([...(job.readParts ?? []), index])];
       save();
       return {
@@ -846,6 +1229,7 @@ export function createHandoffQueue({
       delete job.claim;
       delete job.readParts;
       delete job.completedAt;
+      delete job.resultReadAt;
       save();
       return snapshot();
     },
@@ -861,6 +1245,22 @@ export function createHandoffQueue({
         }
       save();
       return snapshot();
+    },
+    releaseClaim(worker, id, claim) {
+      const job = state.jobs.find(
+        (j) =>
+          j.worker === worker &&
+          j.id === id &&
+          j.claim === claim &&
+          j.status === "working",
+      );
+      if (!job) return false;
+      job.status = "queued";
+      delete job.worker;
+      delete job.claim;
+      delete job.readParts;
+      save();
+      return true;
     },
     requeueWorking() {
       checkEnabled();
@@ -883,6 +1283,7 @@ export function createHandoffQueue({
     "part",
     "reopen",
     "releaseWorker",
+    "releaseClaim",
     "requeueWorking",
   ]) {
     const operation = api[name];
