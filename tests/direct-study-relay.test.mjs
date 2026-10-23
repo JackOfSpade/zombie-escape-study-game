@@ -511,6 +511,7 @@ test("native ordinary-chat callback reaches the real game client once, including
   const { beginDirectStudy, retryDirectStudy, NATIVE_TRANSCRIPT_PROVENANCE } =
     await import("../src/direct-study.ts");
   const { probeFacets } = await import("../src/knowledge-probe.ts");
+  const { studyChatCode } = await import("../src/bridge-client.ts");
   const { createPlayableGame } = await import("../src/world.ts");
   const roadmap = JSON.parse(readFileSync("public/curriculum.json", "utf8"));
   for (const dies of [false, true])
@@ -556,7 +557,7 @@ test("native ordinary-chat callback reaches the real game client once, including
           for (let n = 0; n < 200; n++) {
             const value = app.call(
               "get_current_study_question",
-              {},
+              { chat: studyChatCode() },
               owner,
             ).structuredContent;
             if (value.status === "question") {
@@ -741,5 +742,57 @@ test("native final knowledge is required and rejected coverage stays correctable
       }),
     ).completion.status,
     "sent",
+  );
+});
+
+test("each terminal opening serves only the chat holding its code and disconnects older chats", () => {
+  const { queue, call } = setup();
+  queue.enable(true);
+  const p = payload("native-chat-bound", { runId: "run-a", encounterId: "e1" });
+  const scope = { runId: "run-a", encounterId: "e1" };
+  const open = (code) => {
+    const receipt = queue.enqueue("tutor", p, scope, code);
+    queue.result(receipt.id, receipt.hash);
+    return receipt;
+  };
+  const job = open("FIRSTCHAT");
+  assert.equal(call("get_current_study_question").status, "waiting");
+  assert.equal(
+    call("get_current_study_question", { chat: "OTHERCHAT" }).status,
+    "disconnected",
+  );
+  const first = call("get_current_study_question", { chat: "FIRSTCHAT" });
+  assert.equal(first.status, "question");
+  // The player reopens the terminal: same exact request, new chat code.
+  open("SECONDCHAT");
+  assert.throws(
+    () => call("finish_study_question", answer(first)),
+    /disconnected/,
+  );
+  assert.equal(
+    call("get_current_study_question", { chat: "FIRSTCHAT" }).status,
+    "disconnected",
+  );
+  const second = call("get_current_study_question", { chat: "SECONDCHAT" });
+  assert.equal(second.status, "question");
+  assert.notEqual(second.turnId, first.turnId);
+  // The old chat cannot disturb the new chat's claim.
+  call("get_current_study_question", { chat: "FIRSTCHAT" });
+  assert.deepEqual(
+    call("get_current_study_question", { chat: "SECONDCHAT" }),
+    second,
+  );
+  assert.throws(
+    () => call("finish_study_question", answer(first)),
+    /does not match|disconnected/,
+  );
+  assert.equal(
+    call("finish_study_question", answer(second)).completion.status,
+    "sent",
+  );
+  assert.equal(queue.result(job.id, job.hash).status, "done");
+  assert.throws(
+    () => queue.enqueue("tutor", payload("x"), undefined, "NOSCOPE1"),
+    /chat code/,
   );
 });

@@ -63,6 +63,14 @@ const DIRECT_CONTEXT_PARTS = [
   "unsentDraft",
   "payload",
 ];
+/** The game mints one code per terminal opening and puts it in the request the
+ * player pastes into a new chat; only that chat is served the opening's work. */
+const chatCodeSchema = {
+  type: "string",
+  pattern: "^[A-Z0-9]{6,16}$",
+  description:
+    "The exact chat code from the player's pasted game request (for example in 'chat code K7Q2M9XP'). Pass it on every call in this chat.",
+};
 const continuationSchema = schema({
   relayId: id,
   turnId: id,
@@ -91,8 +99,11 @@ export const terminalRelayTools = () =>
       name: "get_current_study_question",
       title: "Get the current native study question",
       description:
-        "Fetch this connected game's released question preparation, native study question or final assessment, with stable relayId, turnId and fingerprint. Returns the same pending work or a waiting status. An optional after receipt waits up to five seconds for that same question's next phase. Works in regular ChatGPT chat without a UI card.",
-      inputSchema: schema({ after: continuationSchema }, []),
+        "Fetch this connected game's released question preparation, native study question or final assessment, with stable relayId, turnId and fingerprint, for the chat code in the player's request. Returns the same pending work, a waiting status, or disconnected when the game opened a newer terminal for another chat. An optional after receipt waits up to five seconds for that same question's next phase. Works in regular ChatGPT chat without a UI card.",
+      inputSchema: schema(
+        { chat: chatCodeSchema, after: continuationSchema },
+        [],
+      ),
       annotations: {
         readOnlyHint: false,
         destructiveHint: false,
@@ -387,7 +398,7 @@ export function createTerminalRelayApp({
               },
               expected: receipt.next === "tutor" ? "question" : "assessment",
               instruction:
-                "Call get_current_study_question once with this after token. The server waits briefly for this same question's next phase. If it returns waiting, report that and stop; no polling loop.",
+                "Call get_current_study_question once with this after token and this chat's chat code. The server waits briefly for this same question's next phase. If it returns waiting, report that and stop; no polling loop.",
             },
           }
         : {}),
@@ -629,6 +640,8 @@ export function createTerminalRelayApp({
       finishTurn(s);
     }
     s.turn = buildTurn(s, served);
+    const chatCode = queue.chatCode(served.jobId);
+    if (chatCode !== undefined) s.turn.chatCode = chatCode;
     s.revision++;
   };
   // The optional card selects tutor turns only. A native getter may already
@@ -675,6 +688,11 @@ export function createTerminalRelayApp({
       note: "No released native study work is waiting. Continue in the game, then ask for its current question when ready. This call is complete; stop here without polling.",
     };
   };
+  const disconnected = (s) => ({
+    status: "disconnected",
+    relayId: s.id,
+    note: "Nothing in the game is waiting for this chat. Each game terminal opening has its own chat: if the player opened a terminal, they must start a new ChatGPT chat and paste the game's latest request there. If they only just opened it, the game may still be preparing; they can ask again in this chat shortly. Tell the player once and stop; do not retry or poll.",
+  });
   const valueResult = (value) => ({
     content: [{ type: "text", text: JSON.stringify(value) }],
     structuredContent: value,
@@ -691,6 +709,17 @@ export function createTerminalRelayApp({
     claim(s, select);
     return nativeValue(s);
   };
+  /** A reopened terminal moves its request to a new chat; the old one's
+   * finish must not land. */
+  const checkChat = (turn) => {
+    if (
+      turn.chatCode !== undefined &&
+      queue.chatCode(turn.jobId) !== turn.chatCode
+    )
+      throw Error(
+        "This chat was disconnected: the game reopened this question for a new chat. Nothing was sent.",
+      );
+  };
   const sameScope = (prior, next, allowRoom) =>
     !!prior &&
     !!next &&
@@ -699,7 +728,7 @@ export function createTerminalRelayApp({
       (allowRoom &&
         prior.questionRoom &&
         prior.questionRoom === next.questionRoom));
-  const continueNative = async (s, after) => {
+  const continueNative = async (s, after, chat) => {
     if (
       !object(after) ||
       Object.keys(after).some(
@@ -727,6 +756,7 @@ export function createTerminalRelayApp({
       });
     const select = (job) =>
       nativeSelect(job) &&
+      (job.chatCode === undefined || job.chatCode === chat) &&
       job.operation === prior.next &&
       sameScope(
         prior.nativeScope,
@@ -824,12 +854,30 @@ export function createTerminalRelayApp({
           [...sessions.values()].find((s) => s.owner === account) ??
           newSession(relayIdFor(account), account);
         s.updated = now();
+        const chat = args.chat;
+        if (chat !== undefined && !/^[A-Z0-9]{6,16}$/.test(chat))
+          throw Error("Invalid chat code");
+        // Each terminal opening belongs to one chat. A newer opening's code
+        // takes the question over; any other chat is disconnected and must
+        // not disturb it.
+        if (s.turn?.status === "claimed" && s.turn.chatCode !== chat) {
+          if (chat === undefined || !queue.liveChat(chat, requesterLiveMs))
+            return valueResult(disconnected(s));
+          queue.releaseClaim(s.worker, s.turn.jobId, s.turn.claim);
+          s.turn.status = "released";
+          finishTurn(s);
+          s.revision++;
+        }
         if (args.after !== undefined) {
           if (!object(args.after) || args.after.relayId !== s.id)
             throw Error("Continuation does not match this owner’s relay");
-          return continueNative(s, args.after);
+          return continueNative(s, args.after, chat);
         }
-        return valueResult(nativeOnce(s));
+        if (chat !== undefined && !queue.liveChat(chat, requesterLiveMs))
+          return valueResult(disconnected(s));
+        return valueResult(
+          nativeOnce(s, (job) => nativeSelect(job) && job.chatCode === chat),
+        );
       }
       const s = get(grant, args.relayId);
       if (name === "read_study_terminal") {
@@ -985,6 +1033,7 @@ export function createTerminalRelayApp({
           throw Error("A direct question requires finish_study_question");
         if (turn.jobFingerprint !== args.jobFingerprint)
           throw Error("Preparation is for a different frozen request");
+        checkChat(turn);
         if (!queue.requesterLive(turn.jobId, requesterLiveMs))
           throw Error("The game is no longer waiting for this preparation");
         if (
@@ -1086,6 +1135,7 @@ export function createTerminalRelayApp({
           );
         if (args.questionFingerprint !== s.turn.questionFingerprint)
           throw Error("Completion is for a different study question");
+        checkChat(s.turn);
         if (!queue.requesterLive(s.turn.jobId, requesterLiveMs))
           throw Error(
             "The game that asked this question is no longer waiting; nothing was sent",

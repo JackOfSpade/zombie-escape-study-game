@@ -13,7 +13,12 @@ import {
 } from "./career-profile";
 import { simulationActive } from "./simulation-state";
 import { spawnGrace } from "./study-pacing";
-import { relayListening, relayServes } from "./bridge-client";
+import {
+  newStudyChat,
+  relayListening,
+  relayServes,
+  studyChatCode,
+} from "./bridge-client";
 import { terminalChannel, submissionView } from "./terminal-view";
 import { unfinishedLastQuestion } from "./final-question";
 import { encounterGaps, probeSummary } from "./knowledge-probe";
@@ -348,7 +353,7 @@ function renderNativeStudy() {
             ? archived
               ? "Finish the previous run's question in ChatGPT. Learning is saved, with no key for this run."
               : "Continue in ChatGPT. Your learning still counts; this run awards no more keys."
-            : "Answer in your ChatGPT tab. Ask it to get your game question if it has not appeared.")),
+            : "Copy the ChatGPT request and paste it into a new ChatGPT chat. Each terminal uses its own chat.")),
   );
   $("#native-study-retry").hidden = session
     ? session.state !== "interrupted"
@@ -368,9 +373,10 @@ $("#native-study-retry").onclick = () => {
 $("#native-study-connect").onclick = () =>
   openPanel("settings", "#settings-title");
 $("#native-study-copy").onclick = () => {
-  void navigator.clipboard.writeText(CHATGPT_TERMINAL_REQUEST).then(
+  void navigator.clipboard.writeText(terminalRequest()).then(
     () => {
-      game.notice = "Copied. Paste the request in your ChatGPT tab.";
+      game.notice =
+        "Copied. Start a new ChatGPT chat and paste the request there.";
     },
     () => {
       game.notice = "In ChatGPT, ask: Get my current game study question.";
@@ -811,6 +817,7 @@ function closeTerminal() {
 function openFinalQuestion(e: Encounter) {
   lastQuestion = e.id;
   game.lastStudyEncounter = e.id;
+  newStudyChat();
   $("#start-card").hidden = true;
   if (unfinishedDirectStudy(e))
     void retryDirectStudy(game, e, roadmap, nativeStudyChanged);
@@ -932,6 +939,8 @@ async function interact() {
   lastQuestion = e.id;
   game.lastStudyEncounter = e.id;
   if (e.mode === "solo") e.owner = "human";
+  // Every terminal opening gets its own ChatGPT chat.
+  newStudyChat();
   await prepareNativeQuestion(e);
 }
 let workLogSignature = "";
@@ -1949,22 +1958,23 @@ const blankTab = (tab: Window) => {
 /** A new, empty ChatGPT chat. The request is pasted by the player so they can
  * choose the model and thinking level before it is sent. */
 const CHATGPT_NEW_CHAT_URL = "https://chatgpt.com/";
-const CHATGPT_TERMINAL_REQUEST =
-  "Get my current zombie-escape-study-game study question using get_current_study_question. Handle any preparation or assessment step returned by the game in this same chat. Ask the issued question here, then let me answer in this normal chat. When we finish, call finish_study_question once to send the result back to the game and follow its bound continuation. If no question is waiting, tell me once and wait for me.";
+/** The request names this terminal opening's chat code, so it only works in
+ * the chat it is pasted into; reopening a terminal needs a new chat. */
+const terminalRequest = () =>
+  `Get my current zombie-escape-study-game study question using get_current_study_question with chat code ${studyChatCode()}; pass that chat code on every get_current_study_question call in this chat. Handle any preparation or assessment step returned by the game in this same chat. Ask the issued question here, then let me answer in this normal chat. When we finish, call finish_study_question once to send the result back to the game and follow its bound continuation. If no question is waiting or the game says this chat is disconnected, tell me once and wait for me.`;
 /** Whether the last Connect press put the request on the clipboard. */
 let terminalRequestCopied = false,
   terminalRequestShown = false;
 async function copyTerminalRequest() {
   terminalRequestCopied = false;
-  $<HTMLTextAreaElement>("#chatgpt-prompt-text").value =
-    CHATGPT_TERMINAL_REQUEST;
+  $<HTMLTextAreaElement>("#chatgpt-prompt-text").value = terminalRequest();
   setText("#chatgpt-copy-status", "Copying prompt…");
   try {
-    await navigator.clipboard.writeText(CHATGPT_TERMINAL_REQUEST);
+    await navigator.clipboard.writeText(terminalRequest());
     terminalRequestCopied = true;
     setText(
       "#chatgpt-copy-status",
-      "Prompt copied. Paste it into ChatGPT, then press Enter.",
+      "Prompt copied. Start a new ChatGPT chat, paste it, then press Enter.",
     );
   } catch {
     setText(
@@ -1982,7 +1992,7 @@ $("#open-chatgpt").onclick = () => {
 const pasteRequestStep = () =>
   terminalRequestCopied
     ? "The request is on your clipboard: choose your model and thinking level, paste it, then press Enter."
-    : `Choose your model and thinking level, then send: "${CHATGPT_TERMINAL_REQUEST}"`;
+    : `Choose your model and thinking level, then send: "${terminalRequest()}"`;
 function reportReconnect(text: string | null) {
   reconnectProgress = text;
   if (active) renderTerminal();
