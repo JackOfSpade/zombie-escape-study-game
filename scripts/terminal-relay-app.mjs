@@ -101,7 +101,12 @@ export const terminalRelayTools = () =>
       description:
         "Fetch this connected game's released question preparation, native study question or final assessment, with stable relayId, turnId and fingerprint, for the chat code in the player's request. Returns the same pending work, a waiting status, or disconnected when the game opened a newer terminal for another chat. An optional after receipt waits up to five seconds for that same question's next phase. Works in regular ChatGPT chat without a UI card.",
       inputSchema: schema(
-        { chat: chatCodeSchema, after: continuationSchema },
+        {
+          chat: chatCodeSchema,
+          chat_code: chatCodeSchema,
+          chatCode: chatCodeSchema,
+          after: continuationSchema,
+        },
         [],
       ),
       annotations: {
@@ -854,7 +859,7 @@ export function createTerminalRelayApp({
           [...sessions.values()].find((s) => s.owner === account) ??
           newSession(relayIdFor(account), account);
         s.updated = now();
-        const chat = args.chat;
+        const chat = args?.chat ?? args?.chat_code ?? args?.chatCode;
         if (chat !== undefined && !/^[A-Z0-9]{6,16}$/.test(chat))
           throw Error("Invalid chat code");
         // Each terminal opening belongs to one chat. A newer opening's code

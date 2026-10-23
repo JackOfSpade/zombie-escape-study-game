@@ -88,7 +88,6 @@ export function soundEvents(g: Game, after: number): SoundCue[] {
         "barricade-hit",
         "survivor-hit",
         "entrance-close",
-        "door-latch",
         "helicopter",
         "board",
         "completion",
@@ -134,14 +133,6 @@ export function soundEvents(g: Game, after: number): SoundCue[] {
         end: 35,
         caption: "[Main entrance slams shut]",
       };
-    if (e.type === "door-latch")
-      cue = {
-        frequency: 820,
-        duration: 0.07,
-        gain: audible(g, e, 0.22, connected),
-        end: 240,
-        caption: "[Door latch clicks shut]",
-      };
     if (e.type === "helicopter" && g.survivors[0].floor === g.floors.length - 1)
       cue = {
         frequency: 130,
@@ -183,13 +174,11 @@ export function soundEvents(g: Game, after: number): SoundCue[] {
           ? "breach"
           : e.type === "survivor-hit"
             ? "hit"
-            : e.type === "door-latch"
-              ? "latch"
-              : e.type === "entrance-close"
-                ? "metal"
-                : e.type === "barricade-hit"
-                  ? "wood"
-                  : undefined;
+            : e.type === "entrance-close"
+              ? "metal"
+              : e.type === "barricade-hit"
+                ? "wood"
+                : undefined;
       cue.cutoff =
         !e.position ||
         transmission(g, g.survivors[0], soundPosition(g, e), connected) > 0.2

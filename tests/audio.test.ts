@@ -415,7 +415,7 @@ test("downloaded voices get per-event muffling, bounded playback and immediate p
   await d.ready;
   d.update(g);
   g.time += 0.3;
-  event(g, "door-latch", "click", 0).position = { x: 11, y: 15.5 };
+  event(g, "breach", "crash", 0).position = { x: 11, y: 15.5 };
   d.update(g);
   assert.ok(
     sources.length > 1,
