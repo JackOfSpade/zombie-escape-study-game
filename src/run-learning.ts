@@ -51,6 +51,16 @@ interface SavedDirectStudy {
 const directOf = (e: Encounter) =>
   (e as { directStudy?: SavedDirectStudy }).directStudy;
 
+/** End a question at a run boundary without declaring its unanswered facets gaps. */
+export function closeDirectStudy(e: Encounter): void {
+  const s = directOf(e);
+  if (!s || (s.state !== "pending" && s.state !== "interrupted")) return;
+  s.state = "superseded";
+  delete s.error;
+  delete s.transportPhase;
+  delete s.transportPhaseAt;
+}
+
 export function releaseSettledRequests(e: Encounter, all = false): void {
   for (const job of e.tutorRequests ?? [])
     if (all || job.state === "applied" || job.state === "superseded")
@@ -127,6 +137,9 @@ export function recoverDirectStudy(e: Encounter): void {
 
 /** Preserve actual human context, including an issued but unanswered question. */
 export function retainRunLearning(g: Game, archive = false) {
+  if (archive)
+    for (const e of [...Object.values(g.encounters), ...g.study.archives])
+      closeDirectStudy(e);
   const retained = Object.values(g.encounters).filter(
     (e) =>
       e.problemPresentedSequence !== undefined ||

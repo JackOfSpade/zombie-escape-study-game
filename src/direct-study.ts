@@ -573,9 +573,11 @@ export function retryDirectStudy(
         },
         {
           timeoutMs: DIRECT_STUDY_TIMEOUT_MS,
+          isActive: () => s.state === "pending",
           nativeScope: nativeStudyScope(g, e),
         },
       );
+      await check();
       s.responseReceivedAt = Date.now();
       const facets: ProbeFacet[] =
         e.probe?.facets ??

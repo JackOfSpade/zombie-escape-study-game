@@ -76,6 +76,8 @@ export interface BridgeRequestOptions {
   /** Handoff wait budget; bounded to DIRECT_STUDY_TIMEOUT_MS. */
   timeoutMs?: number;
   nativeScope?: NativeStudyScope;
+  /** Stop renewing a released job after its owning session closes. */
+  isActive?: () => boolean;
 }
 export async function bridgeRequest(
   operation: string,
@@ -118,6 +120,8 @@ export async function bridgeRequest(
     let nextProgressCheck = 0,
       unreachableSince = 0;
     while (r.status === 202) {
+      if (options?.isActive?.() === false)
+        throw Error("Study session closed; saved work retained");
       await new Promise<void>((resolve, reject) => {
         const timer = setTimeout(done, 500);
         function done() {
@@ -133,6 +137,8 @@ export async function bridgeRequest(
         if (signal.aborted) abort();
         else signal.addEventListener("abort", abort, { once: true });
       });
+      if (options?.isActive?.() === false)
+        throw Error("Study session closed; saved work retained");
       try {
         const next = await fetch(
           `/api/bridge/result?id=${encodeURIComponent(receipt.id)}&hash=${encodeURIComponent(receipt.hash)}`,

@@ -789,87 +789,59 @@ test("consumed NPC lock gets separate assessment of native answers without repla
     void changes;
   }));
 
-test("restart and reload resume the exact archived question, retain chronological learning and never reward the reused station", async () =>
+test("restart closes the archived question, preserves partial work and ignores late completion after reload", async () =>
   fixture(async ({ g, e, calls, answer, waitCalls }) => {
     liveQuestion(g, e);
     await beginDirectStudy(g, e, r);
     await waitCalls(1);
-    const frozen = e.directStudy.payloadJson,
-      id = e.directStudy.id;
-    const priorMax = 10000;
+    const id = e.directStudy.id;
+    // Only persisted learner evidence is saved; an unanswered facet stays unknown.
     e.history.push({
-      seq: priorMax,
-      author: "system",
-      kind: "activity",
-      text: "Synthetic earlier-run marker",
+      seq: ++g.seq,
+      author: "human",
+      kind: "reasoning",
+      text: "Synthetic partial reasoning for the hard part",
       at: g.time,
       revision: e.revision,
     });
+    const evidence = structuredClone(g.study.learner.evidence);
     retainRunLearning(g, true);
+    assert.equal(e.directStudy.state, "superseded");
+    assert.equal(unfinishedDirectStudy(e), false);
     const restarted = createPlayableGame(748, r, g.study);
-    restarted.seq = 0;
     const loaded = recover(decode(encode(restarted)));
     const archived = loaded.study.archives.find(
       (a: any) => a.directStudy?.id === id,
     )!;
-    const current = loaded.encounters[e.id];
-    assert.ok(archived && current && archived !== current);
-    const keys = humanKeys(loaded),
-      oldKeys = humanKeys(g),
-      currentState = structuredClone({
-        state: current.state,
-        submissions: current.submissions,
-        workspace: current.workspace,
-      });
-    let changes = 0;
-    resumeDirectStudies(loaded, r, () => {
-      changes++;
-    });
-    resumeDirectStudies(loaded, r, () => {
-      changes++;
-    });
-    await waitCalls(2);
-    assert.equal(archived.directStudy!.payloadJson, frozen);
-    assert.deepEqual(calls[1].payload, calls[0].payload);
-    answer(1, solved(archived, archived.directStudy!.questionFingerprint));
-    await retryDirectStudy(loaded, archived, r);
-    await waitCalls(3);
-    assert.equal(
-      archived.directStudy!.state,
-      "applied",
-      archived.directStudy!.error,
-    );
-    const imported = archived.history.filter((h: any) => h.author === "human");
-    assert.ok(imported.length > 0 && imported.every((h) => h.seq > priorMax));
-    const before = changes;
-    answer(2, judgment(calls[2].payload.packet));
-    await waitFor(() => loaded.study.assessments[0].status !== "pending");
-    assert.equal(
-      loaded.study.assessments[0].status,
-      "applied",
-      loaded.study.assessments[0].provenance,
-    );
-    assert.ok(
-      loaded.study.learner!.evidence.some((ev) => ev.outcome === "assisted"),
-    );
-    assert.ok(changes > before);
+    assert.ok(archived.history.some((h: any) => h.text.includes("hard part")));
+    assert.equal(archived.directStudy!.state, "superseded");
+    const keys = humanKeys(loaded);
+    resumeDirectStudies(loaded, r);
+    answer(0, solved(e, e.directStudy.questionFingerprint));
+    await retryDirectStudy(g, e, r);
+    assert.equal(calls.length, 1, "no old question or assessment is reissued");
+    assert.equal(archived.directStudy!.state, "superseded");
+    assert.equal(e.submissions.length, 0);
     assert.equal(humanKeys(loaded), keys);
-    assert.equal(humanKeys(g), oldKeys);
+    assert.deepEqual(loaded.study.learner!.evidence, evidence);
+  }));
+
+test("older saves with an archived pending question close it on recovery without erasing artifacts", async () =>
+  fixture(async ({ g, e, waitCalls }) => {
+    await beginDirectStudy(g, e, r);
+    await waitCalls(1);
+    const frozen = e.directStudy.payloadJson;
+    // Reproduce the saved shape from before restart closed native questions.
+    g.study.archives.push(e);
+    const fresh = createPlayableGame(748, r, g.study);
+    const loaded = recover(decode(encode(fresh)));
+    const archived = loaded.study.archives[0];
+    assert.equal(archived.directStudy!.state, "superseded");
     assert.deepEqual(
-      {
-        state: current.state,
-        submissions: current.submissions,
-        workspace: current.workspace,
-      },
-      currentState,
+      JSON.parse(archived.directStudy!.payloadJson).problem,
+      JSON.parse(frozen).problem,
     );
-    assert.equal(archived.accepted, undefined);
-    assert.equal(archived.submissions.length, 0);
-    // An already-applied archived session stays inert after another reload.
-    const again = recover(decode(encode(loaded)));
-    resumeDirectStudies(again, r);
-    await new Promise((resolve) => setImmediate(resolve));
-    assert.equal(calls.length, 3);
+    assert.equal(unfinishedDirectStudy(archived), false);
   }));
 
 test("valid implied base facets and a one-level declared prerequisite remain supported", async () =>

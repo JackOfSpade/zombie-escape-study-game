@@ -534,7 +534,17 @@ function begin() {
 function preserveRunLearning(g: Game, archive = false) {
   const retained = retainRunLearning(g, archive);
   for (const e of retained)
-    if (!unfinishedDirectStudy(e)) void assess(g, e, roadmap).then(persist);
+    if (
+      !unfinishedDirectStudy(e) &&
+      e.history.some(
+        (h) =>
+          h.author === "human" &&
+          ["edit", "reasoning", "test", "defense", "execution"].includes(
+            h.kind,
+          ),
+      )
+    )
+      void assess(g, e, roadmap).then(persist);
   if (retained.length) void persist();
 }
 /** How long a restart waits for this run's assessments before it moves on;
@@ -563,7 +573,15 @@ async function fresh(statusLine?: HTMLElement) {
   say("Saving learning progress…");
   const assessing = Promise.allSettled(
     retainRunLearning(previous, true)
-      .filter((e) => !unfinishedDirectStudy(e))
+      .filter((e) =>
+        e.history.some(
+          (h) =>
+            h.author === "human" &&
+            ["edit", "reasoning", "test", "defense", "execution"].includes(
+              h.kind,
+            ),
+        ),
+      )
       .map((e) => assess(previous, e, roadmap).then(persist)),
   );
   // Requests are captured synchronously. Save them before waiting on a model,

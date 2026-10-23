@@ -4,7 +4,7 @@ import { enterLegacyBuilding } from "./helpers/legacy-world";
 import { openGameMenu } from "./helpers/game-menu";
 import { killHumanInStep } from "./native-study-harness";
 
-test("unanswered native task retains its formal ID through death and restart; archived completion unlocks a fresh linked task without rewarding the new run", async ({
+test("restart saves the unfinished native task and immediately allows a new question, including after reload", async ({
   page,
 }) => {
   let generations = 0;
@@ -166,7 +166,7 @@ test("unanswered native task retains its formal ID through death and restart; ar
   await page.getByRole("button", { name: "Run summary", exact: true }).click();
   await page.getByRole("button", { name: "Begin another run" }).click();
   await expect(page.locator("#start-card")).toBeHidden();
-  const nextId = await position();
+  await position();
   const after = await page.evaluate(() => {
     const g = (window as any).__deadAir.game;
     return {
@@ -185,139 +185,36 @@ test("unanswered native task retains its formal ID through death and restart; ar
   );
   expect(archive.problem.prompt).toBe("Read-only question 1");
   expect(archive.workspace).toBe("");
-  expect(archive.directStudy.payloadJson).toBe(issued.session.payloadJson);
+  expect(JSON.parse(archive.directStudy.payloadJson).problem).toEqual(
+    issued.problem,
+  );
   expect(after.cycle).toBe(baseline.cycle);
   expect(after.evidence).toEqual([]);
   expect(after.keys).toBe(0);
-  const unopened = await page.evaluate((id) => {
-    const e = (window as any).__deadAir.game.encounters[id];
-    return {
-      state: e.state,
-      problem: e.problem,
-      workspace: e.workspace,
-      revision: e.revision,
-      history: e.history,
-      submissions: e.submissions,
-    };
-  }, nextId);
-  await page.locator("#world").focus();
-  await page.keyboard.press("e");
-  await expect(page.locator("#notice")).toContainText(
-    "Finish your current question in ChatGPT before opening another station",
-  );
-  await expect(page.locator("#native-study-status")).toContainText(
-    "Finish the previous run's question in ChatGPT",
-  );
-  expect(generations).toBe(1);
-  expect(nativeCalls).toEqual([nativeCalls[0], nativeCalls[0]]);
-  expect(assessmentCalls).toEqual([]);
-
-  // Finish the exact archived conversation, rather than replacing it with a
-  // new station's question. Its native transcript and gap belong to the old
-  // run; the reused encounter ID must not reward or alter this run's station.
-  const original = nativeCalls[0],
-    facet = original.probe.facets[0],
-    statement = "I do not know this part yet.",
-    text = "That gap is recorded for later study.";
-  expect(facet).toBeTruthy();
-  results.set(issued.session.id, {
-    text,
-    complete: true,
-    outcome: "gap",
-    questionFingerprint: issued.session.questionFingerprint,
-    transcript: [
-      { role: "assistant", text: original.problem.prompt },
-      { role: "user", text: statement },
-      { role: "assistant", text },
-    ],
-    knowledge: { facets: [{ id: facet.id, status: "gap" }] },
-  });
-  await expect
-    .poll(() =>
-      page.evaluate(
-        (session) =>
-          (window as any).__deadAir.game.study.archives.find(
-            (e: any) => e.directStudy?.id === session,
-          )?.directStudy.state,
-        issued.session.id,
-      ),
-    )
-    .toBe("applied");
-  await expect.poll(() => assessmentCalls.length).toBe(1);
-  await expect
-    .poll(() =>
-      page.evaluate(() => {
-        const a = (window as any).__deadAir.game.study.assessments[0];
-        return a?.status;
-      }),
-    )
-    .toBe("applied");
-  const continued = await page.evaluate(
-    ({ session, id }) => {
-      const g = (window as any).__deadAir.game,
-        e = g.encounters[id],
-        archive = g.study.archives.find(
-          (e: any) => e.directStudy?.id === session,
-        );
-      return {
-        run: g.id,
-        keys: g.survivors[0].keys ?? 0,
-        archive,
-        gaps: g.study.knowledgeGaps,
-        cycle: g.study.learner.cycle,
-        evidence: g.study.learner.evidence,
-        attempts: g.study.learner.attempts,
-        assessment: g.study.assessments[0],
-        current: {
-          state: e.state,
-          problem: e.problem,
-          workspace: e.workspace,
-          revision: e.revision,
-          history: e.history,
-          submissions: e.submissions,
-        },
-      };
-    },
-    { session: issued.session.id, id: nextId },
-  );
-  expect(continued.run).toBe(after.run);
-  expect(continued.keys).toBe(0);
-  expect(continued.current).toEqual(unopened);
-  expect(continued.archive.problem).toEqual(issued.problem);
-  expect(continued.archive.directStudy.payloadJson).toBe(
-    issued.session.payloadJson,
-  );
-  expect(continued.archive.accepted).toBeUndefined();
-  expect(continued.archive.submissions).toEqual([]);
-  expect(
-    continued.archive.tutor
-      .filter((m: any) => m.requestId === issued.session.id)
-      .map((m: any) => [m.kind, m.text]),
-  ).toEqual([
-    ["tutor", original.problem.prompt],
-    ["human", statement],
-    ["tutor", text],
-  ]);
-  expect(continued.gaps).toEqual([
-    expect.objectContaining({
-      runId: issued.run,
-      requestId: issued.session.id,
-      statement,
-      facet: expect.objectContaining({ id: facet.id }),
-    }),
-  ]);
-  expect(continued.cycle).toBe(baseline.cycle);
-  expect(continued.evidence).toEqual([]);
-  expect(continued.attempts).toHaveLength(1);
-  expect(continued.attempts[0].status).toBe("interrupted");
-  expect(continued.assessment.visitOutcome).toBe("unresolved");
-  expect(continued.assessment.findings).toEqual([]);
-  expect(assessmentCalls[0].packet.problem).toEqual(issued.problem);
-  const beforeFresh = nativeCalls.length;
   await page.locator("#world").focus();
   await page.keyboard.press("e");
   await expect.poll(() => generations).toBe(2);
-  await expect.poll(() => nativeCalls.length).toBe(beforeFresh + 1);
+  await expect.poll(() => nativeCalls.length).toBe(3);
+  await expect(page.locator("#native-study-status")).not.toContainText(
+    "previous run",
+  );
+  const archivedState = await page.evaluate((session) => {
+    const g = (window as any).__deadAir.game;
+    return g.study.archives.find((e: any) => e.directStudy?.id === session)
+      ?.directStudy.state;
+  }, issued.session.id);
+  expect(archivedState).toBe("superseded");
+  expect(assessmentCalls).toEqual([]);
+  // A late old-run completion cannot reward this run or invent learner evidence.
+  results.set(issued.session.id, { complete: true, outcome: "solved" });
+  await openGameMenu(page);
+  await page.getByRole("button", { name: "Save run", exact: true }).click();
+  await expect(page.locator("#notice")).toContainText("Run saved locally");
+  await page.reload();
+  await page.waitForFunction(() => !!(window as any).__deadAir);
+  await expect.poll(() => nativeCalls.length).toBe(4);
+  expect(nativeCalls[3].requestId).toBe(nativeCalls[2].requestId);
+  expect(assessmentCalls).toEqual([]);
   const child = await page.evaluate(() => {
     const g = (window as any).__deadAir.game;
     return {

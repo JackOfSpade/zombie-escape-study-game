@@ -163,8 +163,8 @@ test("pause restart retains original progress and archives unfinished human work
       source: g.study.learner?.sourceHash,
       archives: g.study.archives.map((e: any) => e.workspace),
       archivedNative: g.study.archives.find(
-        (e: any) => e.directStudy?.payloadJson === captured,
-      )?.directStudy?.payloadJson,
+        (e: any) => e.directStudy?.id === JSON.parse(captured).requestId,
+      )?.directStudy,
       paused: g.paused,
     };
   }, captured);
@@ -174,7 +174,10 @@ test("pause restart retains original progress and archives unfinished human work
   expect(after.archives).toContain(
     "unfinished human reasoning survives restart",
   );
-  expect(after.archivedNative).toBe(captured);
+  expect(after.archivedNative.state).toBe("superseded");
+  expect(JSON.parse(after.archivedNative.payloadJson).problem).toEqual(
+    JSON.parse(captured).problem,
+  );
   expect(after.paused).toBe(false);
 });
 test("E toggles a pivoting grip; old G/R/digit shortcuts do not act; Space vaults", async ({

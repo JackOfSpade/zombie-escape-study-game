@@ -4,7 +4,11 @@ import { createCheckpointQueue } from "./checkpoint-queue";
 import { reconcileKnowledgeGaps } from "./knowledge-probe";
 import { type Game } from "./model";
 import { checkpointPhysics } from "./physics";
-import { recoverDirectStudy, releaseSettledRequests } from "./run-learning";
+import {
+  closeDirectStudy,
+  recoverDirectStudy,
+  releaseSettledRequests,
+} from "./run-learning";
 import { readDurable, writeDurable } from "./storage";
 const KEY = "dead-air-save-v1";
 interface Envelope {
@@ -206,6 +210,9 @@ export function recover(g: Game) {
         job.error =
           "Application restarted; retry the exact saved private question.";
       }
+    // Older saves could carry a previous run's open question into a fresh run.
+    // Preserve its artifacts while removing the obsolete completion obligation.
+    if (g.study.archives.includes(e)) closeDirectStudy(e);
     recoverDirectStudy(e);
     for (const job of e.materializations ?? [])
       if (job.state === "pending") {

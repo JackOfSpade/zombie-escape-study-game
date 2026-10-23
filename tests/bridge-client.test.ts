@@ -225,3 +225,32 @@ test("a queued request keeps waiting through a relay restart and only gives up a
     /stopped answering; your exact request is saved/,
   );
 });
+
+test("a closed study session stops renewing its queued relay job", async (t) => {
+  const original = globalThis.fetch;
+  t.after(() => {
+    globalThis.fetch = original;
+  });
+  let active = true;
+  let polls = 0;
+  globalThis.fetch = async (url) => {
+    if (url === "/api/status") return reply("chatgpt-handoff");
+    if (String(url).startsWith("/api/bridge/result")) {
+      polls++;
+      return Response.json({ status: "pending" }, { status: 202 });
+    }
+    active = false;
+    return Response.json(
+      { handoff: { id: "closed", hash: "captured" } },
+      { status: 202 },
+    );
+  };
+  await checkBridge();
+  await assert.rejects(
+    bridgeRequest("tutor", { requestId: "closed" }, undefined, {
+      isActive: () => active,
+    }),
+    /session closed/,
+  );
+  assert.equal(polls, 0);
+});
