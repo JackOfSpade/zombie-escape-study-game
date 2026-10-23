@@ -193,6 +193,19 @@ const runLogs = new RunLogs({
 });
 await runLogs.load();
 await checkBridge();
+// Silently reconnect ChatGPT in the background if the connector is already
+// configured and linked; the player doesn't need to press anything.
+void (async () => {
+  try {
+    const info = await fetch("/api/handoff/status", {
+      signal: AbortSignal.timeout(5000),
+    }).then((r) => (r.ok ? r.json() : null));
+    if (info?.public?.configured && info.public.linked)
+      void reconnectChatGpt();
+  } catch {
+    // Bridge unavailable — development mode, silently continue.
+  }
+})();
 app.innerHTML = gameShell;
 const canvas = $<HTMLCanvasElement>("#world"),
   editor = $<HTMLTextAreaElement>("#workspace");
@@ -370,8 +383,7 @@ $("#native-study-retry").onclick = () => {
     void retryDirectStudy(game, e, roadmap, nativeStudyChanged);
   else if (e) void prepareNativeQuestion(e);
 };
-$("#native-study-connect").onclick = () =>
-  openPanel("settings", "#settings-title");
+$("#native-study-connect").onclick = () => void reconnectChatGpt();
 $("#native-study-copy").onclick = () => {
   void navigator.clipboard.writeText(terminalRequest()).then(
     () => {

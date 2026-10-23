@@ -1,5 +1,5 @@
 import { loadSfx, SFX, type SoundSample } from "./sfx";
-import { type Game, CONFIG } from "./model";
+import { type Game } from "./model";
 import { hordeSound, soundEvents, surgeCaption } from "./soundscape";
 export class AudioDirector {
   ctx?: AudioContext;
@@ -19,7 +19,6 @@ export class AudioDirector {
   private position?: { x: number; y: number; floor: number };
   private game?: Game;
   private lastTime = 0;
-  private pulse = -1;
   private eventCaption = "";
   private mixCaption = "";
   private volume = -1;
@@ -199,7 +198,6 @@ export class AudioDirector {
       this.cursor = g.seq;
       this.next = 0;
       this.phase = "";
-      this.pulse = -1;
       this.nextGroan = 0;
       this.position = undefined;
       this.footsteps = 0;
@@ -298,30 +296,7 @@ export class AudioDirector {
     this.cursor = g.seq;
     if (this.phase !== g.surge.state) {
       this.cancel("warning");
-      const previous = this.phase;
       this.phase = g.surge.state;
-      this.pulse = -1;
-      if (this.phase === "active") this.cue(250, 2, 0.3, 45);
-      if (this.phase === "calm" && previous === "active")
-        this.cue(160, 2, 0.1, 45);
-    }
-    if (this.phase === "warning") {
-      const elapsed = Math.max(0, g.time - g.surge.started),
-        pulse = Math.floor(elapsed / 1.6);
-      if (elapsed < CONFIG.warning) {
-        const duration = Math.min(0.35, CONFIG.warning - elapsed);
-        this.cue(
-          35 * Math.pow(900 / 35, elapsed / CONFIG.warning),
-          duration,
-          0.06,
-          35 * Math.pow(900 / 35, (elapsed + duration) / CONFIG.warning),
-          "warning",
-        );
-      }
-      if (pulse !== this.pulse && elapsed < CONFIG.warning) {
-        this.pulse = pulse;
-        this.cue(70 + pulse * 35, 0.7, 0.15, undefined, "warning");
-      }
     }
     this.caption = [
       surgeCaption(g),
