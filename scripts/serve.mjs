@@ -27,7 +27,19 @@ const mime = {
 export async function createAppServer({
   directory = fileURLToPath(new URL("../dist", import.meta.url)),
   bridgePort = 4318,
+  restartBridge,
 } = {}) {
+  // A bridge that died after startup is relaunched on the next API call.
+  let restarting = null;
+  const reviveBridge = () => {
+    if (!restartBridge) return;
+    restarting ??= Promise.resolve()
+      .then(restartBridge)
+      .catch((error) =>
+        console.error(`Study bridge restart failed: ${error.message}`),
+      )
+      .finally(() => (restarting = null));
+  };
   const root = await realpath(directory);
   const build = createHash("sha256")
     .update(await readFile(resolve(root, "index.html")))
@@ -60,7 +72,18 @@ export async function createAppServer({
         },
       );
       proxy.setTimeout(65_000, () => proxy.destroy());
-      proxy.on("error", () => fail(502, "Study bridge unavailable"));
+      proxy.on("error", () => {
+        reviveBridge();
+        if (res.destroyed) return;
+        if (res.headersSent) return res.destroy();
+        res.writeHead(502, { "Content-Type": "application/json" });
+        res.end(
+          JSON.stringify({
+            error:
+              "Study bridge unavailable; it is restarting. Retry in a moment.",
+          }),
+        );
+      });
       req.on("aborted", () => proxy.destroy());
       res.on("close", () => proxy.destroy());
       req.pipe(proxy);
@@ -129,7 +152,7 @@ if (
   if (!Number.isInteger(port) || port < 1 || port > 65535)
     throw Error("Invalid app port");
   // Validate the build before starting or reconnecting any background service.
-  const server = await createAppServer();
+  const server = await createAppServer({ restartBridge: () => ensureBridge() });
   await ensureBridge();
   server.listen(port, "127.0.0.1", () =>
     console.log(`Production game: http://127.0.0.1:${port}`),

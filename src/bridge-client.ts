@@ -72,6 +72,34 @@ export const nativeStudyScope = (
   encounterId: e.id,
   ...(e.questionRoom ? { questionRoom: e.questionRoom } : {}),
 });
+/** One ChatGPT chat per terminal opening: the game mints a code when a study
+ * terminal opens and the pasted request carries it. The relay serves that
+ * opening's work only to the chat that supplies the current code. */
+let studyChat = "";
+export function newStudyChat() {
+  const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+  studyChat = Array.from(
+    crypto.getRandomValues(new Uint8Array(8)),
+    (n) => alphabet[n % alphabet.length],
+  ).join("");
+  return studyChat;
+}
+export const studyChatCode = () => studyChat || newStudyChat();
+/** Bridge errors may come from a proxy as plain text; never surface a JSON
+ * parse failure in place of the real reason. */
+async function readJson(r: Response) {
+  const text = await r.text();
+  try {
+    return JSON.parse(text);
+  } catch {
+    if (r.status >= 502 && r.status <= 504)
+      return {
+        error:
+          "The study bridge is not running. It is restarting; press Retry connection in a moment. Your work is saved.",
+      };
+    return { error: text.trim().slice(0, 200) || `Bridge HTTP ${r.status}` };
+  }
+}
 export interface BridgeRequestOptions {
   /** Handoff wait budget; bounded to DIRECT_STUDY_TIMEOUT_MS. */
   timeoutMs?: number;
@@ -102,12 +130,12 @@ export async function bridgeRequest(
       payload,
       provider,
       ...(handoff && options?.nativeScope
-        ? { nativeScope: options.nativeScope }
+        ? { nativeScope: options.nativeScope, chatCode: studyChatCode() }
         : {}),
     }),
     signal,
   });
-  let data = await r.json();
+  let data = await readJson(r);
   if (r.status === 202) {
     if (
       !handoff ||

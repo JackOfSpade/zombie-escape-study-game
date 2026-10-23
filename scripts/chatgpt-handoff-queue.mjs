@@ -88,6 +88,11 @@ export function validateNativeScope(operation, payload, scope) {
       : {}),
   };
 }
+/** A per-terminal-opening chat code chosen by the game. Transport metadata
+ * only (outside the frozen hash): it binds a released native job to the one
+ * ChatGPT chat the player pasted that opening's request into. */
+export const validChatCode = (value) =>
+  typeof value === "string" && /^[A-Z0-9]{6,16}$/.test(value);
 export function nativeJobScope(job) {
   if (job.nativeScope) return job.nativeScope;
   if (
@@ -728,6 +733,8 @@ export function createHandoffQueue({
           throw Error("Corrupt handoff request or answer identity");
         ids.add(job.id);
         validateNativeScope(job.operation, job.payload, job.nativeScope);
+        if (job.chatCode !== undefined && !validChatCode(job.chatCode))
+          throw Error("Corrupt study chat code");
       }
       state = { ...saved, enabled: false, autonomousWork: false }; // Per-launch explicit release; do not restore authorization.
       for (const job of state.jobs)
@@ -892,7 +899,20 @@ export function createHandoffQueue({
       save();
       return snapshot();
     },
-    enqueue(operation, payload, nativeScope) {
+    /** The latest chat code the game attached to a request, if any. */
+    chatCode(id) {
+      return state.jobs.find((j) => j.id === id)?.chatCode;
+    },
+    /** Whether a still-awaited native job carries this chat code. */
+    liveChat(code, windowMs) {
+      return state.jobs.some(
+        (j) =>
+          j.status !== "done" &&
+          j.chatCode === code &&
+          requesterLive(j, windowMs),
+      );
+    },
+    enqueue(operation, payload, nativeScope, chatCode) {
       checkEnabled();
       if (
         !HANDOFF_OPERATIONS.includes(operation) ||
@@ -921,6 +941,8 @@ export function createHandoffQueue({
         );
       checkAutonomous(operation, payload);
       const scope = validateNativeScope(operation, payload, nativeScope);
+      if (chatCode !== undefined && (!scope || !validChatCode(chatCode)))
+        throw Error("Invalid study chat code");
       const serialized = JSON.stringify({ operation, payload }),
         digest = hash(serialized);
       if (Buffer.byteLength(serialized) > 6_000_000)
@@ -953,6 +975,11 @@ export function createHandoffQueue({
             save();
             if (migrated) restoredLegacyClaims.delete(previous.id);
           }
+        }
+        // A reopened terminal moves the same exact request to its new chat.
+        if (chatCode !== undefined && previous.chatCode !== chatCode) {
+          previous.chatCode = chatCode;
+          save();
         }
         if (
           nativePreparationJob(previous) ||
@@ -991,6 +1018,7 @@ export function createHandoffQueue({
         status: "queued",
         createdAt: now(),
         ...(scope ? { nativeScope: scope } : {}),
+        ...(chatCode !== undefined ? { chatCode } : {}),
       };
       state.jobs = [...keep, job];
       save();

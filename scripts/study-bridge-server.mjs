@@ -152,6 +152,7 @@ export function createStudyBridgeServer({ endpoint, key, handoff } = {}) {
             parsed.operation,
             parsed.payload,
             parsed.nativeScope,
+            parsed.chatCode,
           );
           return;
         }

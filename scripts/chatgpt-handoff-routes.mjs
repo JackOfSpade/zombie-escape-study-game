@@ -172,8 +172,8 @@ export function createHandoffRoutes(
       }
       return true;
     },
-    enqueue(req, res, operation, payload, nativeScope) {
-      const handoff = queue.enqueue(operation, payload, nativeScope);
+    enqueue(req, res, operation, payload, nativeScope, chatCode) {
+      const handoff = queue.enqueue(operation, payload, nativeScope, chatCode);
       send(res, 202, { status: "pending", handoff });
     },
   };

@@ -41,14 +41,27 @@ async function fixture(t) {
     );
   });
   const bridgePort = await listen(bridge);
-  const server = await createAppServer({ directory: root, bridgePort });
+  let restarts = 0;
+  const server = await createAppServer({
+    directory: root,
+    bridgePort,
+    restartBridge: async () => {
+      restarts++;
+    },
+  });
   const port = await listen(server);
   t.after(async () => {
     await close(server);
     await close(bridge);
     await rm(directory, { recursive: true, force: true });
   });
-  return { server, bridge, port, url: `http://127.0.0.1:${port}` };
+  return {
+    server,
+    bridge,
+    port,
+    url: `http://127.0.0.1:${port}`,
+    restarts: () => restarts,
+  };
 }
 
 test("production serves built game/lab with fresh HTML and immutable hashed assets", async (t) => {
@@ -109,7 +122,7 @@ test("production refuses traversal, build symlinks, unknown hosts and static wri
 });
 
 test("production forwards exact API bodies/origins and reports relay outages", async (t) => {
-  const { url, bridge } = await fixture(t);
+  const { url, bridge, restarts } = await fixture(t);
   const body = JSON.stringify({ text: "Synthetic 🧟 evidence" });
   const response = await fetch(url + "/api/bridge?request=one", {
     method: "POST",
@@ -123,7 +136,11 @@ test("production forwards exact API bodies/origins and reports relay outages", a
     body,
   });
   await close(bridge);
-  assert.equal((await fetch(url + "/api/status")).status, 502);
+  const down = await fetch(url + "/api/status");
+  assert.equal(down.status, 502);
+  // The client reads a JSON reason, and a dead bridge is relaunched.
+  assert.match((await down.json()).error, /restarting/);
+  assert.equal(restarts(), 1);
 });
 
 test("production refuses startup without a built entry point", async (t) => {
