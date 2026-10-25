@@ -11,6 +11,10 @@ import {
 } from "../src/knowledge-probe";
 import type { Roadmap } from "../src/model";
 import { createPlayableGame } from "../src/world";
+import {
+  QUESTION_DESIGN_GUIDANCE,
+  QUESTION_ADAPTATION_GUIDANCE,
+} from "../scripts/lib/study-question-policy.mjs";
 
 const r: Roadmap = JSON.parse(readFileSync("public/curriculum.json", "utf8"));
 const worker = "synthetic-question-design-worker";
@@ -73,6 +77,7 @@ test("live generation payload carries the minimal concrete problem policy and ke
     assert.equal(sent.length, 1);
     assert.equal(e.problem?.provenance, "study-mode");
     const policy: string = sent[0].generationPolicy;
+    assert.ok(policy.includes(QUESTION_DESIGN_GUIDANCE));
     for (const requirement of minimalPolicy) assert.match(policy, requirement);
     // Earlier policy remains intact; refinements are appended.
     assert.match(policy, /prompt alone must supply.*without using the chat/);
@@ -142,6 +147,7 @@ test("handoff generate instructions require minimal concrete problems with uncha
   q.enqueue("generate", { requestId: "synthetic-minimal", contract });
   const job = q.get(worker);
   assert.deepEqual(job.payload.contract, contract);
+  assert.ok(job.instructions.includes(QUESTION_DESIGN_GUIDANCE));
   for (const requirement of minimalPolicy)
     assert.match(job.instructions, requirement);
   assert.match(job.instructions, /Copy the exact eligible contract/);
@@ -162,6 +168,7 @@ test("handoff tutor instructions use focused questioning without breadth inflati
     messages: [{ text: "PRIVATE_SYNTHETIC_TUTOR_CONTEXT" }],
   });
   const job = q.get(worker);
+  assert.ok(job.instructions.includes(QUESTION_ADAPTATION_GUIDANCE));
   assert.match(
     job.instructions,
     /one focused question whose reasoning genuinely entails its prerequisites/,
@@ -171,11 +178,15 @@ test("handoff tutor instructions use focused questioning without breadth inflati
   assert.match(job.instructions, /hidden full-project follow-up/);
   assert.match(job.instructions, /probe its parts next, one level down/);
   assert.match(job.instructions, /known parts never imply it/);
+  assert.match(job.instructions, /optionally probe/);
+  assert.match(job.instructions, /or wants to move on/);
+  assert.doesNotMatch(job.instructions, /nothing lower is left to probe/);
   assert.doesNotMatch(job.instructions, /establishes the most at once/);
 });
 
 test("probe stance keeps bounded reasoning, one-level clarification and explicit gaps", () => {
   assert.ok(TERMINAL_DIALOGUE_INSTRUCTION.includes(PROBE_STANCE));
+  assert.ok(PROBE_STANCE.includes(QUESTION_ADAPTATION_GUIDANCE));
   assert.match(PROBE_STANCE, /highest-leverage question/);
   assert.match(
     PROBE_STANCE,

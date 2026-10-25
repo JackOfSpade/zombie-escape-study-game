@@ -44,6 +44,8 @@ Formal assessment uses the frozen task and evidence cutoff, with human and assis
 
 ## Controls and force fields
 
+**Study only** opens a neutral **Learning workspace** from the main controls or Pause menu. It freezes and mutes the game, shows your learning progress, and lets you start the next scheduled question without finding a station. Copy the request into ChatGPT and answer there as usual. The dashboard confirms when the result is received and saved, then shows the separate progress assessment state. Failed saves and progress reviews offer retry buttons. Your study view survives reloads; **Exit study view** restores the prior run and pause state. Standalone study questions award no game items, while validated learning still follows the existing assessment process.
+
 New runs use force fields, independent solo terminals and a continuous swarm. Existing saved runs keep their original objects, puzzles and rules; restart from Pause to use the redesign while retaining learning progress and archiving unfinished work.
 
 - WASD or arrows: move. Walk through translucent green fields. Translucent red fields block you; press E nearby to consume one key and grant permanent access to **you alone**. The rear study hall stays green without a pass limit on every floor, so reaching the first puzzle needs no key. Every survivor starts with zero keys; solving a solo puzzle earns the first key. Zombies must physically break either color before crossing.

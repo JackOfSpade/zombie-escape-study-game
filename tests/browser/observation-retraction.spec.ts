@@ -113,7 +113,7 @@ for (const outcome of ["assisted", "contradicted"] as const) {
       canonical,
     );
     await page.screenshot({
-      path: `docs/evidence/observation-retraction-${outcome}.png`,
+      path: `.artifacts/observation-retraction-${outcome}.png`,
     });
     const adopted = page.waitForEvent("download");
     await page

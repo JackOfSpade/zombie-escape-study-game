@@ -4,6 +4,8 @@ import test from "node:test";
 import { checkBridge, ensureProblem, send } from "../src/ai";
 import {
   beginDirectStudy,
+  pauseDirectStudy,
+  resumeDirectStudyInNewChat,
   NATIVE_TRANSCRIPT_PROVENANCE,
   resumeDirectStudies,
   retryDirectStudy,
@@ -17,6 +19,8 @@ import { probeFacets } from "../src/knowledge-probe";
 import { event, type Roadmap } from "../src/model";
 import { decode, encode, recover } from "../src/persistence";
 import { createPlayableGame } from "../src/world";
+import { QUESTION_ADAPTATION_GUIDANCE } from "../scripts/lib/study-question-policy.mjs";
+import { enterStudyWorkspace } from "../src/study-workspace";
 
 const r: Roadmap = JSON.parse(readFileSync("public/curriculum.json", "utf8"));
 
@@ -64,14 +68,30 @@ async function fixture(run: (h: Harness) => Promise<void>) {
     e.mode = "solo";
     e.owner = "human";
     connected = true;
-    caps = ["tutor", "direct-study"];
+    caps = ["tutor", "direct-study", "topic-assessments"];
     await checkBridge();
     await run({
       g,
       e,
       calls,
-      answer: (n, body, status = 200) =>
-        resolvers[n](Response.json(body, { status })),
+      answer: (n, body, status = 200) => {
+        const topics = calls[n]?.payload?.topicAssessmentContext?.topicIds;
+        const response =
+          body &&
+          typeof body === "object" &&
+          (body as any).complete === true &&
+          topics &&
+          !("topicAssessments" in body)
+            ? {
+                ...body,
+                topicAssessments: topics.map((topicId: string) => ({
+                  topicId,
+                  text: "Synthetic AI impression: probably understands the mechanism; boundary confidence is still tentative.",
+                })),
+              }
+            : body;
+        resolvers[n](Response.json(response, { status }));
+      },
       waitCalls,
       setCapabilities: async (next) => {
         caps = next;
@@ -184,6 +204,44 @@ function judgment(
 
 const humanKeys = (g: any) => g.survivors[0].keys ?? 0;
 
+test("study-only native results are assessed and persist while the world stays frozen and no game items are granted", async () =>
+  fixture(async ({ g, e, calls, answer, waitCalls }) => {
+    liveQuestion(g, e);
+    e.studyOnly = true;
+    enterStudyWorkspace(g);
+    const keys = humanKeys(g);
+    const time = g.time;
+    const access = [...g.survivors[0].access];
+    await beginDirectStudy(g, e, r);
+    await waitCalls(1);
+    const fingerprint = e.directStudy.questionFingerprint;
+    answer(0, solved(e, fingerprint));
+    await retryDirectStudy(g, e, r);
+    await waitCalls(2);
+    assert.equal(e.directStudy.state, "applied");
+    assert.equal(g.study.assessments[0].status, "pending");
+    answer(1, judgment(calls[1].payload.packet));
+    await waitFor(() => g.study.assessments[0].status !== "pending");
+    assert.equal(
+      g.study.assessments[0].status,
+      "applied",
+      g.study.assessments[0].provenance,
+    );
+    assert.equal(g.study.visits.length, 1);
+    assert.equal(humanKeys(g), keys);
+    assert.deepEqual(g.survivors[0].access, access);
+    assert.equal(g.time, time);
+    const saved = recover(decode(encode(g)));
+    assert.equal(
+      saved.encounters[e.id].directStudy?.questionFingerprint,
+      fingerprint,
+    );
+    assert.equal(saved.encounters[e.id].directStudy?.state, "applied");
+    assert.equal(saved.study.assessments[0].status, "applied");
+    assert.equal(saved.studyWorkspace?.enabled, true);
+    assert.equal(saved.study.visits.length, 1);
+  }));
+
 test("a native question opens without learner evidence and completes once with attributed transcript", async () =>
   fixture(async ({ g, e, calls, answer, waitCalls }) => {
     const keys = humanKeys(g);
@@ -201,6 +259,9 @@ test("a native question opens without learner evidence and completes once with a
     assert.equal(e.state === "consumed", false);
     assert.equal(g.study.visits.length, 0);
     const p = calls[0].payload;
+    assert.ok(p.instruction.includes(QUESTION_ADAPTATION_GUIDANCE));
+    assert.ok(p.probe.stance.includes(QUESTION_ADAPTATION_GUIDANCE));
+    assert.doesNotMatch(p.instruction, /Pose exactly this question/);
     assert.equal(calls[0].operation, "tutor");
     assert.deepEqual(calls[0].nativeScope, {
       runId: e.runId,
@@ -214,11 +275,19 @@ test("a native question opens without learner evidence and completes once with a
     assert.equal(p.questionFingerprint, s.questionFingerprint);
     assert.match(s.questionFingerprint, /^[0-9a-f]{64}$/);
     assert.deepEqual(p.problem, e.problem);
+    const originalProblem = structuredClone(e.problem);
     assert.equal(p.workspace, e.workspace);
     assert.equal(p.draftRevision, e.revision);
     assert.equal("curriculum" in p, false);
     assert.equal("progressContext" in p, false);
-    assert.equal(JSON.stringify(p).length < 60_000, true);
+    const { topicAssessmentContext: context, ...questionPayload } = p;
+    assert.equal(JSON.stringify(questionPayload).length < 60_000, true);
+    assert.deepEqual(context.topicIds, [
+      ...new Set(
+        e.problem.contract.objectiveIds.map((id: string) => id.split(".")[0]),
+      ),
+    ]);
+    assert.equal(JSON.stringify(context).length < 230_000, true);
     assert.ok(changes.length >= 1);
     // The world keeps running while ChatGPT is talking.
     g.time += 30;
@@ -227,9 +296,24 @@ test("a native question opens without learner evidence and completes once with a
     await send(g, e, "tutor", "In-game answer", r);
     assert.equal(calls.length, 1);
     assert.equal(e.tutor.length, priorTutor);
-    answer(0, solved(e, s.questionFingerprint));
+    // Presentation can differ from the frozen prompt without replacing its
+    // assessed task. Keep those actual assistant words in the attributed log.
+    const rephrasedTranscript = transcript.map((turn, i) =>
+      i === 0
+        ? {
+            ...turn,
+            text: "Let's take the same task in steps: what leaves the window first?",
+          }
+        : turn,
+    );
+    answer(
+      0,
+      solved(e, s.questionFingerprint, { transcript: rephrasedTranscript }),
+    );
     await retryDirectStudy(g, e, r);
     assert.equal(s.state, "applied", s.error);
+    assert.deepEqual(e.problem, originalProblem);
+    assert.equal(s.questionFingerprint, p.questionFingerprint);
     assert.match(s.responseDigest, /^[0-9a-f]{64}$/);
     assert.equal(humanKeys(g), keys + 1);
     assert.equal(e.state, "consumed");
@@ -249,7 +333,7 @@ test("a native question opens without learner evidence and completes once with a
     assert.deepEqual(
       added.map((m: any) => [m.kind, m.author, m.text, m.provenance]),
       [
-        ...transcript.map((t) => [
+        ...rephrasedTranscript.map((t) => [
           t.role === "user" ? "human" : "tutor",
           t.role === "user" ? "human" : "Terminal AI",
           t.text,
@@ -315,6 +399,7 @@ test("completion after death records native learning but awards no key", async (
   }));
 
 const staleChanges: [string, (g: any, e: any) => void][] = [
+  ["creation time", (_g, e) => (e.directStudy.createdAt = Number.NaN)],
   ["run", (_g, e) => (e.runId = "another-run")],
   ["replaced encounter", (g, e) => (g.encounters[e.id] = structuredClone(e))],
   [
@@ -354,6 +439,29 @@ for (const [label, change] of staleChanges)
     }));
 
 const malformed: [string, (e: any, fp: string) => unknown][] = [
+  [
+    "missing topic assessments",
+    (e, fp) => solved(e, fp, { topicAssessments: undefined }),
+  ],
+  [
+    "foreign topic assessment",
+    (e, fp) =>
+      solved(e, fp, {
+        topicAssessments: [{ topicId: "PE:T99", text: "Probably has a gap." }],
+      }),
+  ],
+  [
+    "empty topic assessment",
+    (e, fp) =>
+      solved(e, fp, {
+        topicAssessments: [
+          {
+            topicId: e.problem.contract.objectiveIds[0].split(".")[0],
+            text: " ",
+          },
+        ],
+      }),
+  ],
   ["incomplete", (e, fp) => solved(e, fp, { complete: false })],
   ["string complete", (e, fp) => solved(e, fp, { complete: "true" })],
   ["mismatched fingerprint", (e) => solved(e, "0".repeat(64))],
@@ -873,3 +981,61 @@ test("valid implied base facets and a one-level declared prerequisite remain sup
     assert.equal(e.directStudy.state, "applied", e.directStudy.error);
     assert.ok(e.probe.facets.some((f: any) => f.id === "needed-part"));
   }));
+
+test("an older bridge can finish existing-style questions without the new narrative field", async () =>
+  fixture(async ({ g, e, calls, answer, waitCalls, setCapabilities }) => {
+    await setCapabilities(["tutor", "direct-study"]);
+    await beginDirectStudy(g, e, r);
+    await waitCalls(1);
+    assert.equal(calls[0].payload.topicAssessmentContext, undefined);
+    assert.equal(calls[0].payload.responseFormat.topicAssessments, undefined);
+    answer(0, solved(e, e.directStudy.questionFingerprint));
+    await retryDirectStudy(g, e, r);
+    assert.equal(e.directStudy.state, "applied", e.directStudy.error);
+    assert.equal(g.study.topicAssessments, undefined);
+  }));
+
+test("stopped questions survive reload without polling and resume with a fresh delivery that rejects late results", async () => {
+  await fixture(async ({ g, e, calls, waitCalls, answer }) => {
+    await beginDirectStudy(g, e, r);
+    await waitCalls(1);
+    const old = e.directStudy;
+    const oldWait = retryDirectStudy(g, e, r);
+    const before = structuredClone({
+      problem: e.problem,
+      ledger: g.study.learner,
+      keys: g.survivors[0].keys,
+    });
+    assert.equal(pauseDirectStudy(e), true);
+    assert.equal(unfinishedDirectStudy(e), true);
+    assert.equal(pauseDirectStudy(e), false);
+    const saved = recover(decode(encode(g)));
+    assert.equal(saved.encounters[e.id].directStudy?.state, "paused");
+    resumeDirectStudies(saved, r);
+    await beginDirectStudy(g, e, r);
+    await retryDirectStudy(g, e, r);
+    assert.equal(calls.length, 1);
+    const resumed = resumeDirectStudyInNewChat(g, e, r);
+    await waitCalls(2);
+    assert.notEqual(e.directStudy.id, old.id);
+    assert.equal(e.directStudy.questionFingerprint, old.questionFingerprint);
+    assert.deepEqual(calls[1].payload.problem, calls[0].payload.problem);
+    answer(0, solved(e, old.questionFingerprint));
+    await oldWait;
+    assert.equal(e.submissions.length, 0);
+    assert.equal(e.directStudy.state, "pending");
+    assert.deepEqual(
+      {
+        problem: e.problem,
+        ledger: g.study.learner,
+        keys: g.survivors[0].keys,
+      },
+      before,
+    );
+    answer(1, solved(e, e.directStudy.questionFingerprint));
+    await resumed;
+    assert.equal(e.directStudy.state, "applied");
+    assert.equal(e.submissions.length, 1);
+    assert.equal(pauseDirectStudy(e), false);
+  });
+});

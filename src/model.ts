@@ -81,6 +81,11 @@ export interface Contract {
   };
 }
 export interface StudyState {
+  /** Free-form AI impressions; separate from verified curriculum credit. */
+  topicAssessments?: Record<
+    string,
+    import("./topic-assessment").TopicAssessmentRecord
+  >;
   roadmapReconciliations?: import("./roadmap-adoption-types").RoadmapReconciliationJob[];
   roadmapAdoptionBackups?: import("./roadmap-adoption-types").RoadmapAdoptionBackup[];
   environmentReviews?: import("./environment-review").EnvironmentReviewJob[];
@@ -475,13 +480,15 @@ export interface DirectStudySession {
   provider: Provider;
   payloadJson: string;
   questionFingerprint: string;
-  state: "pending" | "interrupted" | "applied" | "superseded";
+  state: "pending" | "interrupted" | "paused" | "applied" | "superseded";
   responseDigest?: string;
   error?: string;
   transportPhase?: import("./bridge-client").HandoffProgress;
   transportPhaseAt?: number;
 }
 export interface Encounter {
+  /** Standalone learning task: no physical station or survival reward. */
+  studyOnly?: boolean;
   directStudy?: DirectStudySession;
   chatDraft?: string;
   /** One question per room; answers, ownership and rewards remain per station. */
@@ -575,6 +582,8 @@ export interface Settings {
   reducedFlash: boolean;
 }
 export interface Game {
+  /** Study workspace freezes the saved world while native study continues. */
+  studyWorkspace?: { enabled: boolean; wasPaused: boolean; encounter?: string };
   fieldPacing?: import("./field-pacing").FieldPacing;
   rules?: "force-fields";
   tick?: number;

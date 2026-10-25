@@ -45,7 +45,8 @@ export function beginFurnitureIndex(floors: readonly Floor[]) {
   indexedFloors = new Set(floors);
 }
 export function endFurnitureIndex() {
-  indexEpoch = 0;
+  // Keep the generation monotonic: the next step must rebuild buckets even
+  // when the floor retains the same furniture array and object count.
   indexedFloors = new Set();
 }
 /** Furniture that may contain `p` within `pad`, in floor order; undefined means scan all. */

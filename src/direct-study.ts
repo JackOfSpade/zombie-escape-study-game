@@ -1,3 +1,13 @@
+import {
+  validateTopicAssessments,
+  topicAssessmentTopics,
+  TOPIC_ASSESSMENT_INSTRUCTION,
+} from "../scripts/lib/topic-assessment.mjs";
+import {
+  topicAssessmentContext,
+  recordTopicAssessments,
+} from "./topic-assessment";
+import { QUESTION_ADAPTATION_GUIDANCE } from "../scripts/lib/study-question-policy.mjs";
 /**
  * Direct native ChatGPT question sessions.
  *
@@ -18,9 +28,11 @@ import {
   bridgeRequest,
   DIRECT_STUDY_TIMEOUT_MS,
   nativeStudyScope,
+  newStudyChat,
   status,
 } from "./bridge-client";
 import { completionVerdict } from "./completion-verdict";
+import { beginVisit } from "./curriculum";
 import {
   concessionFeedback,
   encounterProbeContract,
@@ -59,6 +71,12 @@ export const TRANSCRIPT_LIMITS = {
 const DIRECT_PROVIDER: Provider = "chatgpt-handoff";
 
 export const DIRECT_STUDY_FORMAT = {
+  topicAssessments: [
+    {
+      topicId: "each topic ID in topicAssessmentContext.topicIds",
+      text: "your free-form updated assessment of this learner’s knowledge, including reasonable tentative inferences",
+    },
+  ],
   text: "string, final assistant message (<=8000 chars)",
   complete: "true",
   outcome: "solved|gap",
@@ -81,14 +99,53 @@ export const DIRECT_STUDY_FORMAT = {
 } as const;
 
 export const DIRECT_STUDY_INSTRUCTION =
-  "@study: Pose exactly this question to the learner in this regular ChatGPT conversation and talk normally until it is finished. Do not invent a different question. Your own explanations are assistance, never learner evidence. When finished call finish_study_question once with outcome solved (only when the learner's own answers establish the named facets as demonstrated) or gap (naming each missing facet with status gap; never mark unasked facets as gaps), the exact questionFingerprint, the exact transcript of the native turns in order, and knowledge.facets naming the observed findings. A solved outcome must establish every original base facet; a gap outcome records only explicit missing facets and may leave unasked siblings unassessed. The tool supplies the completion flag; do not pass a complete argument. Follow any bound continuation in the tool receipt to complete the separate source-bound assessment in this same chat; completion alone never certifies independent mastery.";
+  "@study: Present the issued task in this regular ChatGPT conversation and talk normally until it is finished. Preserve what is assessed, with freedom to improve how it is explained. Your own explanations are assistance, never learner evidence. When finished call finish_study_question once with outcome solved (only when the learner's own answers establish the named facets as demonstrated) or gap (naming each missing facet with status gap; never mark unasked facets as gaps), the exact questionFingerprint, the exact transcript of the native turns in order, and knowledge.facets naming the observed findings. A solved outcome must establish every original base facet; a gap outcome records only explicit missing facets and may leave unasked siblings unassessed. The tool supplies the completion flag; do not pass a complete argument. Follow any bound continuation in the tool receipt to complete the separate source-bound assessment in this same chat; completion alone never certifies independent mastery. " +
+  QUESTION_ADAPTATION_GUIDANCE +
+  " " +
+  TOPIC_ASSESSMENT_INSTRUCTION;
 
 const inFlight = new WeakMap<object, Promise<void>>();
 
-/** Pending or interrupted direct question whose completion is not yet recorded. */
+/** Unfinished question, including one explicitly stopped by the learner. */
 export function unfinishedDirectStudy(e: Encounter): boolean {
   const s = sessionOf(e);
-  return !!s && (s.state === "pending" || s.state === "interrupted");
+  return !!s && ["pending", "interrupted", "paused"].includes(s.state);
+}
+
+/** Stop accepting the old chat's result without discarding the issued task. */
+export function pauseDirectStudy(e: Encounter): boolean {
+  const s = sessionOf(e);
+  if (!s || !["pending", "interrupted"].includes(s.state)) return false;
+  s.state = "paused";
+  delete s.error;
+  delete s.transportPhase;
+  delete s.transportPhaseAt;
+  return true;
+}
+
+/** A fresh delivery identity prevents an old chat's completion being reused. */
+export function resumeDirectStudyInNewChat(
+  g: Game,
+  e: Encounter,
+  r: Roadmap,
+  onChange?: () => void,
+): Promise<void> {
+  const previous = sessionOf(e);
+  if (previous?.state !== "paused") return Promise.resolve();
+  const payload = JSON.parse(previous.payloadJson);
+  const id = `direct-${crypto.randomUUID()}`;
+  payload.requestId = id;
+  previous.state = "superseded";
+  e.directStudy = {
+    id,
+    createdAt: Date.now(),
+    provider: previous.provider,
+    payloadJson: JSON.stringify(payload),
+    questionFingerprint: previous.questionFingerprint,
+    state: "interrupted",
+  };
+  newStudyChat();
+  return retryDirectStudy(g, e, r, onChange);
 }
 
 const hex = (buffer: ArrayBuffer) =>
@@ -143,6 +200,7 @@ function ownedElsewhere(e: Encounter) {
 function buildPayload(
   g: Game,
   e: Encounter,
+  r: Roadmap,
   id: string,
   fingerprint: string,
   guidance?: string,
@@ -151,6 +209,10 @@ function buildPayload(
   const runId = e.runId ?? g.id;
   const track = problem.contract.track;
   const context = knowledgeProbeContext(g, track);
+  const supportsTopicAssessments =
+    status().capabilities.includes("topic-assessments");
+  const responseFormat: Record<string, unknown> = { ...DIRECT_STUDY_FORMAT };
+  if (!supportsTopicAssessments) delete responseFormat.topicAssessments;
   return {
     requestId: id,
     sessionId: `${runId}/${e.id}/private`,
@@ -176,8 +238,19 @@ function buildPayload(
       : {}),
     probe: encounterProbeContract(e, problem),
     probeHistory: (e.probe?.turns ?? []).slice(-16),
-    instruction: DIRECT_STUDY_INSTRUCTION,
-    responseFormat: DIRECT_STUDY_FORMAT,
+    instruction: supportsTopicAssessments
+      ? DIRECT_STUDY_INSTRUCTION
+      : DIRECT_STUDY_INSTRUCTION.replace(TOPIC_ASSESSMENT_INSTRUCTION, ""),
+    responseFormat,
+    ...(supportsTopicAssessments
+      ? {
+          topicAssessmentContext: topicAssessmentContext(
+            g,
+            r,
+            problem.contract,
+          ),
+        }
+      : {}),
     learning: problem.contract,
     scopeDefinitions: problem.scopeDefinitions ?? [],
     ...(context ? { knowledgeContext: context } : {}),
@@ -208,6 +281,7 @@ export async function beginDirectStudy(
   if (g.encounters[e.id] !== e) throw Error("Encounter is not in this run");
   if (!e.problem) throw Error("No issued question to study");
   const current = sessionOf(e);
+  if (current?.state === "paused") return;
   if (current && inFlight.has(current)) return;
   if (!connected(g)) {
     e.error =
@@ -235,10 +309,14 @@ export async function beginDirectStudy(
       "The question or saved work changed; this captured question is retained but cannot award.";
   } else if (current?.state === "applied") return;
   if (e.state === "consumed") return;
+  // Standalone practice follows the same rotation without granting curriculum
+  // credit. Live issuance remains source-bound through presentProblem.
+  if (e.studyOnly && g.study.profile === "development")
+    beginVisit(r, g.study, e);
   presentProblem(g, e, r);
   const runId = e.runId ?? g.id;
   const id = `direct-${runId}-${e.id}-${fingerprint.slice(0, 16)}`;
-  const payload = buildPayload(g, e, id, fingerprint, options?.guidance);
+  const payload = buildPayload(g, e, r, id, fingerprint, options?.guidance);
   const session: DirectStudySessionRecord = {
     id,
     provider: DIRECT_PROVIDER,
@@ -269,6 +347,7 @@ interface ValidResponse {
   questionFingerprint: string;
   transcript: Transcript[];
   probe: ProbeReply;
+  topicAssessments: { topicId: string; text: string }[];
 }
 
 const isRecord = (x: unknown): x is Record<string, unknown> =>
@@ -280,6 +359,7 @@ export function validateDirectResponse(
   fingerprint: string,
   facets: ProbeFacet[],
   previous: ProbeFinding[] = [],
+  topicScope?: { topics: string[]; required: boolean },
 ): ValidResponse {
   if (!isRecord(answer)) throw Error("Invalid direct study response");
   if (
@@ -292,6 +372,7 @@ export function validateDirectResponse(
           "questionFingerprint",
           "transcript",
           "knowledge",
+          "topicAssessments",
         ].includes(key),
     )
   )
@@ -308,6 +389,11 @@ export function validateDirectResponse(
     throw Error("Invalid direct study final text");
   if (answer.outcome !== "solved" && answer.outcome !== "gap")
     throw Error("Direct study outcome must be solved or gap");
+  const topicAssessments = validateTopicAssessments(
+    answer.topicAssessments,
+    topicScope?.topics ?? [],
+    topicScope?.required ?? false,
+  );
   const raw = answer.transcript;
   if (
     !Array.isArray(raw) ||
@@ -458,6 +544,7 @@ export function validateDirectResponse(
     questionFingerprint: fingerprint,
     transcript,
     probe,
+    topicAssessments,
   };
 }
 
@@ -469,6 +556,9 @@ function digestOf(v: ValidResponse) {
       knowledge: v.knowledge ?? null,
       questionFingerprint: v.questionFingerprint,
       transcript: v.transcript,
+      ...(v.topicAssessments.length
+        ? { topicAssessments: v.topicAssessments }
+        : {}),
     }),
   );
 }
@@ -495,6 +585,8 @@ export function retryDirectStudy(
         throw Error(
           "Reconnect ChatGPT with direct study support to resume this exact question",
         );
+      if (s.createdAt !== undefined && !Number.isFinite(s.createdAt))
+        throw Error("Saved direct question has an invalid creation time");
       const rawPayload = JSON.parse(s.payloadJson);
       if (
         !isRecord(rawPayload) ||
@@ -529,6 +621,8 @@ export function retryDirectStudy(
       )
         throw Error("Saved direct question has an invalid immutable identity");
       const check = async () => {
+        if (s.createdAt !== undefined && !Number.isFinite(s.createdAt))
+          throw Error("Saved direct question has an invalid creation time");
         if ((g.encounters[e.id] !== e && !archived()) || sessionOf(e) !== s)
           throw Error("This question was replaced; no result applied");
         if (s.state !== "pending") throw Error("Session is no longer pending");
@@ -600,6 +694,10 @@ export function retryDirectStudy(
         s.questionFingerprint,
         facets,
         previous,
+        {
+          topics: topicAssessmentTopics(payload.problem.contract),
+          required: !!payload.topicAssessmentContext,
+        },
       );
       const digest = await digestOf(valid);
       await check();
@@ -716,6 +814,14 @@ export function retryDirectStudy(
         // but its exact human artifacts still deserve a scoped assessment.
         void assess(g, e, r, g.seq).then(onChange, onChange);
       }
+      if (valid.topicAssessments.length)
+        recordTopicAssessments(g, e, valid.topicAssessments, {
+          requestId: s.id,
+          questionFingerprint: s.questionFingerprint,
+          sourceHash:
+            payload.topicAssessmentContext?.sourceHash ?? r.sourceHash,
+          startedAt: s.createdAt,
+        });
       s.state = "applied";
       s.responseDigest = digest;
       s.appliedAt = Date.now();
@@ -724,6 +830,7 @@ export function retryDirectStudy(
     } catch (error) {
       if (
         (s.state as string) === "superseded" ||
+        (s.state as string) === "paused" ||
         (s.state as string) === "applied"
       )
         return;

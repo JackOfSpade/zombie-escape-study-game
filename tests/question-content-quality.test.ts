@@ -22,6 +22,45 @@ test("T12.4 import counts add up to the stated file size", () => {
   assert.equal(inserted + rejected + dupes + unprocessed, total);
 });
 
+test("archive planning elicits priorities and explicit deferrals instead of a numerical layer split", () => {
+  const { prompt, rubric } = deliveryQuestions["PE:T13.2"];
+  assert.match(prompt, /Rank the behaviors/);
+  assert.match(prompt, /failure consequences and any likelihood assumptions/);
+  assert.match(prompt, /top three individual tests/);
+  assert.match(
+    prompt,
+    /what coverage would you defer and what risk would remain/,
+  );
+  assert.match(prompt, /no codebase is supplied/);
+  assert.match(prompt, /State reasonable assumptions/);
+  assert.match(prompt, /API integration means a server request/);
+  assert.match(prompt, /E2E means a browser user journey/);
+  assert.match(
+    prompt,
+    /exercise simplification, not an estimate of equal effort/,
+  );
+  assert.doesNotMatch(prompt, /eight tests|one end-to-end suite/);
+  assert.match(rubric[0], /Rank behaviors/);
+  assert.match(rubric[0], /accept different defensible orders/);
+  assert.match(rubric[2], /no exact allocation/);
+  assert.match(rubric[3], /deferred coverage and remaining risk/);
+  // Failure and threshold criteria must be supplied scenario facts, rather
+  // than implementation details the learner has to guess.
+  assert.match(
+    prompt,
+    /up to and including 1,000 files completes in the request/,
+  );
+  assert.match(prompt, /more than 1,000 files uses a background job/);
+  assert.match(prompt, /remain active and editable with all files intact/);
+  assert.match(prompt, /owner must see the failure/);
+  assert.match(
+    prompt,
+    /Unarchive restores visibility.*editing.*all files intact/,
+  );
+  assert.match(prompt, /boundary cases of exactly 1,000 and 1,001 files/);
+  assert.match(rubric[1], /1,000 versus 1,001/);
+});
+
 test("T12.2 trace is fully determined by the supplied start state", () => {
   const { prompt, rubric } = deliveryQuestions["PE:T12.2"];
   let status = prompt.match(/stored status is "(\w+)"/)![1];

@@ -1924,7 +1924,7 @@ export function complete(
     e.revision = submission.revision;
   }
   e.chatOpen = false;
-  for (const id of new Set(contributors)) {
+  for (const id of e.studyOnly ? [] : new Set(contributors)) {
     const a = g.survivors.find((s) => s.id === id);
     if (
       !a ||
@@ -1940,7 +1940,9 @@ export function complete(
   const ev = event(
     g,
     "completion",
-    `${e.mode === "shared" ? "Shared" : "Solo"} ${e.reward === "stairs" ? "stair credential" : "cache"} unlocked. ${provenance}`,
+    e.studyOnly
+      ? `Study question completed. ${provenance}`
+      : `${e.mode === "shared" ? "Shared" : "Solo"} ${e.reward === "stairs" ? "stair credential" : "cache"} unlocked. ${provenance}`,
     e.floor,
     undefined,
     e.id,

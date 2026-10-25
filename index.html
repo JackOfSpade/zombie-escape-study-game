@@ -5,6 +5,24 @@
     <meta name="viewport" content="width=device-width,initial-scale=1" />
     <meta name="theme-color" content="#101b1d" />
     <title>zombie-escape-study-game</title>
+    <script>
+      try {
+        if (localStorage.getItem("learning-workspace-view-v1") === "1") {
+          document.documentElement.classList.add("study-only");
+          document.title = "Learning workspace";
+        }
+      } catch {}
+    </script>
+    <style>
+      html.study-only {
+        background: #11151d;
+        color-scheme: dark;
+      }
+      html.study-only .game-layout,
+      html.study-only #pause-menu {
+        display: none !important;
+      }
+    </style>
   </head>
   <body>
     <div id="app"></div>

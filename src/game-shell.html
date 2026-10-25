@@ -1,5 +1,8 @@
 <div class="game-layout">
   <header aria-label="Game controls">
+    <button id="study-only-toggle" class="quiet game-control">
+      Study only
+    </button>
     <button
       id="pause-toggle"
       class="quiet game-control"
@@ -291,12 +294,47 @@
     </section>
   </main>
 </div>
+<section id="study-workspace" aria-label="Learning workspace" hidden>
+  <div class="study-workspace-inner">
+    <div class="study-workspace-heading">
+      <div>
+        <span class="study-label">PERSONAL DEVELOPMENT</span>
+        <h1>Learning workspace</h1>
+      </div>
+      <button id="study-only-exit" class="quiet">Exit study view</button>
+    </div>
+    <p class="study-intro">
+      A focused space for your next question and learning progress.
+    </p>
+    <div id="study-progress" class="study-progress"></div>
+    <section class="study-session" aria-labelledby="study-session-title">
+      <span class="study-label">CURRENT SESSION</span>
+      <h2 id="study-session-title" tabindex="-1">Continue learning</h2>
+      <p>
+        Copy the request into a new ChatGPT chat. Answer there in your own
+        words; your result returns here when the question is finished.
+      </p>
+      <div class="study-actions">
+        <button id="study-next">Start next question</button>
+        <button id="study-review-retry" class="quiet" hidden>
+          Retry progress review
+        </button>
+        <button id="study-save-retry" class="quiet" hidden>Retry saving</button>
+      </div>
+      <p id="study-message" role="status" aria-live="polite"></p>
+      <p id="study-save-status" role="status" aria-live="polite"></p>
+      <div id="study-connection-slot"></div>
+    </section>
+    <footer>Learning records are saved with your existing progress.</footer>
+  </div>
+</section>
 <dialog id="pause-menu" aria-labelledby="pause-title">
   <div id="pause-home">
     <span class="eyebrow">ZOMBIE ESCAPE</span>
     <h2 id="pause-title">Game paused</h2>
     <p id="pause-description">Take a breather. Your progress is saved.</p>
     <button id="resume-game">Resume · Esc</button>
+    <button id="study-only-menu" class="quiet">Study only</button>
     <button
       id="settings-toggle"
       class="quiet"

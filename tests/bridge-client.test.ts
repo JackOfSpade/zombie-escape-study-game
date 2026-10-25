@@ -254,3 +254,110 @@ test("a closed study session stops renewing its queued relay job", async (t) => 
   );
   assert.equal(polls, 0);
 });
+
+test("malformed relay metadata cannot claim an active study listener", async () => {
+  const { relayServes } = await import("../src/bridge-client");
+  for (const info of [
+    null,
+    [],
+    { public: { terminalRelay: { activeSessions: "2" } } },
+    { public: { terminalRelay: { activeSessions: Infinity } } },
+    { public: { terminalRelay: { activeSessions: true } } },
+  ])
+    assert.equal(relayServes(info), false);
+  assert.equal(
+    relayServes({ public: { terminalRelay: { sessions: 2 } } }),
+    true,
+  );
+  assert.equal(relayServes({ public: { workerActive: true } }), true);
+});
+
+test("invalid bridge response bodies report a protocol error instead of a property access failure", async (t) => {
+  const original = globalThis.fetch;
+  t.after(() => {
+    globalThis.fetch = original;
+  });
+  for (const body of [null, [], "invalid"]) {
+    globalThis.fetch = async (url) =>
+      url === "/api/status"
+        ? reply("chatgpt-handoff")
+        : Response.json(body, { status: 202 });
+    await checkBridge();
+    await assert.rejects(
+      bridgeRequest("tutor", {}),
+      /Invalid queued bridge receipt|Malformed bridge response/,
+    );
+  }
+});
+
+test("a session already closed before submission never releases a bridge request", async (t) => {
+  const original = globalThis.fetch;
+  t.after(() => {
+    globalThis.fetch = original;
+  });
+  let calls = 0;
+  globalThis.fetch = async () => {
+    calls++;
+    return Response.json({});
+  };
+  await assert.rejects(
+    bridgeRequest("tutor", {}, undefined, { isActive: () => false }),
+    /session closed/,
+  );
+  assert.equal(calls, 0);
+});
+
+test("successful non-JSON replies reject while HTTP errors preserve the bridge's message", async (t) => {
+  const original = globalThis.fetch;
+  t.after(() => {
+    globalThis.fetch = original;
+  });
+  globalThis.fetch = async () => new Response("<html>Proxy page</html>");
+  await assert.rejects(bridgeRequest("tutor", {}), /Malformed bridge response/);
+  globalThis.fetch = async () =>
+    new Response("Synthetic service failure", { status: 503 });
+  await assert.rejects(
+    bridgeRequest("tutor", {}),
+    /study bridge is not running/,
+  );
+  globalThis.fetch = async () =>
+    new Response("Synthetic request refusal", { status: 400 });
+  await assert.rejects(bridgeRequest("tutor", {}), /Synthetic request refusal/);
+});
+
+test("hung result polls have a short deadline and exhaust the outage grace instead of waiting for the whole conversation budget", async (t) => {
+  const originalFetch = globalThis.fetch;
+  const originalTimeout = AbortSignal.timeout;
+  const originalNow = Date.now;
+  t.after(() => {
+    globalThis.fetch = originalFetch;
+    AbortSignal.timeout = originalTimeout;
+    Date.now = originalNow;
+  });
+  let now = 1000,
+    polls = 0;
+  Date.now = () => now;
+  AbortSignal.timeout = (ms) => originalTimeout(ms === 5000 ? 10 : ms);
+  globalThis.fetch = async (url, init) => {
+    if (url === "/api/status") return reply("chatgpt-handoff");
+    if (url === "/api/bridge")
+      return Response.json(
+        { handoff: { id: "hung", hash: "saved" } },
+        { status: 202 },
+      );
+    polls++;
+    return new Promise<Response>((_resolve, reject) => {
+      init!.signal!.addEventListener(
+        "abort",
+        () => {
+          now += BRIDGE_OUTAGE_GRACE_MS + 1;
+          reject(init!.signal!.reason);
+        },
+        { once: true },
+      );
+    });
+  };
+  await checkBridge();
+  await assert.rejects(bridgeRequest("tutor", {}), /stopped answering/);
+  assert.equal(polls, 2);
+});

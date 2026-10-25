@@ -13,6 +13,7 @@ import {
 } from "../src/knowledge-probe";
 import type { Problem, Roadmap } from "../src/model";
 import { createPlayableGame } from "../src/world";
+import { QUESTION_ADAPTATION_GUIDANCE } from "../scripts/lib/study-question-policy.mjs";
 
 const roadmap: Roadmap = JSON.parse(
   readFileSync("public/curriculum.json", "utf8"),
@@ -114,6 +115,7 @@ test("a clarification-only terminal turn receives the clarity policy and preserv
       encounterProbeContract(e, e.problem).stance,
     );
     for (const policy of [packet.instruction, packet.probe.stance]) {
+      assert.ok(policy.includes(QUESTION_ADAPTATION_GUIDANCE));
       assert.match(policy, /check whether the prompt is ambiguous/);
       assert.match(policy, /Acknowledge missing facts and clarify/);
       assert.match(policy, /identify any added facts as a clarification/);

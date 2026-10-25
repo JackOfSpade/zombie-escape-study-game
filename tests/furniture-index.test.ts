@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 import type { Roadmap } from "../src/model";
+import { TestRunner } from "../src/gametest/runner";
+import { emptyScenario } from "../src/gametest/schema";
 import {
   beginFurnitureIndex,
   endFurnitureIndex,
@@ -83,4 +85,34 @@ test("the index covers furniture that moves within a step, and falls back outsid
     endFurnitureIndex();
   }
   assert.equal(furnitureNear(f, o, 0.22), undefined, "outside a step");
+});
+
+test("a new step rebuilds buckets after furniture moves beyond the previous step's allowance", () => {
+  // JSON scenarios do not expose point-query cache state; use the typed lab
+  // world to inspect the same broad phase used by normal engine steps.
+  const scenario = emptyScenario();
+  scenario.entities = [
+    { id: "human", kind: "player", x: 2.5, y: 2.5 },
+    { id: "moved-chair", kind: "chair", x: 8.5, y: 8.5 },
+  ];
+  const g = new TestRunner(scenario, r).game;
+  const f = g.floors[0];
+  const o = f.furniture.find((x) => x.id === "moved-chair")!;
+  beginFurnitureIndex(g.floors);
+  try {
+    assert.ok(furnitureNear(f, o, 0.22)!.includes(o));
+  } finally {
+    endFurnitureIndex();
+  }
+  // Many ordinary ticks can move a carried prop well beyond its old buckets.
+  o.x = o.x < 22 ? 35.5 : 8.5;
+  o.y = 16.5;
+  assert.equal(furnitureNear(f, o, 0.22), undefined);
+  beginFurnitureIndex(g.floors);
+  try {
+    assert.ok(furnitureNear(f, o, 0.22)!.includes(o));
+    assert.equal(solid(f, o, 0.22), true);
+  } finally {
+    endFurnitureIndex();
+  }
 });

@@ -1,5 +1,9 @@
+import { latestTopicAssessment } from "./topic-assessment";
+import { studyTrackSummary } from "./study-progress";
 import {
   beginDirectStudy,
+  pauseDirectStudy,
+  resumeDirectStudyInNewChat,
   resumeDirectStudies,
   retryDirectStudy,
   unfinishedDirectStudy,
@@ -118,6 +122,16 @@ import {
   reviewWorkspaceProposal,
 } from "./workspace-proposals";
 import { createPlayableGame as createGame } from "./world";
+import {
+  enterStudyWorkspace,
+  exitStudyWorkspace,
+  nextWorkspaceQuestion,
+  workspaceQuestion,
+  workspaceAssessment,
+  workspaceSelectedQuestion,
+  workspaceProgressHtml,
+  STUDY_VIEW_KEY,
+} from "./study-workspace";
 const $ = <T extends HTMLElement = HTMLElement>(s: string) =>
   document.querySelector<T>(s)!;
 const app = $("#app");
@@ -208,6 +222,12 @@ void (async () => {
 app.innerHTML = gameShell;
 const canvas = $<HTMLCanvasElement>("#world"),
   editor = $<HTMLTextAreaElement>("#workspace");
+const nativeStudyHome = document.createComment("study connection home");
+$("#native-study").before(nativeStudyHome);
+let studyStarting = false;
+let studySaving = false;
+let studySaveStatus = "";
+let studySaveGeneration = 0;
 syncDisplayScale();
 let saveToken = 0;
 async function persist() {
@@ -221,7 +241,9 @@ async function persist() {
     return true;
   } catch (err) {
     if (token === saveToken)
-      saveError = `Save failed: ${String(err)}. Export a run backup.`;
+      saveError = game.studyWorkspace?.enabled
+        ? `Save failed: ${String(err)}. Your result is still in this tab. Retry saving before leaving.`
+        : `Save failed: ${String(err)}. Export a run backup.`;
     return false;
   }
 }
@@ -303,7 +325,22 @@ function nativeStudyChanged() {
     });
   }
   renderNativeStudy();
-  void persist();
+  void saveStudySession();
+}
+async function saveStudySession() {
+  const saveGeneration = ++studySaveGeneration;
+  const savedGame = game;
+  if (game.studyWorkspace?.enabled) {
+    studySaving = true;
+    studySaveStatus = "";
+    renderStudyWorkspace();
+  }
+  await persist().then((saved) => {
+    if (saveGeneration !== studySaveGeneration || game !== savedGame) return;
+    studySaving = false;
+    studySaveStatus = saved ? "Learning result received and saved." : saveError;
+    if (game.studyWorkspace?.enabled) renderStudyWorkspace();
+  });
 }
 async function launchNativeQuestion(e: Encounter) {
   const requestGame = game;
@@ -334,12 +371,16 @@ async function launchNativeQuestion(e: Encounter) {
 function renderNativeStudy() {
   const e =
     currentNativeQuestion() ??
+    (game.studyWorkspace?.enabled
+      ? workspaceSelectedQuestion(game)
+      : undefined) ??
     (lastQuestion ? game.encounters[lastQuestion] : undefined);
   const panel = $("#native-study");
   panel.hidden =
     !e || (!e.directStudy && !e.error && !e.pendingGeneration && !e.generation);
   if (panel.hidden || !e) return;
   const session = e.directStudy;
+  const stopped = session?.state === "paused";
   const archived =
     game.study.archives.includes(e) ||
     (e.runId !== undefined && e.runId !== game.id);
@@ -350,28 +391,46 @@ function renderNativeStudy() {
   );
   setText(
     "#native-study-status",
-    session?.state === "applied"
-      ? ended
-        ? "Learning saved. This run has ended."
-        : "Question complete. Result saved."
-      : ((reconnectBusy ? reconnectProgress : null) ??
-          (e.generation
-            ? "Preparing your saved question. You can keep watching the game while it is generated."
-            : (session?.error ??
-              e.error ??
-              (e.pendingGeneration
-                ? "Question generation was interrupted. Retry the saved request."
-                : undefined) ??
-              (ended
-                ? archived
-                  ? "Finish the previous run's question in ChatGPT. Learning is saved, with no key for this run."
-                  : "Continue in ChatGPT. Your learning still counts; this run awards no more keys."
+    stopped
+      ? "Question stopped and saved. Resume in a new ChatGPT chat when you’re ready. Earlier chat messages stay in the original chat; results from that chat will not be applied."
+      : game.studyWorkspace?.enabled
+        ? session?.state === "applied"
+          ? "ChatGPT result received."
+          : ((reconnectBusy ? reconnectProgress : null) ??
+            session?.error ??
+            e.error ??
+            (e.generation
+              ? "Preparing your next study question…"
+              : e.pendingGeneration
+                ? "Preparation interrupted. Retry the saved request."
                 : session?.transportPhase === "working"
-                  ? "Continue in this terminal's existing ChatGPT chat. Waiting for its completion; no key received yet. If ChatGPT finished but reported an error, copy the completion retry into that same chat."
-                  : "Copy the ChatGPT request and paste it into a new ChatGPT chat. Each terminal uses its own chat.")))),
+                  ? "Question opened in ChatGPT. Continue in that chat; waiting for its result."
+                  : "Question ready. Copy the request into a new ChatGPT chat to begin."))
+        : session?.state === "applied"
+          ? ended
+            ? "Learning saved. This run has ended."
+            : "Question complete. Result saved."
+          : ((reconnectBusy ? reconnectProgress : null) ??
+            (e.generation
+              ? "Preparing your saved question. You can keep watching the game while it is generated."
+              : (session?.error ??
+                e.error ??
+                (e.pendingGeneration
+                  ? "Question generation was interrupted. Retry the saved request."
+                  : undefined) ??
+                (ended
+                  ? archived
+                    ? "Finish the previous run's question in ChatGPT. Learning is saved, with no key for this run."
+                    : "Continue in ChatGPT. Your learning still counts; this run awards no more keys."
+                  : session?.transportPhase === "working"
+                    ? "Continue in this terminal's existing ChatGPT chat. Waiting for its completion; no key received yet. If ChatGPT finished but reported an error, copy the completion retry into that same chat."
+                    : "Copy the ChatGPT request and paste it into a new ChatGPT chat. Each terminal uses its own chat.")))),
   );
   $("#native-study-finish").hidden =
     session?.state !== "pending" || session.transportPhase !== "working";
+  $("#native-study-copy").hidden =
+    stopped || (!!game.studyWorkspace?.enabled && session?.state === "applied");
+  if (stopped) $("#native-study-request").hidden = true;
   $("#native-study-retry").hidden = session
     ? session.state !== "interrupted"
     : !!e.generation || (!e.problem && !e.error && !e.pendingGeneration);
@@ -406,11 +465,13 @@ $("#native-study-copy").onclick = () => {
       $("#native-study-request").hidden = true;
       game.notice =
         "Copied. Start a new ChatGPT chat and paste the request there.";
+      if (game.studyWorkspace?.enabled) setText("#study-message", game.notice);
     },
     () => {
       manualNativeRequest(terminalRequest());
       game.notice =
         "Clipboard unavailable. Select and copy the request below, including its chat code.";
+      if (game.studyWorkspace?.enabled) setText("#study-message", game.notice);
     },
   );
 };
@@ -427,11 +488,13 @@ $("#native-study-finish").onclick = () => {
       $("#native-study-request").hidden = true;
       game.notice =
         "Copied. Paste the completion retry into this terminal's existing ChatGPT chat.";
+      if (game.studyWorkspace?.enabled) setText("#study-message", game.notice);
     },
     () => {
       manualNativeRequest(prompt);
       game.notice =
         "Clipboard unavailable. Select and copy the completion retry below into the existing ChatGPT chat.";
+      if (game.studyWorkspace?.enabled) setText("#study-message", game.notice);
     },
   );
 };
@@ -565,6 +628,283 @@ $("#pause-menu").addEventListener("cancel", (event) => {
   if (pausePanel) closePanel(pausePanel);
   else setPaused(false);
 });
+function setStudyMode(enabled: boolean) {
+  keys.clear();
+  acc = 0;
+  closeTerminal();
+  if (enabled) {
+    enterStudyWorkspace(game);
+    const current = workspaceQuestion(game);
+    if (current) {
+      game.studyWorkspace!.encounter = encounterKey(current);
+      lastQuestion = current.id;
+    }
+    audio.stop();
+    document.body.classList.remove("agent-tools", "surge");
+    $<HTMLDialogElement>("#pause-menu").close();
+    $("#study-connection-slot").append($("#native-study"));
+  } else {
+    exitStudyWorkspace(game);
+    nativeStudyHome.after($("#native-study"));
+  }
+  document.documentElement.classList.toggle("study-only", enabled);
+  document.title = enabled ? "Learning workspace" : "zombie-escape-study-game";
+  $(".game-layout").hidden = enabled;
+  $("#study-workspace").hidden = !enabled;
+  try {
+    if (enabled) localStorage.setItem(STUDY_VIEW_KEY, "1");
+    else localStorage.removeItem(STUDY_VIEW_KEY);
+  } catch {
+    /* The regular game save also retains this view. */
+  }
+  if (enabled) {
+    renderStudyWorkspace();
+    renderNativeStudy();
+    $(workspaceQuestion(game) ? "#study-session-title" : "#study-next").focus({
+      preventScroll: true,
+    });
+  } else if (game.paused) setPaused(true);
+  else {
+    if (simulationActive(game)) {
+      audio.start();
+      audio.update(game);
+    }
+    canvas.focus();
+  }
+  void persist();
+}
+
+const expandedStudyTopics = new Set<string>();
+function renderTopicAssessments() {
+  const current = workspaceQuestion(game)?.problem?.contract;
+  for (const node of $("#study-progress").querySelectorAll<HTMLElement>(
+    ".study-map-topic",
+  )) {
+    const topicId = node.dataset.topicKey ?? "";
+    const parsed = /^(PY|PE):([TXI]\d{2})$/.exec(topicId);
+    const tier = Number(node.dataset.tier);
+    const button = node.querySelector<HTMLElement>(".study-topic-toggle");
+    const panel = node.querySelector<HTMLElement>(
+      ".study-topic-assessment-panel",
+    );
+    if (!parsed || !button || !panel) continue;
+    const expanded = expandedStudyTopics.has(`${topicId}/D${tier}`);
+    button.setAttribute("aria-expanded", String(expanded));
+    panel.hidden = !expanded;
+    // The branch joins the header, even when the assessment makes the card taller.
+    node.style.setProperty(
+      "--study-topic-junction",
+      `${button.getBoundingClientRect().height / 2}px`,
+    );
+    if (!expanded) continue;
+    const record = latestTopicAssessment(
+      game.study,
+      topicId,
+      roadmap.sourceHash,
+    );
+    const hasAssessment =
+      typeof record?.text === "string" && record.text.trim().length > 0;
+    const date =
+      record?.updatedAt && Number.isFinite(Date.parse(record.updatedAt))
+        ? new Date(record.updatedAt).toLocaleString()
+        : "";
+    const text = (selector: string, value: string) => {
+      const target = panel.querySelector<HTMLElement>(selector);
+      if (target) setNodeText(target, value);
+    };
+    text(
+      ".study-topic-assessment-meta",
+      `Tier ${tier}${hasAssessment && record.depth !== tier ? ` · Latest assessment after a Tier ${record.depth} question` : ""}${hasAssessment && date ? ` · Updated ${date}` : ""}`,
+    );
+    const inProgress =
+      current?.track === parsed[1] &&
+      current.objectiveIds.some((id) => id.split(".")[0] === topicId);
+    text(
+      ".study-topic-assessment-status",
+      record?.sourceHash && record.sourceHash !== roadmap.sourceHash
+        ? "The roadmap has changed since this assessment was written."
+        : !status().capabilities.includes("topic-assessments") &&
+            status().mode === "chatgpt-handoff"
+          ? "Assessment updates need the updated study bridge. Finish any active question, then restart the bridge and refresh this connector’s tools."
+          : hasAssessment && inProgress
+            ? "A question on this topic is in progress. This assessment updates when it finishes."
+            : "",
+    );
+    text(
+      ".study-topic-assessment-body",
+      hasAssessment
+        ? record.text
+        : "No AI assessment saved yet. This topic’s assessment updates after you finish a question on it.",
+    );
+  }
+}
+function toggleTopicAssessment(button: HTMLElement) {
+  const node = button.closest<HTMLElement>(".study-map-topic");
+  if (!node) return;
+  const key = `${node.dataset.topicKey}/D${node.dataset.tier}`;
+  if (expandedStudyTopics.has(key)) expandedStudyTopics.delete(key);
+  else expandedStudyTopics.add(key);
+  renderTopicAssessments();
+}
+
+function renderStudyWorkspace() {
+  if (!game.studyWorkspace?.enabled) return;
+  const progress = $("#study-progress");
+  const previousMarker =
+    progress.querySelector<HTMLElement>(".study-skill-map")?.dataset
+      .currentMarker;
+  const mapPositions = new Map(
+    [...progress.querySelectorAll<HTMLElement>(".study-map-scroll")].map(
+      (node) => [node.dataset.tier, node.scrollTop],
+    ),
+  );
+  setHtml(progress, workspaceProgressHtml(game, roadmap));
+  renderTopicAssessments();
+  for (const scroller of progress.querySelectorAll<HTMLElement>(
+    ".study-map-scroll",
+  )) {
+    scroller.scrollTop = mapPositions.get(scroller.dataset.tier) ?? 0;
+  }
+  const marker =
+    progress.querySelector<HTMLElement>(".study-skill-map")?.dataset
+      .currentMarker;
+  const currentTopic = progress.querySelector<HTMLElement>(
+    ".study-map-topic.is-current",
+  );
+  const mapScroller = currentTopic?.closest(".study-map-scroll");
+  if (
+    marker?.startsWith("issued:") &&
+    marker !== previousMarker &&
+    currentTopic &&
+    mapScroller
+  ) {
+    mapScroller.scrollTop +=
+      currentTopic.getBoundingClientRect().top -
+      mapScroller.getBoundingClientRect().top -
+      24;
+  }
+  const current = workspaceQuestion(game);
+  const stopped = current?.directStudy?.state === "paused";
+  const canStop =
+    current?.directStudy?.state === "pending" ||
+    current?.directStudy?.state === "interrupted";
+  const assessment = workspaceAssessment(game);
+  const next = $<HTMLButtonElement>("#study-next");
+  next.disabled =
+    !canStop &&
+    (studyStarting ||
+      (!!current && !stopped) ||
+      studySaving ||
+      !!saveError ||
+      (assessment !== undefined && assessment.status !== "applied"));
+  next.textContent = canStop
+    ? "Stop question"
+    : stopped
+      ? "Resume in new chat"
+      : studyStarting
+        ? "Preparing question…"
+        : current
+          ? "Question in progress"
+          : "Start next question";
+  $("#study-review-retry").hidden = assessment?.status !== "review-required";
+  $("#study-save-retry").hidden = !saveError;
+  const e = workspaceSelectedQuestion(game);
+  const received = e?.directStudy?.state === "applied";
+  const saved = received && !studySaving && !saveError;
+  setText(
+    "#study-save-status",
+    saveError ||
+      (studySaving
+        ? received
+          ? "Saving learning result…"
+          : "Saving study session…"
+        : received
+          ? `${studySaveStatus || "Learning result received and saved."}${
+              assessment?.status === "pending"
+                ? " Progress assessment is pending."
+                : assessment?.status === "review-required"
+                  ? " Progress review needs attention; retry below."
+                  : assessment?.status === "applied"
+                    ? " Progress assessment validated and saved."
+                    : ""
+            }`
+          : ""),
+  );
+  $("#study-save-status").classList.toggle("saved", !!saved);
+}
+
+$("#study-progress").addEventListener("click", (event) => {
+  if (!(event.target instanceof Element)) return;
+  const clicked = event.target.closest<HTMLElement>(
+    "[data-study-topic-toggle]",
+  );
+  if (clicked) {
+    toggleTopicAssessment(clicked);
+    return;
+  }
+  if (!event.target.closest("[data-study-locate]")) return;
+  const progress = $("#study-progress");
+  const key = progress.querySelector<HTMLElement>(".study-current-topic")
+    ?.dataset.topicKey;
+  const topic = [
+    ...progress.querySelectorAll<HTMLElement>(".study-map-topic"),
+  ].find((node) => node.dataset.topicKey === key);
+  if (!topic) return;
+  (topic.querySelector(".study-topic-toggle") ?? topic).scrollIntoView({
+    block: "nearest",
+    behavior: "instant",
+  });
+});
+
+$("#study-only-toggle").onclick = () => setStudyMode(true);
+$("#study-only-menu").onclick = () => setStudyMode(true);
+$("#study-only-exit").onclick = () => setStudyMode(false);
+$("#study-save-retry").onclick = () => void saveStudySession();
+$("#study-next").onclick = async () => {
+  const current = workspaceQuestion(game);
+  if (current && pauseDirectStudy(current)) {
+    setText("#study-message", "");
+    nativeStudyChanged();
+    return;
+  }
+  if (current?.directStudy?.state === "paused") {
+    setText(
+      "#study-message",
+      "Resumed. Copy the request into a new ChatGPT chat to continue this question.",
+    );
+    void resumeDirectStudyInNewChat(game, current, roadmap, nativeStudyChanged);
+    return;
+  }
+  if (studyStarting) return;
+  studyStarting = true;
+  setText("#study-message", "");
+  try {
+    const previous = workspaceQuestion(game);
+    const e = nextWorkspaceQuestion(game, roadmap);
+    game.studyWorkspace!.encounter = encounterKey(e);
+    // Preserve a pending question's chat binding. Only a fresh task gets a new chat.
+    if (!previous) newStudyChat();
+    lastQuestion = e.id;
+    game.lastStudyEncounter = e.id;
+    if (unfinishedDirectStudy(e))
+      void retryDirectStudy(game, e, roadmap, nativeStudyChanged);
+    else await prepareNativeQuestion(e);
+  } catch (error) {
+    setText("#study-message", String(error));
+  } finally {
+    studyStarting = false;
+    renderStudyWorkspace();
+    renderNativeStudy();
+    void persist();
+  }
+};
+$("#study-review-retry").onclick = async () => {
+  const a = workspaceAssessment(game);
+  const e = workspaceSelectedQuestion(game);
+  if (!a || !e) return;
+  await assess(game, e, roadmap, a.evidenceCutoffSequence, true);
+  nativeStudyChanged();
+};
 window.addEventListener("error", (event) => {
   runLogs.record(game, "browser-error", {
     file: event.filename.split("/").pop(),
@@ -2243,6 +2583,7 @@ $("#live-profile").onclick = async () => {
   next.roadmapReconciliations = game.study.roadmapReconciliations ??= [];
   next.roadmapAdoptionBackups = game.study.roadmapAdoptionBackups ??= [];
   next.assessments = game.study.assessments;
+  next.topicAssessments = game.study.topicAssessments;
   next.roadmapExport = game.study.roadmapExport;
   activateCareerFocus(
     roadmap,
@@ -2302,6 +2643,8 @@ const PAN_KEYS = [
   "KeyD",
 ];
 window.addEventListener("keydown", (ev) => {
+  // Study view never reveals the game through Escape or gameplay shortcuts.
+  if (game.studyWorkspace?.enabled) return;
   if (ev.code === "Escape") {
     ev.preventDefault();
     if (ev.repeat || restarting) return;
@@ -2456,6 +2799,11 @@ function ui() {
     runLogs.error ||
     "Logs stay on this browser: newest 3 games, at most 256 KB each. Older diagnostics are deleted automatically; learning is retained.";
   syncLearningView(game.study);
+  if (game.studyWorkspace?.enabled) {
+    renderNativeStudy();
+    renderStudyWorkspace();
+    return;
+  }
   if (!game.paused) completionAssessments();
   renderNativeStudy();
   const a = human(game);
@@ -2554,20 +2902,17 @@ function ui() {
       };
   }
   for (const track of ["PY", "PE"] as const) {
-    const live = game.study.profile === "live",
-      state = game.study.learner?.tracks[track];
-    const count = roadmap.tracks[track].objectives.filter(
-      (o) =>
-        (live ? game.study.learner?.cells[o.id].states[0] : o.cells[0]) === "P",
-    ).length;
+    const progress = studyTrackSummary(roadmap, game.study, track);
+    const state = game.study.learner?.tracks[track];
+    const phase =
+      game.study.profile === "live" ? state?.phase : game.study.phases[track];
     $(`#${track.toLowerCase()}-phase`).textContent =
-      `Tier ${live ? (state?.tier ?? 1) : 1} · ${game.study.phases[track].toLowerCase().replaceAll("_", " ")}`;
-    $(`#${track.toLowerCase()}-total`).textContent = String(count).padStart(
-      2,
-      "0",
-    );
+      `Tier ${progress.tier} · ${(phase ?? "").toLowerCase().replaceAll("_", " ")}`;
+    $(`#${track.toLowerCase()}-total`).textContent = String(
+      progress.passed,
+    ).padStart(2, "0");
     $(`#${track.toLowerCase()}-count`).textContent =
-      `${count} / ${roadmap.tracks[track].objectives.length} D1 checkpoints verified`;
+      `${progress.passed} / ${progress.total} Tier ${progress.tier} checkpoints verified`;
   }
   const c = eligibleForUI();
   $("#schedule").textContent = c
@@ -2697,7 +3042,8 @@ function frame(time: number) {
       });
   }
   const renderStarted = performance.now();
-  render(canvas, game, spectating(game) ? view : undefined);
+  if (!game.studyWorkspace?.enabled)
+    render(canvas, game, spectating(game) ? view : undefined);
   const renderMs = performance.now() - renderStarted;
   if (time - lastUI > 200) {
     const uiStarted = performance.now();
@@ -2749,8 +3095,13 @@ Object.assign(window, {
   },
 });
 startCard();
-if (game.paused) setPaused(true);
-if (spectating(game)) {
+let restoreStudyView = !!game.studyWorkspace?.enabled;
+try {
+  restoreStudyView ||= localStorage.getItem(STUDY_VIEW_KEY) === "1";
+} catch {}
+if (restoreStudyView) setStudyMode(true);
+else if (game.paused) setPaused(true);
+if (!restoreStudyView && spectating(game)) {
   enterSpectator();
   if (currentNativeQuestion() || unfinishedLastQuestion(game, lastQuestion)) {
     $("#start-card").hidden = true;

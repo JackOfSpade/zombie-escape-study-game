@@ -130,7 +130,16 @@ export async function assess(
         );
     };
     checkSnapshot();
-    const response = await bridgeRequest("assess", payload, undefined, {
+    const response = await bridgeRequest<
+      Pick<
+        Assessment,
+        | "findings"
+        | "historicalMappings"
+        | "visitOutcome"
+        | "scopeReviews"
+        | "helpAttributions"
+      >
+    >("assess", payload, undefined, {
       nativeScope: nativeStudyScope(g, e),
     });
     checkSnapshot();

@@ -228,14 +228,20 @@ Three behaviors need protection: (a) a 15% discount on 999 cents rounds correctl
 
 - Only owners may archive; the server enforces it.
 - Archived projects disappear from the active list and become read-only.
-- Archiving a project with more than 1,000 files runs as a background job that can fail.
-- Unarchive restores everything.
+- Archiving up to and including 1,000 files completes in the request; more than 1,000 files uses a background job.
+- If that job fails, the project must remain active and editable with all files intact, and the owner must see the failure.
+- Unarchive restores visibility in the active list and editing, with all files intact.
 
-The team has budget for about eight tests across unit, API integration, and one end-to-end suite. Write a risk-based plan: list the tests, the layer for each, and what risk each covers. Include critical success, failure, permission, and boundary paths. Explain which behavior you deliberately test at only one layer.`,
+Propose a provisional plan; no codebase is supplied. State reasonable assumptions. Unit means isolated logic; API integration means a server request with backend components and a test database; E2E means a browser user journey through frontend and backend.
+
+Rank the behaviors by failure consequences and any likelihood assumptions. Cover archive/unarchive success, job failure, permission denial, and boundary cases of exactly 1,000 and 1,001 files. Describe each test, layer, and reason.
+
+With only your top three individual tests, what coverage would you defer and what risk would remain? Name one behavior covered at only one layer; justify avoiding duplication. The cap is an exercise simplification, not an estimate of equal effort. Different rankings and layer allocations are valid if justified. No code needed.`,
     rubric: [
-      "Cover success, background-job failure, non-owner permission denial, and the 1,000-file boundary",
-      "Assign each test to a justified layer while staying within about eight tests",
-      "Name behavior tested at only one layer and justify avoiding duplication",
+      "Rank behaviors by justified failure consequences and stated likelihood assumptions; accept different defensible orders rather than a hidden preferred ranking",
+      "Cover successful archiving and unarchiving, failed-job preservation and feedback, non-owner permission denial, and the synchronous/asynchronous boundary at 1,000 versus 1,001 files",
+      "Choose justified test layers under reasonable stated implementation assumptions; no exact allocation or codebase-specific precision is required",
+      "Identify the top three individual tests, deferred coverage and remaining risk; distinguish test count from effort and justify covering one behavior at only one layer",
     ],
   },
   "PE:T13.3": {

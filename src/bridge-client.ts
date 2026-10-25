@@ -1,4 +1,5 @@
 import type { Encounter, Game, Provider } from "./model";
+import { isRecord } from "./records";
 /** Provider transport only; gameplay and learning remain in their owning modules. */
 export interface BridgeStatus {
   mode: "development" | Provider;
@@ -49,10 +50,19 @@ export const BRIDGE_OUTAGE_GRACE_MS = 60_000;
  * from the last metadata poll. null until a poll has answered. */
 let listening: boolean | null = null;
 export const relayListening = () => listening;
-export const relayServes = (info: any) =>
-  (info?.public?.terminalRelay?.activeSessions ??
-    info?.public?.terminalRelay?.sessions ??
-    0) > 0 || info?.public?.workerActive === true;
+export function relayServes(info: unknown) {
+  if (!isRecord(info) || !isRecord(info.public)) return false;
+  const relay = info.public.terminalRelay;
+  const sessions = isRecord(relay)
+    ? (relay.activeSessions ?? relay.sessions)
+    : undefined;
+  return (
+    (typeof sessions === "number" &&
+      Number.isFinite(sessions) &&
+      sessions > 0) ||
+    info.public.workerActive === true
+  );
+}
 /** Legacy handoff turns wait at most 30 minutes. */
 export const HANDOFF_TIMEOUT_MS = 30 * 60_000;
 /** A direct native ChatGPT study session may run a whole conversation. */
@@ -105,9 +115,11 @@ export const studyChatCode = () => studyChat || newStudyChat();
  * parse failure in place of the real reason. */
 async function readJson(r: Response) {
   const text = await r.text();
+  let data: unknown;
   try {
-    return JSON.parse(text);
+    data = JSON.parse(text);
   } catch {
+    if (r.ok) throw Error("Malformed bridge response");
     if (r.status >= 502 && r.status <= 504)
       return {
         error:
@@ -115,6 +127,8 @@ async function readJson(r: Response) {
       };
     return { error: text.trim().slice(0, 200) || `Bridge HTTP ${r.status}` };
   }
+  if (!isRecord(data)) throw Error("Malformed bridge response");
+  return data;
 }
 export interface BridgeRequestOptions {
   /** Handoff wait budget; bounded to DIRECT_STUDY_TIMEOUT_MS. */
@@ -123,12 +137,15 @@ export interface BridgeRequestOptions {
   /** Stop renewing a released job after its owning session closes. */
   isActive?: () => boolean;
 }
-export async function bridgeRequest(
+/** T describes the operation reply; domain callers still validate its contents. */
+export async function bridgeRequest<T extends object = Record<string, unknown>>(
   operation: string,
   payload: unknown,
   onProgress?: (phase: HandoffProgress) => void,
   options?: BridgeRequestOptions,
 ) {
+  if (options?.isActive?.() === false)
+    throw Error("Study session closed; saved work retained");
   const provider = status().mode,
     handoff = provider === "chatgpt-handoff";
   const requested = options?.timeoutMs;
@@ -155,11 +172,12 @@ export async function bridgeRequest(
   if (r.status === 202) {
     if (
       !handoff ||
-      typeof data.handoff?.id !== "string" ||
-      typeof data.handoff?.hash !== "string"
+      !isRecord(data.handoff) ||
+      typeof data.handoff.id !== "string" ||
+      typeof data.handoff.hash !== "string"
     )
       throw Error("Invalid queued bridge receipt");
-    const receipt = data.handoff;
+    const receipt = { id: data.handoff.id, hash: data.handoff.hash };
     onProgress?.("queued");
     let nextProgressCheck = 0,
       unreachableSince = 0;
@@ -186,12 +204,13 @@ export async function bridgeRequest(
       try {
         const next = await fetch(
           `/api/bridge/result?id=${encodeURIComponent(receipt.id)}&hash=${encodeURIComponent(receipt.hash)}`,
-          { signal },
+          { signal: AbortSignal.any([signal, AbortSignal.timeout(5000)]) },
         );
         // A restarting relay or a dropped dev-server proxy answers 502-504.
         if (next.status >= 502 && next.status <= 504)
           throw Error("unavailable");
         const nextData = await next.json();
+        if (!isRecord(nextData)) throw Error("Malformed bridge response");
         r = next;
         data = nextData;
         unreachableSince = 0;
@@ -232,6 +251,9 @@ export async function bridgeRequest(
       }
     }
   }
-  if (!r.ok) throw Error(data.error ?? "Bridge request failed");
-  return data;
+  if (!r.ok)
+    throw Error(
+      typeof data.error === "string" ? data.error : "Bridge request failed",
+    );
+  return data as T;
 }

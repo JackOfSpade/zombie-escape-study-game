@@ -86,13 +86,20 @@ test("an older handoff status response cannot undo a newer local disable result"
   page,
 }) => {
   let release!: () => void,
-    calls = 0;
+    hold = false,
+    controlled = false,
+    held = 0;
   const gate = new Promise<void>((resolve) => {
     release = resolve;
   });
   await page.route("**/api/handoff/status", async (route) => {
-    const old = ++calls === 1;
-    if (old) await gate;
+    // Startup also checks relay metadata. Only hold settings requests, and
+    // distinguish control completion from independent periodic status polls.
+    const old = hold && !controlled;
+    if (old) {
+      held++;
+      await gate;
+    }
     await route.fulfill({
       json: {
         enabled: old,
@@ -105,21 +112,25 @@ test("an older handoff status response cannot undo a newer local disable result"
     });
   });
   // This fixture never forwards a control mutation to the actual bridge.
-  await page.route("**/api/handoff/control", (route) =>
-    route.fulfill({ json: { enabled: false } }),
-  );
+  await page.route("**/api/handoff/control", (route) => {
+    controlled = true;
+    return route.fulfill({ json: { enabled: false } });
+  });
   await page.goto("/");
   await openGameMenu(page);
+  hold = true;
   await page.locator("#settings-toggle").click();
-  await expect.poll(() => calls).toBe(1);
+  await expect.poll(() => held).toBeGreaterThanOrEqual(1);
   await page.locator("#handoff-enable").evaluate((input: HTMLInputElement) => {
     input.checked = false;
     input.dispatchEvent(new Event("change"));
   });
-  await expect.poll(() => calls).toBeGreaterThanOrEqual(2);
+  await expect.poll(() => controlled).toBe(true);
   await expect(page.locator("#handoff-status")).toContainText("Disabled");
-  const late = page.waitForResponse((response) =>
-    response.url().endsWith("/api/handoff/status"),
+  const late = page.waitForResponse(
+    async (response) =>
+      response.url().endsWith("/api/handoff/status") &&
+      (await response.json()).done === 99,
   );
   release();
   await (await late).finished();

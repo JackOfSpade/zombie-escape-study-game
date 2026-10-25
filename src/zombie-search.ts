@@ -85,6 +85,7 @@ export function planZombieRoute(g: Game, z: Zombie, cue?: Point): Point[] {
   }
   known[start] = 1;
   const costs = new Float64Array(W * H).fill(Infinity),
+    steps = new Uint16Array(W * H),
     previous = new Int32Array(W * H).fill(-1),
     open = [start],
     closed = new Uint8Array(W * H);
@@ -101,6 +102,7 @@ export function planZombieRoute(g: Game, z: Zombie, cue?: Point): Point[] {
       const cost = costs[n] + 1 + blocked[next] * 18;
       if (cost >= costs[next]) continue;
       costs[next] = cost;
+      steps[next] = steps[n] + 1;
       previous[next] = n;
       open.push(next);
     }
@@ -131,7 +133,10 @@ export function planZombieRoute(g: Game, z: Zombie, cue?: Point): Point[] {
         forward * 1.4 +
         (frontier ? 1.5 : 0) -
         revisit -
-        costs[n] * 0.22 +
+        // Prop costs choose a route around desks when possible. Applying the
+        // same large cost to exploration goals makes a room's only force-field
+        // exit permanently less attractive than circling its empty interior.
+        steps[n] * 0.22 +
         zombieSearchRandom(g, z, n) * 1.5;
     if (score > best) {
       best = score;

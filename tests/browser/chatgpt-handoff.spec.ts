@@ -26,13 +26,21 @@ test("native ChatGPT transport preserves generation and question through reload;
   if (!address || typeof address === "string")
     throw Error("Missing isolated relay");
   const base = `http://127.0.0.1:${address.port}`;
+  let chat: string | undefined;
   const tool = (name: string, args: unknown = {}) =>
-    relay.call(name, args, owner).structuredContent;
+    relay.call(
+      name,
+      name === "get_current_study_question"
+        ? { chat, ...(args as object) }
+        : args,
+      owner,
+    ).structuredContent;
   const continuation = async (receipt: any) => {
     return (
       await relay.call(
         "get_current_study_question",
         {
+          chat,
           after: receipt.completion.continuation?.after ?? {
             relayId: receipt.completion.relayId,
             turnId: receipt.completion.turnId,
@@ -87,6 +95,8 @@ test("native ChatGPT transport preserves generation and question through reload;
   await page.route("**/api/**", async (route) => {
     const request = route.request(),
       url = new URL(request.url());
+    if (request.method() === "POST" && url.pathname === "/api/bridge")
+      chat = request.postDataJSON().chatCode ?? chat;
     const response = await fetch(base + url.pathname + url.search, {
       method: request.method(),
       headers: {
@@ -283,7 +293,22 @@ test("native ChatGPT transport preserves generation and question through reload;
       outcome: "solved",
       transcript: nativeTranscript,
       knowledge: { facets: [{ id: "scope", status: "demonstrated" }] },
+      topicAssessments: (
+        JSON.parse(pending.payloadJson).topicAssessmentContext?.topicIds ?? []
+      ).map((topicId: string) => ({
+        topicId,
+        text: "Synthetic assisted explanation of the question's scoped mechanism.",
+      })),
     };
+    const nativePacket = JSON.parse(
+      native.prompt.slice(native.prompt.indexOf("\n{") + 1),
+    );
+    if (nativePacket.omitted?.includes("topicAssessmentContext"))
+      tool("read_study_terminal_context", {
+        relayId: native.relayId,
+        turnId: native.turnId,
+        part: "topicAssessmentContext",
+      });
     const sent = tool("finish_study_question", completion);
     expect(sent.completion.status).toBe("sent");
     await expect

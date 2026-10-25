@@ -14,6 +14,11 @@ import {
   terminalRelayTools,
   DIRECT_TURN_INSTRUCTION,
 } from "../scripts/terminal-relay-app.mjs";
+import {
+  TOPIC_ASSESSMENT_TEXT_LIMIT,
+  topicAssessmentTopics,
+  validateTopicAssessments,
+} from "../scripts/lib/topic-assessment.mjs";
 const owner = { linkId: "synthetic-native-owner" };
 const other = { linkId: "synthetic-native-other-owner" };
 const payload = (requestId = "native-synthetic-one", extra = {}) => ({
@@ -79,6 +84,139 @@ function setup() {
     status: () => app.status(),
   };
 }
+
+test("topic reflections use exact contract topics and freely written bounded prose", () => {
+  assert.deepEqual(
+    topicAssessmentTopics({
+      objectiveIds: [
+        "PY:T05.2",
+        "PY:T05.3",
+        "PE:X08",
+        "PE:I01",
+        "unrelated",
+        null,
+      ],
+    }),
+    ["PY:T05", "PE:X08", "PE:I01"],
+  );
+  assert.deepEqual(topicAssessmentTopics(undefined), []);
+  assert.deepEqual(validateTopicAssessments(undefined, ["PE:X08"]), []);
+  const reflection = {
+    topicId: "PE:X08",
+    text: "Your latest answer makes stale-result handling look solid. I suspect cancellation is still a gap, because you omitted it; that is a prediction, not something we have tested.",
+  };
+  assert.deepEqual(validateTopicAssessments([reflection], ["PE:X08"], true), [
+    reflection,
+  ]);
+  for (const invalid of [
+    undefined,
+    [],
+    [{ ...reflection, topicId: "PE:X09" }],
+    [{ ...reflection, text: "   " }],
+    [{ ...reflection, text: "x".repeat(TOPIC_ASSESSMENT_TEXT_LIMIT + 1) }],
+    [{ ...reflection, mastery: true }],
+  ])
+    assert.throws(() => validateTopicAssessments(invalid, ["PE:X08"], true));
+  assert.throws(() =>
+    validateTopicAssessments(
+      [reflection, reflection],
+      ["PE:X08", "PE:X09"],
+      true,
+    ),
+  );
+});
+
+test("new native completions refresh only captured topic narratives and preserve exact-once delivery", () => {
+  const { queue, call, enqueue } = setup();
+  queue.enable(true);
+  const topicAssessmentContext = {
+    topicIds: ["PE:X08"],
+    topics: [{ topicId: "PE:X08", name: "Async interactions" }],
+    priorAssessments: [],
+  };
+  const job = enqueue(
+    payload("native-topic-reflection", { topicAssessmentContext }),
+  );
+  const turn = call("get_current_study_question");
+  const packet = JSON.parse(turn.prompt.slice(DIRECT_TURN_INSTRUCTION.length));
+  assert.deepEqual(packet.topicAssessmentContext, topicAssessmentContext);
+  assert.match(turn.prompt, /probable knowledge gaps/);
+  assert.match(turn.prompt, /no fixed template/);
+  const a = answer(turn);
+  for (const topicAssessments of [
+    undefined,
+    [],
+    [{ topicId: "PE:X09", text: "Unrelated topic" }],
+    [{ topicId: "PE:X08", text: "" }],
+  ]) {
+    assert.throws(() =>
+      call("finish_study_question", { ...a, topicAssessments }),
+    );
+    assert.equal(queue.result(job.id, job.hash).status, "pending");
+    assert.equal(call("get_current_study_question").turnId, turn.turnId);
+  }
+  const topicAssessments = [
+    {
+      topicId: "PE:X08",
+      text: "You explain stale results clearly. You probably still need practice choosing when cancellation is useful; we have not directly assessed that yet.",
+    },
+  ];
+  const complete = { ...a, topicAssessments };
+  assert.equal(
+    call("finish_study_question", complete).completion.status,
+    "sent",
+  );
+  const forwarded = queue.result(job.id, job.hash).answer;
+  assert.deepEqual(forwarded.topicAssessments, topicAssessments);
+  assert.deepEqual(forwarded.knowledge, a.knowledge);
+  assert.equal(
+    call("finish_study_question", complete).completion.duplicate,
+    true,
+  );
+  assert.throws(
+    () =>
+      call("finish_study_question", {
+        ...complete,
+        topicAssessments: [{ topicId: "PE:X08", text: "Changed narrative" }],
+      }),
+    /Conflicting/,
+  );
+});
+
+test("large topic history stays available in full and must be read before narrative completion", () => {
+  const { queue, call, rawCall, enqueue } = setup();
+  queue.enable(true);
+  const topicAssessmentContext = {
+    topicIds: ["PE:X08"],
+    history: "Exact synthetic learner history. ".repeat(2000),
+  };
+  enqueue(payload("native-large-topic-context", { topicAssessmentContext }));
+  const turn = call("get_current_study_question");
+  const packet = JSON.parse(turn.prompt.slice(DIRECT_TURN_INSTRUCTION.length));
+  assert.ok(packet.omitted.includes("topicAssessmentContext"));
+  assert.equal(packet.topicAssessmentContext, undefined);
+  assert.ok(turn.prompt.length < 50_000);
+  const complete = answer(turn, {
+    topicAssessments: [
+      { topicId: "PE:X08", text: "A tentative current assessment." },
+    ],
+  });
+  assert.throws(
+    () => call("finish_study_question", complete),
+    /Read the complete omitted topicAssessmentContext/,
+  );
+  const read = rawCall("read_study_terminal_context", {
+    relayId: turn.relayId,
+    turnId: turn.turnId,
+    part: "topicAssessmentContext",
+  });
+  const returned = JSON.parse(read.content[0].text);
+  assert.deepEqual(JSON.parse(returned.text), topicAssessmentContext);
+  assert.equal(
+    call("finish_study_question", complete).completion.status,
+    "sent",
+  );
+});
 
 test("native question is available as normal tool output with no widget and no artificial user answer", () => {
   const { queue, call, enqueue } = setup();
@@ -588,7 +726,28 @@ test("native ordinary-chat callback reaches the real game client once, including
           }
           const learnerText =
             "SYNTHETIC native answer recorded as model-transcribed learner text.";
+          let topicContext = packet.topicAssessmentContext;
+          if (packet.omitted?.includes("topicAssessmentContext")) {
+            const read = app.call(
+              "read_study_terminal_context",
+              {
+                relayId: turn.relayId,
+                turnId: turn.turnId,
+                part: "topicAssessmentContext",
+              },
+              owner,
+            );
+            topicContext = JSON.parse(JSON.parse(read.content[0].text).text);
+          }
           const completion = answer(turn, {
+            ...(topicContext
+              ? {
+                  topicAssessments: topicContext.topicIds.map((topicId) => ({
+                    topicId,
+                    text: "The synthetic answer demonstrates the question's tested reasoning; other topic skills remain uncertain.",
+                  })),
+                }
+              : {}),
             transcript: [
               {
                 role: "assistant",

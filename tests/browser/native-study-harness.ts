@@ -21,7 +21,9 @@ export async function mockNativeStudy(page: Page, capable = true) {
         mode: "chatgpt-handoff",
         label: "Synthetic native study",
         detail: "Synthetic browser fixture; no live AI",
-        capabilities: direct ? ["tutor", "direct-study"] : ["tutor"],
+        capabilities: direct
+          ? ["tutor", "direct-study", "topic-assessments"]
+          : ["tutor"],
       });
     if (url.pathname === "/api/bridge" && request.method() === "POST") {
       const body = request.postDataJSON();
@@ -98,6 +100,12 @@ export async function mockNativeStudy(page: Page, capable = true) {
             }),
           ),
         },
+        topicAssessments: (payload.topicAssessmentContext?.topicIds ?? []).map(
+          (topicId: string) => ({
+            topicId,
+            text: `Synthetic assessment for ${topicId}: the learner has demonstrated the question's named skills.`,
+          }),
+        ),
         ...extra,
       });
     },

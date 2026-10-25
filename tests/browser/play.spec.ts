@@ -395,7 +395,7 @@ test("finite 360 vision: see through closed doors in both palettes, walls and di
   expect(errors).toEqual([]);
 });
 
-test("partial development work survives actual combat death and a fresh run without transferring its lock", async ({
+test("partial development work survives combat death while a fresh run closes its old chat without transferring its lock", async ({
   page,
 }) => {
   const relay = await mockNativeStudy(page);
@@ -429,10 +429,11 @@ test("partial development work survives actual combat death and a fresh run with
   expect(archive.workspace).toBe(draft);
   expect(archive.problem).toEqual(payload.problem);
   expect(archive.directStudy.payloadJson).toBe(JSON.stringify(payload));
+  expect(archive.directStudy.state).toBe("superseded");
   expect(state.evidence).toEqual([]);
   expect(state.attempts).toEqual([]);
-  // One native conversation finishes its retained question before the new
-  // run issues another. Its old-run completion records learning only.
+  // A fresh run archives the old question as history and closes its chat.
+  // A late host reply must not reopen it or add a gap to the new run.
   relay.finish(payload.requestId, "gap");
   await expect
     .poll(() =>
@@ -443,7 +444,7 @@ test("partial development work survives actual combat death and a fresh run with
         )?.directStudy.state;
       }, oldRun),
     )
-    .toBe("applied");
+    .toBe("superseded");
   expect(
     await page.evaluate(() => (window as any).__deadAir.game.survivors[0].keys),
   ).toBe(0);
@@ -455,6 +456,17 @@ test("partial development work survives actual combat death and a fresh run with
   );
   expect(JSON.parse(current.session.payloadJson).workspace).not.toBe(draft);
   expect(current.keys).toBe(0);
+  const retained = await page.evaluate((oldRun) => {
+    const g = (window as any).__deadAir.game;
+    return {
+      state: g.study.archives.find(
+        (e: any) => e.runId === oldRun && e.directStudy,
+      )?.directStudy.state,
+      gaps: g.study.knowledgeGaps ?? [],
+      evidence: g.study.learner.evidence,
+    };
+  }, oldRun);
+  expect(retained).toEqual({ state: "superseded", gaps: [], evidence: [] });
 });
 
 for (const fixtureKind of ["checkpoint", "transfer", "historical"] as const) {

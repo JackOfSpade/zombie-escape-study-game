@@ -42,7 +42,7 @@ interface SavedDirectStudy {
   provider: string;
   payloadJson: string;
   questionFingerprint: string;
-  state: "pending" | "interrupted" | "applied" | "superseded";
+  state: "pending" | "interrupted" | "paused" | "applied" | "superseded";
   responseDigest?: string;
   error?: string;
   transportPhase?: unknown;
@@ -54,7 +54,7 @@ const directOf = (e: Encounter) =>
 /** End a question at a run boundary without declaring its unanswered facets gaps. */
 export function closeDirectStudy(e: Encounter): void {
   const s = directOf(e);
-  if (!s || (s.state !== "pending" && s.state !== "interrupted")) return;
+  if (!s || !["pending", "interrupted", "paused"].includes(s.state)) return;
   s.state = "superseded";
   delete s.error;
   delete s.transportPhase;
@@ -79,6 +79,7 @@ export function releaseSettledRequests(e: Encounter, all = false): void {
 const DIRECT_STATES = new Set([
   "pending",
   "interrupted",
+  "paused",
   "applied",
   "superseded",
 ]);

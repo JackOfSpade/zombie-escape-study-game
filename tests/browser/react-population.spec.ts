@@ -20,25 +20,7 @@ test("container workspace React API: ordinary population and outside arrivals co
   const address = server.address();
   if (!address || typeof address === "string")
     throw Error("No isolated execute server");
-  await isolateRunnerBridge(page);
-  await page.route("**/api/execute", async (route) => {
-    const response = await fetch(
-      `http://127.0.0.1:${address.port}/api/execute`,
-      {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Origin: "http://127.0.0.1:5173",
-        },
-        body: route.request().postData()!,
-      },
-    );
-    await route.fulfill({
-      status: response.status,
-      contentType: "application/json",
-      body: await response.text(),
-    });
-  });
+  await isolateRunnerBridge(page, `http://127.0.0.1:${address.port}`);
   try {
     await enterLegacyBuilding(page);
     await page.evaluate(async () => {

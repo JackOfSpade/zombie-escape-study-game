@@ -43,6 +43,7 @@ export function createHandoffRoutes(
           // Native ChatGPT conversation for a tutor question (mode
           // terminal-direct) finished once via finish_study_question.
           "direct-study",
+          "topic-assessments",
           ...(queue.snapshot().autonomousWork ? ["autonomous-work"] : []),
         ],
         detail:

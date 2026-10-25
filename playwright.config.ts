@@ -1,5 +1,9 @@
 import { defineConfig } from "@playwright/test";
-const port = process.env.GAME_TEST_PORT ?? "5173";
+// Tests import source modules directly. Reusing a production server can serve
+// a stale bundle and 404 those imports, so own an isolated Vite instance.
+const port = Number(process.env.GAME_TEST_PORT ?? "5278");
+if (!Number.isInteger(port) || port < 1 || port > 65535)
+  throw Error("GAME_TEST_PORT must be an integer from 1 to 65535");
 export default defineConfig({
   testDir: "./tests/browser",
   // Live keyboard/RAF survival cases model one player. Competing game pages
@@ -12,12 +16,9 @@ export default defineConfig({
     screenshot: "only-on-failure",
   },
   webServer: {
-    command:
-      port === "5173"
-        ? "npm run dev"
-        : `node node_modules/vite/bin/vite.js --host 127.0.0.1 --port ${port}`,
+    command: `npm run client -- --port ${port} --strictPort`,
     url: `http://127.0.0.1:${port}`,
-    reuseExistingServer: true,
+    reuseExistingServer: false,
   },
   reporter: "list",
 });
