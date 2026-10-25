@@ -40,6 +40,9 @@
             <button id="native-study-copy" class="quiet">
               Copy ChatGPT request
             </button>
+            <button id="native-study-finish" class="quiet" hidden>
+              Copy completion retry
+            </button>
             <button id="native-study-retry" class="quiet" hidden>
               Retry connection
             </button>
@@ -47,6 +50,13 @@
               Connect ChatGPT
             </button>
           </div>
+          <textarea
+            id="native-study-request"
+            aria-label="ChatGPT request to copy"
+            rows="4"
+            readonly
+            hidden
+          ></textarea>
         </aside>
         <div id="spectator" class="spectator" hidden>
           <span class="eyebrow">SPECTATING</span>

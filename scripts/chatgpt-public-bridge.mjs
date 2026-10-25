@@ -104,6 +104,11 @@ export function createPublicHandoffBridge({
     body: { jsonrpc: "2.0", id: id ?? null, error: { code, message } },
   });
   const terminalApp = createTerminalMcpApp({ now });
+  const knownTools = new Set(
+    [...handoffTools(true), ...terminalAppTools(), ...terminalRelayTools()].map(
+      (tool) => tool.name,
+    ),
+  );
   let inFlight = 0;
   const mcp = async (request, { grant, signal } = {}) => {
     if (
@@ -194,19 +199,24 @@ export function createPublicHandoffBridge({
         note: "Worker calls are currently busy. Retry this exact call.",
       });
     inFlight++;
+    const tool = knownTools.has(request.params?.name)
+      ? request.params.name
+      : "unknown";
+    record("tool-call", { tool });
     try {
       const args = request.params?.arguments,
         name = request.params?.name;
       if (terminalApp.owns(name) || terminalRelay.owns(name)) {
         if (closed || signal?.aborted)
           throw Error("The game connector is closed");
-        return result(
-          await (terminalApp.owns(name) ? terminalApp : terminalRelay).call(
-            name,
-            args,
-            grant,
-          ),
-        );
+        const reply = await (
+          terminalApp.owns(name) ? terminalApp : terminalRelay
+        ).call(name, args, grant);
+        record("tool-result", {
+          tool,
+          status: reply.isError ? "rejected" : "returned",
+        });
+        return result(reply);
       }
       if (
         !object(args) ||
@@ -261,8 +271,10 @@ export function createPublicHandoffBridge({
         throw Error(
           "Worker session changed or request closed; no response released",
         );
+      record("tool-result", { tool, status: "returned" });
       return body(value);
     } catch (error) {
+      record("tool-result", { tool, status: "rejected" });
       return result({
         isError: true,
         content: [

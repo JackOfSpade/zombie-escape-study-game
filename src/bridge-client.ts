@@ -75,13 +75,29 @@ export const nativeStudyScope = (
 /** One ChatGPT chat per terminal opening: the game mints a code when a study
  * terminal opens and the pasted request carries it. The relay serves that
  * opening's work only to the chat that supplies the current code. */
-let studyChat = "";
+const STUDY_CHAT_STORAGE_KEY = "zombie-study-chat-v1";
+function savedStudyChat() {
+  try {
+    const code = sessionStorage.getItem(STUDY_CHAT_STORAGE_KEY);
+    return code && /^[A-Z0-9]{6,16}$/.test(code) ? code : "";
+  } catch {
+    return "";
+  }
+}
+// Reloading resumes the same terminal opening. Rotating here would rebind its
+// queued job and disconnect the chat holding the learner's conversation.
+let studyChat = savedStudyChat();
 export function newStudyChat() {
   const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
   studyChat = Array.from(
     crypto.getRandomValues(new Uint8Array(8)),
     (n) => alphabet[n % alphabet.length],
   ).join("");
+  try {
+    sessionStorage.setItem(STUDY_CHAT_STORAGE_KEY, studyChat);
+  } catch {
+    // Storage-restricted contexts can still use the current page's chat.
+  }
   return studyChat;
 }
 export const studyChatCode = () => studyChat || newStudyChat();

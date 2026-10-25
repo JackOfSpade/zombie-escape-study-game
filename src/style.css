@@ -1357,6 +1357,13 @@ body.reduced * {
   padding: 5px 8px;
   font-size: 0.75rem;
 }
+.native-study textarea {
+  display: block;
+  box-sizing: border-box;
+  width: 100%;
+  margin-top: 8px;
+  resize: vertical;
+}
 .native-study [hidden],
 .native-study[hidden] {
   display: none;

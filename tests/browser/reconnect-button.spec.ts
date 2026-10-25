@@ -35,7 +35,7 @@ async function noOptionalWidget(page: Page) {
 }
 
 for (const clipboardBlocked of [false, true]) {
-  test(`unsent question connects through Settings once without a widget, clipboard ${clipboardBlocked ? "blocked" : "available"}`, async ({
+  test(`unsent question connects directly once without a widget, clipboard ${clipboardBlocked ? "blocked" : "available"}`, async ({
     page,
   }) => {
     const relay = await mockNativeStudy(page, false);
@@ -66,7 +66,11 @@ for (const clipboardBlocked of [false, true]) {
     if (clipboardBlocked) {
       await expect
         .poll(() => page.evaluate(() => (window as any).__deadAir.game.notice))
-        .toContain("Get my current game study question");
+        .toContain("including its chat code");
+      await expect(page.getByLabel("ChatGPT request to copy")).toBeVisible();
+      await expect(page.getByLabel("ChatGPT request to copy")).toHaveValue(
+        /chat code [A-Z0-9]{6,16}/,
+      );
       await page.evaluate(() => {
         delete (navigator.clipboard as any).writeText;
       });
@@ -78,14 +82,11 @@ for (const clipboardBlocked of [false, true]) {
     expect(await page.evaluate(() => navigator.clipboard.readText())).toContain(
       "finish_study_question",
     );
-    await page.locator("#native-study-connect").click();
-    await expect(page.locator("#settings")).toBeVisible();
-    await page.getByText("ChatGPT handoff connection", { exact: true }).click();
-    await expect(page.locator("#terminal")).toBeHidden();
     relay.setCapable(true);
-    await page.locator("#reconnect").click();
+    await page.locator("#native-study-connect").click();
+    await expect(page.locator("#settings")).toBeHidden();
+    await expect(page.locator("#terminal")).toBeHidden();
     await expect.poll(() => relay.calls.length).toBe(1);
-    await page.locator("#reconnect").click();
     expect(relay.calls).toHaveLength(1);
     const payload = relay.calls[0].payload;
     expect(JSON.stringify(payload.problem)).toBe(original);
@@ -95,7 +96,6 @@ for (const clipboardBlocked of [false, true]) {
     });
     expect(payload.mode).toBe("terminal-direct");
     expect((await nativeState(page, id)).keys).toBe(0);
-    await page.locator("#settings-close").click();
     relay.finish(payload.requestId);
     await expect
       .poll(async () => (await nativeState(page, id)).session.state)
@@ -119,11 +119,9 @@ test("rechecking an unavailable native capability preserves the issued question 
     return { problem: e.problem, workspace: e.workspace, revision: e.revision };
   }, id);
   await page.locator("#native-study-connect").click();
-  await expect(page.locator("#settings")).toBeVisible();
-  await page.getByText("ChatGPT handoff connection", { exact: true }).click();
-  await page.locator("#reconnect").click();
+  await expect(page.locator("#settings")).toBeHidden();
   await expect(page.locator("#native-study-status")).toContainText(
-    "direct study support",
+    "Connected and released",
   );
   expect(relay.calls).toHaveLength(0);
   expect(

@@ -354,19 +354,24 @@ function renderNativeStudy() {
       ? ended
         ? "Learning saved. This run has ended."
         : "Question complete. Result saved."
-      : e.generation
-        ? "Preparing your saved question. You can keep watching the game while it is generated."
-        : (session?.error ??
-          e.error ??
-          (e.pendingGeneration
-            ? "Question generation was interrupted. Retry the saved request."
-            : undefined) ??
-          (ended
-            ? archived
-              ? "Finish the previous run's question in ChatGPT. Learning is saved, with no key for this run."
-              : "Continue in ChatGPT. Your learning still counts; this run awards no more keys."
-            : "Copy the ChatGPT request and paste it into a new ChatGPT chat. Each terminal uses its own chat.")),
+      : ((reconnectBusy ? reconnectProgress : null) ??
+          (e.generation
+            ? "Preparing your saved question. You can keep watching the game while it is generated."
+            : (session?.error ??
+              e.error ??
+              (e.pendingGeneration
+                ? "Question generation was interrupted. Retry the saved request."
+                : undefined) ??
+              (ended
+                ? archived
+                  ? "Finish the previous run's question in ChatGPT. Learning is saved, with no key for this run."
+                  : "Continue in ChatGPT. Your learning still counts; this run awards no more keys."
+                : session?.transportPhase === "working"
+                  ? "Continue in this terminal's existing ChatGPT chat. Waiting for its completion; no key received yet. If ChatGPT finished but reported an error, copy the completion retry into that same chat."
+                  : "Copy the ChatGPT request and paste it into a new ChatGPT chat. Each terminal uses its own chat.")))),
   );
+  $("#native-study-finish").hidden =
+    session?.state !== "pending" || session.transportPhase !== "working";
   $("#native-study-retry").hidden = session
     ? session.state !== "interrupted"
     : !!e.generation || (!e.problem && !e.error && !e.pendingGeneration);
@@ -382,15 +387,51 @@ $("#native-study-retry").onclick = () => {
     void retryDirectStudy(game, e, roadmap, nativeStudyChanged);
   else if (e) void prepareNativeQuestion(e);
 };
-$("#native-study-connect").onclick = () => void reconnectChatGpt();
+$("#native-study-connect").onclick = () => {
+  void checkBridge().then(() => {
+    resumeNativeQuestions();
+    void reconnectChatGpt();
+  });
+};
+function manualNativeRequest(prompt: string) {
+  const field = $<HTMLTextAreaElement>("#native-study-request");
+  field.value = prompt;
+  field.hidden = false;
+  field.focus();
+  field.select();
+}
 $("#native-study-copy").onclick = () => {
   void navigator.clipboard.writeText(terminalRequest()).then(
     () => {
+      $("#native-study-request").hidden = true;
       game.notice =
         "Copied. Start a new ChatGPT chat and paste the request there.";
     },
     () => {
-      game.notice = "In ChatGPT, ask: Get my current game study question.";
+      manualNativeRequest(terminalRequest());
+      game.notice =
+        "Clipboard unavailable. Select and copy the request below, including its chat code.";
+    },
+  );
+};
+$("#native-study-finish").onclick = () => {
+  const e =
+    currentNativeQuestion() ??
+    (lastQuestion ? game.encounters[lastQuestion] : undefined);
+  const session = e?.directStudy;
+  if (session?.state !== "pending" || session.transportPhase !== "working")
+    return;
+  const prompt = `The game is still waiting for this study question's completion (questionFingerprint ${session.questionFingerprint}). Continue in this existing chat using our actual conversation and verbatim learner answers. If the question is finished, retry finish_study_question with the same relayId, turnId, questionFingerprint, attributed transcript and knowledge findings; if validation rejects it, correct the same bound completion and retry. Do not invent learner evidence or open a replacement question. If you need to recover the receipt, call get_current_study_question once with chat: "${studyChatCode()}" and verify that its questionFingerprint matches before finishing. If disconnected or a different question is returned, stop and explain. Follow any bound continuation after an accepted finish. Only report a key awarded if the game confirms it.`;
+  void navigator.clipboard.writeText(prompt).then(
+    () => {
+      $("#native-study-request").hidden = true;
+      game.notice =
+        "Copied. Paste the completion retry into this terminal's existing ChatGPT chat.";
+    },
+    () => {
+      manualNativeRequest(prompt);
+      game.notice =
+        "Clipboard unavailable. Select and copy the completion retry below into the existing ChatGPT chat.";
     },
   );
 };
@@ -2006,6 +2047,7 @@ const pasteRequestStep = () =>
     : `Choose your model and thinking level, then send: "${terminalRequest()}"`;
 function reportReconnect(text: string | null) {
   reconnectProgress = text;
+  renderNativeStudy();
   if (active) renderTerminal();
 }
 async function handoffStatus() {
@@ -2087,6 +2129,13 @@ async function reconnectChatGpt(tab: Window | null = null, fresh = false) {
       return;
     }
     for (let i = 0; i < 400 && game === requestGame; i++) {
+      // A capability refresh can finish while this older connection attempt
+      // is waiting for a legacy widget. Native chat does not need that widget.
+      if (status().capabilities.includes("direct-study")) {
+        resumeNativeQuestions();
+        reportReconnect("Connected. Continue in this terminal's ChatGPT chat.");
+        return;
+      }
       info = await handoffStatus();
       const ready = relayServes(info);
       if (ready) break;

@@ -842,7 +842,34 @@ test("separate game connector requires local pairing, PKCE, a signed client asse
     assert.ok(!disk.includes(token.access_token));
     assert.ok(!disk.includes(token.refresh_token));
     assert.ok(!disk.includes(pairingCode));
+    const rejectedFinish = await relayCall("finish_study_question", {
+      relayId: "SYNTHETIC_NATIVE_PRIVATE",
+      turnId: "missing",
+    });
+    assert.equal(rejectedFinish.isError, true);
     const diagnostics = bridge.status().diagnostics;
+    assert.ok(
+      diagnostics.some(
+        (event: any) =>
+          event.kind === "tool-call" && event.tool === "finish_study_question",
+      ),
+    );
+    assert.ok(
+      diagnostics.some(
+        (event: any) =>
+          event.kind === "tool-result" &&
+          event.tool === "finish_study_question" &&
+          event.status === "returned",
+      ),
+    );
+    assert.ok(
+      diagnostics.some(
+        (event: any) =>
+          event.kind === "tool-result" &&
+          event.tool === "finish_study_question" &&
+          event.status === "rejected",
+      ),
+    );
     assert.ok(
       diagnostics.some(
         (event: any) => event.kind === "rpc" && event.method === "tools/list",
