@@ -1,7 +1,7 @@
 import { redesign } from "./force-fields";
 import { forwardLayout } from "./forward-layout";
 import { ensureDoor } from "./doors";
-import { initialStudy } from "./curriculum";
+import { eligible, initialStudy } from "./curriculum";
 import {
   type Actor,
   type Encounter,
@@ -94,7 +94,14 @@ export function createPlayableGame(
   redesign(g, r, { randomized: true });
   // Fresh live runs use the study-friendly world tempo; legacy factories keep
   // historical timing for reproducible fixtures.
-  return applyStudyPacing(g);
+  let depth = 1;
+  try {
+    depth = eligible(r, g.study).depth;
+  } catch {
+    // A temporarily unavailable curriculum question must not prevent the
+    // physical world from starting. Generation keeps its own eligibility gate.
+  }
+  return applyStudyPacing(g, depth);
 }
 /** Legacy layout remains the default for existing scenario/benchmark compatibility. */
 export function createGame(

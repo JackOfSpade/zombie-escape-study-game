@@ -200,8 +200,7 @@ void (async () => {
     const info = await fetch("/api/handoff/status", {
       signal: AbortSignal.timeout(5000),
     }).then((r) => (r.ok ? r.json() : null));
-    if (info?.public?.configured && info.public.linked)
-      void reconnectChatGpt();
+    if (info?.public?.configured && info.public.linked) void reconnectChatGpt();
   } catch {
     // Bridge unavailable — development mode, silently continue.
   }
@@ -1973,7 +1972,7 @@ const CHATGPT_NEW_CHAT_URL = "https://chatgpt.com/";
 /** The request names this terminal opening's chat code, so it only works in
  * the chat it is pasted into; reopening a terminal needs a new chat. */
 const terminalRequest = () =>
-  `Get my current zombie-escape-study-game study question using get_current_study_question with chat code ${studyChatCode()} (passing argument chat: "${studyChatCode()}"); pass that chat code on every get_current_study_question call in this chat. Handle any preparation or assessment step returned by the game in this same chat. Ask the issued question here, then let me answer in this normal chat. When we finish, call finish_study_question once to send the result back to the game and follow its bound continuation. If no question is waiting or the game says this chat is disconnected, tell me once and wait for me.`;
+  `Get my current zombie-escape-study-game study question using get_current_study_question with chat code ${studyChatCode()} (passing argument chat: "${studyChatCode()}"); pass that chat code on every get_current_study_question call in this chat. If the tool does not accept chat, stop and tell me to use Plugins → zombie-escape-study-game → Manage → Refresh tools, then paste this request into a fresh chat. Do not call it without the code or interpret a missing-code response as no question waiting. Handle any preparation or assessment step returned by the game in this same chat. Ask the issued question here, then let me answer in this normal chat. When we finish, call finish_study_question once to send the result back to the game and follow its bound continuation. If no question is waiting or the game says this chat is disconnected, tell me once and wait for me.`;
 /** Whether the last Connect press put the request on the clipboard. */
 let terminalRequestCopied = false,
   terminalRequestShown = false;

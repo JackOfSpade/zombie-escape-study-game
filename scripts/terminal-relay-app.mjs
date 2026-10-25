@@ -862,6 +862,12 @@ export function createTerminalRelayApp({
         const chat = args?.chat ?? args?.chat_code ?? args?.chatCode;
         if (chat !== undefined && !/^[A-Z0-9]{6,16}$/.test(chat))
           throw Error("Invalid chat code");
+        if (chat === undefined && queue.requiresChatCode(requesterLiveMs))
+          return valueResult({
+            status: "chat_required",
+            relayId: s.id,
+            note: "This request is missing the terminal's chat code. This does not mean no question is waiting. Pass the chat code from the player's pasted game request as chat on every get_current_study_question call. If this tool has no chat parameter, its saved definition is outdated: open Plugins → zombie-escape-study-game → Manage → Refresh tools, then paste the game's latest request into a fresh chat. Do not fetch another chat's question, ask the player to release it again, or poll without the code.",
+          });
         // Each terminal opening belongs to one chat. A newer opening's code
         // takes the question over; any other chat is disconnected and must
         // not disturb it.

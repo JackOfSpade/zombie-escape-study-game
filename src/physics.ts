@@ -423,7 +423,7 @@ class PhysicsLayer {
           distance(other, e) < 2.4,
       );
       const threats = this.g.zombies.filter(
-        (z) => z.hp > 0 && z.floor === e.floor && distance(z, e) < 1.1,
+        (z) => z.hp > 0 && z.floor === e.floor && distance(z, e) < 2.4,
       );
       const inLane = (other: Point) => {
         const x = other.x - e.x,
@@ -460,8 +460,7 @@ class PhysicsLayer {
         ...people.filter(
           (other) => !following.includes(other) && inLane(other),
         ),
-        // A nearby attacker remains dangerous outside the walking lane. Keep
-        // the established broad threat response while narrowing friendly traffic.
+        // Attackers remain dangerous outside the friendly walking lane.
         ...threats.filter((z) => (z.x - e.x) * nx + (z.y - e.y) * ny > 0),
       ];
       const sides = [1, -1]
@@ -479,7 +478,9 @@ class PhysicsLayer {
         (this.g.time >= e.bodyYield.until || (ahead.length && sides.length))
       )
         delete e.bodyYield;
-      if (people.length && sides.length && !e.bodyYield && !threats.length) {
+      // Predict relative motion for attackers as well as friendly traffic.
+      // The old fixed sidestep at bite range flipped direction each frame.
+      if ((people.length || threats.length) && sides.length && !e.bodyYield) {
         const desired = {
           x: (dx / requested) * e.speed,
           y: (dy / requested) * e.speed,
@@ -488,38 +489,24 @@ class PhysicsLayer {
           this.g,
           e,
           desired,
-          people
-            .filter((other) => !following.includes(other))
-            .map((other) => {
-              const record = this.records.get(other);
-              return {
-                id: other.id,
-                x: record?.start.x ?? other.x,
-                y: record?.start.y ?? other.y,
-                velocity: {
-                  x: other.physics?.x ?? 0,
-                  y: other.physics?.y ?? 0,
-                },
-              };
-            }),
+          [
+            ...people.filter((other) => !following.includes(other)),
+            ...threats,
+          ].map((other) => {
+            const record = this.records.get(other);
+            return {
+              id: other.id,
+              x: record?.start.x ?? other.x,
+              y: record?.start.y ?? other.y,
+              velocity: {
+                x: other.physics?.x ?? 0,
+                y: other.physics?.y ?? 0,
+              },
+            };
+          }),
         );
         dx = (v.x / e.speed) * requested;
         dy = (v.y / e.speed) * requested;
-      } else if (ahead.length && sides.length && !e.bodyYield) {
-        const chosen = sides.sort((a, b) => {
-          const score = (v: Point) =>
-            threats.reduce(
-              (n, z) =>
-                Math.min(
-                  n,
-                  distance(z, { x: e.x + v.x * 0.65, y: e.y + v.y * 0.65 }),
-                ),
-              10,
-            );
-          return score(b) - score(a);
-        })[0];
-        dx = chosen.x * length;
-        dy = chosen.y * length;
       } else if (ahead.length && !sides.length && !e.bodyYield) {
         const opposing = people.find(
           (other) =>

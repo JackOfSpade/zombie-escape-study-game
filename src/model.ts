@@ -439,6 +439,8 @@ export interface Submission {
   seq: number;
 }
 export interface Problem {
+  /** Generation-time typical active solve duration; local policy owns HP. */
+  estimatedSolveSeconds?: number;
   runtime?: {
     language: "python" | "typescript";
     environment?: "react";
@@ -573,6 +575,7 @@ export interface Settings {
   reducedFlash: boolean;
 }
 export interface Game {
+  fieldPacing?: import("./field-pacing").FieldPacing;
   rules?: "force-fields";
   tick?: number;
   schema: 1;

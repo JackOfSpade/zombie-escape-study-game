@@ -1,4 +1,5 @@
 import { devProblem } from "./practice-problem";
+import { adoptQuestionPacing, validSolveEstimate } from "./field-pacing";
 import { roomEncounters, assignRoomProblem } from "./room-questions";
 import { completionVerdict } from "./completion-verdict";
 import { careerScopeGuidance, studyFocus } from "./career-profile";
@@ -173,6 +174,11 @@ function validateProblem(
   c = eligible(r, g.study),
 ) {
   if (
+    p?.estimatedSolveSeconds !== undefined &&
+    !validSolveEstimate(p.estimatedSolveSeconds)
+  )
+    throw Error(`Invalid generated solve-time estimate for ${e.id}`);
+  if (
     !p ||
     typeof p.prompt !== "string" ||
     p.prompt.length > 30000 ||
@@ -286,6 +292,8 @@ async function ensureIndividualProblem(g: Game, e: Encounter, r: Roadmap) {
         careerScopeGuidance: careerScopeGuidance(contract, studyFocus(study)),
         generationPolicy:
           "@study Diagnose before teaching. Write a standalone question: the prompt alone must supply the essential scenario, interface, implementation, data, timing and business-rule facts needed to answer without using the chat. For classification, list the concrete items to classify and their relevant behavior, lifetime and source without supplying their classifications. For tracing, debugging or critique, supply the relevant code, event sequence or evidence. Distinguish fixed facts from intentional design choices; if the learner may choose an example or an approach, say so explicitly rather than expecting them to infer an unspecified implementation. Ask a bounded task that matches the supplied scenario; never paste a capability statement into an unrelated generic story. Every requirement in the rubric must be visible in the question; do not grade unstated assumptions or add unrelated decisions, personal history or edge cases. Before returning the question, check that it can be answered from the prompt alone and repair missing context without revealing the solution. For D1, keep the learner workspace starter empty; put essential scenario or code-reading material in the prompt without supplying the key explanation, endpoint update, worked result or a leading solution hint. Do not interpret an objective's implementation verb as a D1 implementation requirement. Preserve legitimate prior context and assistance attribution without presenting supplied steps as fresh independent understanding. Use probeRecords: build the question around open gaps inside the eligible scope with the facet they blocked as the apex; only a gap marked reuseInScopeDefinitions may add its exact facet id to scopeDefinitions, and existing stable scope definitions are copied exactly; do not spend the question on established facets unless the scope requires them; re-ask what a closed gap blocked. The prompt is read by the learner: never mention the scheduled scope, objective IDs, tiers, depth, scheduling or that this is a formal visit; ask the question in plain language. Keep it minimal: write the smallest self-contained diagnostic that exercises the objective, with one main problem and at most one or two directly connected follow-ups. Include only the essential facts, not pasted project context or a full-project audit. For code review, include the actual code under review, including any required helper and its authorization semantics; a prose proposal supports design review only. Prefer short snippets, traces or evidence, and never turn an objective's scope verbs into a D1 implementation task. The visible task and rubric must match, without leaking the solution. An honestly integrative objective may stay integrative on a small feature. A narrow example never establishes unrelated facets or mastery.",
+        pacingGuidance:
+          "Include estimatedSolveSeconds: a finite number from 30 to 900 estimating typical prepared learner time for the whole bounded question, including reading, reasoning, expected tutoring exchanges and any coding/testing. Exclude network/model queue waiting. This is game pacing metadata, not a grade, mastery claim, door HP or instruction to change difficulty. The game applies its own slower-player margin and safety bounds.",
         runtimeSupport: {
           scripts: ["python", "typescript"],
           react:
@@ -325,6 +333,7 @@ async function ensureIndividualProblem(g: Game, e: Encounter, r: Roadmap) {
       registerScopes(r, g.study.learner, { ...e, problem: p });
     }
     e.problem = p;
+    adoptQuestionPacing(g, e.floor, p);
     delete e.error;
     delete e.pendingGeneration;
     if (e.revision === 0 && !e.workspace) e.workspace = p.starter;

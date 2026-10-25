@@ -682,3 +682,28 @@ test("first scope bind preserves frozen legacy hash, migrates only untouched res
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("generation pacing estimates cross the preparation boundary only as bounded optional metadata", () => {
+  for (const estimate of ["600", -1, 0, 29, 901, Infinity, NaN]) {
+    const f = setup();
+    const receipt = f.enqueue("generate", gen());
+    const turn = f.value("get_current_study_question");
+    assert.throws(
+      () => f.finish(turn, { ...generated, estimatedSolveSeconds: estimate }),
+      /estimatedSolveSeconds/,
+    );
+    assert.equal(f.queue.result(receipt.id, receipt.hash).status, "pending");
+    f.finish(turn, { ...generated, estimatedSolveSeconds: 600 });
+    assert.equal(
+      f.queue.result(receipt.id, receipt.hash).answer.estimatedSolveSeconds,
+      600,
+    );
+  }
+  const f = setup();
+  const receipt = f.enqueue("generate", gen());
+  f.finish(f.value("get_current_study_question"), generated);
+  assert.equal(
+    f.queue.result(receipt.id, receipt.hash).answer.estimatedSolveSeconds,
+    undefined,
+  );
+});

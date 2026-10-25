@@ -117,7 +117,7 @@ function context() {
   };
   return { ctx: ctx as unknown as AudioContext, oscillators };
 }
-test("audio timing resets on a new run/restored object and cancels old warning voices without wall timers", () => {
+test("audio timing resets on a new run/restored object and cancels old impact voices without wall timers", () => {
   const { ctx, oscillators } = context(),
     d = new AudioDirector(() => ctx),
     g = fixture();
@@ -127,7 +127,10 @@ test("audio timing resets on a new run/restored object and cancels old warning v
   g.surge.state = "warning";
   g.surge.started = 200;
   d.update(g);
-  assert.equal(oscillators.length, 2);
+  assert.equal(oscillators.length, 0);
+  event(g, "barricade-hit", "impact", 0).position = { x: 11, y: 15.5 };
+  d.update(g);
+  assert.equal(oscillators.length, 1);
   assert.ok(oscillators.every((n) => n.stops[0]! <= 0.7));
   const old = [...oscillators];
   const next = fixture();
@@ -140,15 +143,15 @@ test("audio timing resets on a new run/restored object and cancels old warning v
   next.time = 0.3;
   event(next, "barricade-hit", "impact", 0).position = { x: 11, y: 15.5 };
   d.update(next);
-  assert.equal(oscillators.length, 3);
+  assert.equal(oscillators.length, 2);
   const resumed = structuredClone(next);
   d.update(resumed);
-  assert.equal(oscillators.length, 3); // No historical attack replay after load.
+  assert.equal(oscillators.length, 2); // No historical attack replay after load.
   d.stop();
   assert.equal(d.caption, "");
   assert.ok(oscillators.at(-1)?.stops.includes(undefined));
 });
-test("warning resumes at its actual elapsed pitch, skips missed pulses and stops on activation", () => {
+test("surge warnings and activation remain silent while captions track the phase", () => {
   const { ctx, oscillators } = context(),
     d = new AudioDirector(() => ctx),
     g = fixture();
@@ -156,20 +159,21 @@ test("warning resumes at its actual elapsed pitch, skips missed pulses and stops
   g.surge.state = "warning";
   g.surge.started = 92;
   d.update(g);
-  assert.equal(oscillators.length, 2);
-  assert.ok(oscillators[0].frequency.calls[0].value > 250);
-  assert.equal(oscillators[1].frequency.calls[0].value, 245);
+  assert.equal(oscillators.length, 0);
+  assert.match(d.caption, /escalating biological pulse/);
   d.update(g);
-  assert.equal(oscillators.length, 2);
+  assert.equal(oscillators.length, 0);
   g.time += 0.3;
   d.update(g);
-  assert.equal(oscillators.length, 3);
-  const warning = [...oscillators];
-  g.time += 0.3;
+  assert.equal(oscillators.length, 0);
+  // Missed warning intervals do not replay tones when the tab resumes.
+  g.time += 10;
+  d.update(g);
+  assert.equal(oscillators.length, 0);
   g.surge.state = "active";
+  g.time += 0.3;
   d.update(g);
-  assert.ok(warning.every((n) => n.stops.includes(undefined)));
-  assert.equal(oscillators.at(-1)?.frequency.calls[0].value, 250);
+  assert.equal(oscillators.length, 0);
   assert.match(d.caption, /Surge/);
 });
 test("ambient and actual impact/breach sound follow distance, floors and successive physical barriers", () => {

@@ -343,7 +343,7 @@ test("retreat commitment survives reload but cannot reuse a destination from ano
   loaded.zombies[0].x = resumed.x - 2;
   step(loaded, 1 / 30);
   assert.equal(resumed.fleeFloor, 1);
-  assert.ok(resumed.fleeUntil! > loaded.time + 2);
+  assert.equal(resumed.fleeUntil, loaded.time + 1);
   assert.equal(a.fleeFloor, 0);
 });
 test("a newly occupied retreat endpoint is reconsidered rather than blindly honored", () => {

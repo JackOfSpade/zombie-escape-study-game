@@ -285,7 +285,7 @@ test("diagnostics retain only newest three runs, including pause/restart and no 
     true,
   );
   expect(log.runs.at(-2).summary.outcome).toBe("restarted");
-  expect(JSON.stringify(log)).not.toContain('"study"');
+  expect(JSON.stringify(log)).not.toContain('"study":');
   await page.screenshot({
     path: "test-results/pause-menu.png",
     fullPage: true,

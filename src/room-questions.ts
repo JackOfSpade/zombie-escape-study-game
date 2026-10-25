@@ -1,6 +1,7 @@
 import type { Encounter, Game, Problem, Roadmap } from "./model";
 import { devProblem } from "./practice-problem";
 import { recordSpawn, spawnContract } from "./topic-spawn";
+import { adoptQuestionPacing } from "./field-pacing";
 
 export function roomEncounters(g: Game, e: Encounter) {
   return e.questionRoom
@@ -16,6 +17,7 @@ export function assignRoomProblem(
   source: Encounter,
   problem: Problem,
 ) {
+  adoptQuestionPacing(g, source.floor, problem);
   for (const e of roomEncounters(g, source)) {
     if (e.problem || e.state === "consumed") continue;
     e.problem = structuredClone(problem);

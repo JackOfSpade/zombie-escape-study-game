@@ -529,13 +529,16 @@ test("repeated unchanged ended captures cannot evict earlier live diagnostics", 
   // The world keeps running after death: sampled at the normal 2s cadence.
   g.time += 1;
   logs.capture(g);
-  assert.equal(run.entries.length, afterEnd + 2); // un-pause transition
+  assert.equal(run.entries.length, afterEnd + 1); // playable tail stays frozen
+  assert.equal(run.audit!.spectator.length, 1); // un-pause snapshot
   g.time += 0.5;
   logs.capture(g);
-  assert.equal(run.entries.length, afterEnd + 2); // throttled
+  assert.equal(run.entries.length, afterEnd + 1); // throttled
+  assert.equal(run.audit!.spectator.length, 1);
   g.time += 2;
   logs.capture(g);
-  assert.equal(run.entries.length, afterEnd + 3);
+  assert.equal(run.entries.length, afterEnd + 1);
+  assert.equal(run.audit!.spectator.length, 2);
   assert.equal(
     run.entries.filter(
       (e) =>
@@ -546,4 +549,243 @@ test("repeated unchanged ended captures cannot evict earlier live diagnostics", 
   );
   assert.equal(run.summary!.outcome, "dead");
   assert.equal(run.summary!.duration, 75);
+});
+
+test("long spectator activity preserves playable death evidence, performance and late study receipts across reload", async () => {
+  let stored: string | null = null;
+  const storage = {
+    read: async () => stored,
+    write: async (v: string) => {
+      stored = v;
+    },
+  };
+  const logs = new RunLogs(storage),
+    { g } = scene();
+  const performance = {
+    frames: 121,
+    wallMs: 2000,
+    slowFrames: 2,
+    fps: 60,
+    maxFrameMs: 80,
+    maxSimulationMs: 40,
+    maxWorkMs: 45,
+  };
+  logs.capture(g);
+  logs.record(g, "native-study-transport", {
+    requestId: "question-1",
+    phase: "waiting",
+    payloadJson: "PRIVATE QUESTION",
+    transcript: "PRIVATE ANSWER",
+  });
+  logs.record(g, "performance", performance);
+  for (let i = 1; i <= 70; i++) {
+    g.time = i * 3;
+    logs.record(g, "detail", { payload: "x".repeat(4000) });
+    logs.capture(g);
+  }
+  g.status = "dead";
+  g.endedAt = g.time;
+  g.stats.deaths = 1;
+  g.survivors[0].alive = false;
+  g.survivors[0].hp = 0;
+  g.events.push({
+    seq: ++g.seq,
+    at: g.time,
+    type: "death",
+    actor: "human",
+    floor: 0,
+    text: "lost",
+  });
+  logs.capture(g, true);
+  const playable = JSON.stringify(logs.runs[0].entries),
+    ending = JSON.stringify(logs.runs[0].audit!.ended);
+  for (let i = 0; i < 500; i++) {
+    g.time += 3;
+    g.events.push({
+      seq: ++g.seq,
+      at: g.time,
+      type: "horde-climb",
+      floor: 0,
+      text: "climb",
+    });
+    logs.capture(g);
+    logs.record(g, "performance", {
+      ...performance,
+      frames: 241,
+      fps: 120,
+      slowFrames: 0,
+      maxFrameMs: 10,
+    });
+  }
+  logs.record(g, "native-study-transport", {
+    requestId: "question-1",
+    phase: "applied",
+    appliedAt: g.time,
+    transcript: "PRIVATE ANSWER",
+  });
+  logs.record(g, "browser-error", { file: "game.js", line: 42 });
+  await logs.flush();
+  const loaded = new RunLogs(storage);
+  await loaded.load();
+  const run = loaded.runs[0],
+    audit = run.audit!;
+  assert.equal(JSON.stringify(run.entries), playable);
+  assert.equal(JSON.stringify(audit.ended), ending);
+  assert.equal(audit.performance.playable!.fps, 60);
+  assert.equal(audit.performance.playable!.slowFrames, 2);
+  assert.equal(audit.performance.spectator!.fps, 120);
+  assert.equal(audit.performance.spectator!.samples, 500);
+  assert.deepEqual(
+    audit.events
+      .filter((e) => e.type === "native-study-transport")
+      .map((e) => (e.data as { phase: string }).phase),
+    ["waiting", "applied"],
+  );
+  assert.ok(
+    audit.events.some(
+      (e) =>
+        e.type === "world" && (e.data as { type: string }).type === "death",
+    ),
+  );
+  assert.ok(audit.events.some((e) => e.type === "browser-error"));
+  assert.ok(audit.dropped.spectator > 0);
+  assert.ok(audit.dropped.details > 0);
+  assert.equal(audit.timeline[0].at, 0);
+  assert.equal(audit.partial, false);
+  assert.ok(Buffer.byteLength(JSON.stringify(run)) <= LOG_LIMITS.bytesPerGame);
+  assert.ok(!JSON.stringify(audit).includes("PRIVATE"));
+  assert.equal(stored, JSON.stringify({ version: 1, runs: logs.runs }));
+});
+
+test("timeline compaction retains opening and recent progress with explicit coverage loss", () => {
+  const logs = new RunLogs(memory()),
+    { g } = scene();
+  for (let i = 0; i < 400; i++) {
+    g.time = i * 31;
+    logs.capture(g);
+  }
+  const audit = logs.runs[0].audit!;
+  assert.equal(audit.timeline[0].at, 0);
+  assert.equal(audit.timeline.at(-1)!.at, g.time);
+  assert.ok(audit.timeline.length <= 48);
+  assert.ok(audit.dropped.timeline > 0);
+  assert.ok(
+    Buffer.byteLength(JSON.stringify(logs.runs[0])) <= LOG_LIMITS.bytesPerGame,
+  );
+});
+
+test("late observation marks incomplete historical coverage and never invents an exact end snapshot", async () => {
+  const { g } = scene();
+  g.status = "dead";
+  g.endedAt = 50;
+  g.time = 700;
+  const logs = new RunLogs(memory());
+  logs.capture(g);
+  const audit = logs.runs[0].audit!;
+  assert.equal(audit.partial, true);
+  assert.equal(audit.firstObservedAt, 700);
+  assert.equal(audit.ended!.at, 50);
+  assert.equal((audit.ended!.data as { exact: boolean }).exact, false);
+  assert.equal(audit.timeline.length, 0);
+  const raw = JSON.parse(logs.export());
+  raw.runs[0].audit.performance.playable = { samples: "invalid" };
+  const loaded = new RunLogs({
+    read: async () => JSON.stringify(raw),
+    write: async () => {},
+  });
+  await loaded.load();
+  assert.equal(loaded.runs[0].audit, undefined);
+  assert.equal(loaded.runs.length, 1);
+});
+
+test("many long runs, Unicode event bursts and spectating stay within three 256 KB records", async () => {
+  let stored = "";
+  const logs = new RunLogs({
+    read: async () => stored,
+    write: async (v) => {
+      stored = v;
+    },
+  });
+  for (let n = 0; n < 8; n++) {
+    const { g } = scene();
+    g.id = `bounded-${n}`;
+    logs.capture(g);
+    for (let i = 0; i < 160; i++) {
+      g.time += 31;
+      logs.record(g, "native-study-transport", {
+        requestId: `q-${i}`,
+        phase: "🧟".repeat(200),
+        payloadJson: "ignored by audit",
+      });
+      logs.capture(g);
+    }
+    g.status = "dead";
+    g.endedAt = g.time;
+    logs.capture(g, true);
+    for (let i = 0; i < 120; i++) {
+      g.time += 3;
+      logs.capture(g);
+    }
+    await logs.flush();
+    assert.ok(logs.runs.length <= LOG_LIMITS.games);
+    for (const run of logs.runs) {
+      assert.ok(
+        Buffer.byteLength(JSON.stringify(run)) <= LOG_LIMITS.bytesPerGame,
+      );
+      assert.ok(run.entries.length <= LOG_LIMITS.entries);
+      assert.ok(run.audit!.timeline.length <= 48);
+      assert.ok(run.audit!.events.length <= 96);
+      assert.ok(run.audit!.spectator.length <= 24);
+    }
+    assert.ok(
+      Buffer.byteLength(stored) <=
+        LOG_LIMITS.games * LOG_LIMITS.bytesPerGame + 128,
+    );
+  }
+  const loaded = new RunLogs({
+    read: async () => stored,
+    write: async () => {},
+  });
+  await loaded.load();
+  assert.deepEqual(
+    loaded.runs.map((r) => r.id),
+    ["bounded-5", "bounded-6", "bounded-7"],
+  );
+  assert.ok(loaded.runs.every((r) => !!r.audit?.ended));
+});
+
+test("a delayed final frame keeps its death events and final snapshot in the playable tail", () => {
+  const logs = new RunLogs(memory()),
+    { g } = scene();
+  logs.capture(g);
+  g.time = 30.1;
+  g.endedAt = 30;
+  g.status = "dead";
+  g.events.push({
+    seq: ++g.seq,
+    at: 30,
+    type: "death",
+    actor: "human",
+    floor: 0,
+    text: "lost",
+  });
+  logs.capture(g);
+  const run = logs.runs[0];
+  assert.ok(
+    run.entries.some(
+      (e) =>
+        e.type === "world" && (e.data as { type: string }).type === "death",
+    ),
+  );
+  assert.equal((run.entries.at(-1)!.data as { status: string }).status, "dead");
+  assert.equal(run.audit!.ended!.at, 30);
+  assert.equal(
+    (run.audit!.ended!.data as { observedAt: number }).observedAt,
+    30.1,
+  );
+  const playable = JSON.stringify(run.entries);
+  g.time = 33;
+  logs.capture(g);
+  assert.equal(JSON.stringify(run.entries), playable);
+  assert.equal(run.audit!.spectator.at(-1)!.at, 33);
 });

@@ -1,9 +1,9 @@
 import { CONFIG, type Game } from "./model";
 import { SWARM } from "./force-fields";
+import { FIELD_PACING, initializeFieldPacing } from "./field-pacing";
 
-/** Fresh playable runs give the learner a long, calm opening to study. Only
- * world tempo (spawn cadence, NPC reasoning progress, pickup schedule) changes;
- * movement and combat speeds stay responsive and identical to legacy runs. */
+/** Fresh playable runs give the learner a calm opening, bounded field durability
+ * and slower world tempo. Movement and combat speeds stay responsive. */
 export interface PacingProfile {
   zombieGraceSeconds: number;
   swarmInterval: number;
@@ -15,7 +15,7 @@ export interface PacingProfile {
 }
 
 export const STUDY_PACING: Readonly<PacingProfile> = Object.freeze({
-  zombieGraceSeconds: 180,
+  zombieGraceSeconds: FIELD_PACING.spawnGraceSeconds,
   swarmInterval: 3,
   swarmBatch: 1,
   swarmCap: 180,
@@ -65,10 +65,11 @@ export function swarmPacing(g: Pick<Game, "pacing">) {
 
 /** Convert a freshly created game to the study profile, rewriting the spawn
  * and first-pickup schedules consistently. Intended for time-0 games. */
-export function applyStudyPacing(g: Game) {
+export function applyStudyPacing(g: Game, depth = 1) {
   g.pacing = "study";
   g.nextSpawn = Math.max(g.time, STUDY_PACING.zombieGraceSeconds);
   g.helicopter.next = Math.max(g.time, STUDY_PACING.firstHelicopter);
+  initializeFieldPacing(g, depth);
   g.notice =
     "Three minutes before zombies arrive. Enter the building and find a study terminal.";
   return g;

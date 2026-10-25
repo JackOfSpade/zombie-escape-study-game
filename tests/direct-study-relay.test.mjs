@@ -756,7 +756,7 @@ test("each terminal opening serves only the chat holding its code and disconnect
     return receipt;
   };
   const job = open("FIRSTCHAT");
-  assert.equal(call("get_current_study_question").status, "waiting");
+  assert.equal(call("get_current_study_question").status, "chat_required");
   assert.equal(
     call("get_current_study_question", { chat: "OTHERCHAT" }).status,
     "disconnected",
@@ -795,4 +795,41 @@ test("each terminal opening serves only the chat holding its code and disconnect
     () => queue.enqueue("tutor", payload("x"), undefined, "NOSCOPE1"),
     /chat code/,
   );
+});
+
+test("missing chat code explains stale tools without claiming or disturbing scoped work", () => {
+  const { queue, call, tick } = setup();
+  queue.enable(true);
+  const p = payload("native-missing-chat", {
+    runId: "run-a",
+    encounterId: "e1",
+  });
+  const receipt = queue.enqueue(
+    "tutor",
+    p,
+    { runId: "run-a", encounterId: "e1" },
+    "CHATCODE1",
+  );
+  queue.result(receipt.id, receipt.hash);
+  const missing = call("get_current_study_question");
+  assert.equal(missing.status, "chat_required");
+  assert.match(missing.note, /Refresh tools/);
+  assert.match(missing.note, /not mean no question/);
+  assert.doesNotMatch(JSON.stringify(missing), /CHATCODE1/);
+  assert.equal(queue.snapshot().working, 0);
+  const turn = call("get_current_study_question", { chat: "CHATCODE1" });
+  assert.equal(turn.status, "question");
+  for (const alias of ["chat_code", "chatCode"]) {
+    assert.deepEqual(
+      call("get_current_study_question", { [alias]: "CHATCODE1" }),
+      turn,
+    );
+  }
+  assert.equal(call("get_current_study_question").status, "chat_required");
+  assert.deepEqual(
+    call("get_current_study_question", { chat: "CHATCODE1" }),
+    turn,
+  );
+  tick(HANDOFF_REQUESTER_LIVE_MS + 1);
+  assert.equal(call("get_current_study_question").status, "disconnected");
 });

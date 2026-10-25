@@ -131,6 +131,7 @@ test("concurrent live room requests generate once, and retry after reload keeps 
       );
     return Response.json({
       title: "One room question",
+      estimatedSolveSeconds: 600,
       prompt: "Explain the synthetic boundary",
       starter: "",
       rubric: ["Reasoning"],
@@ -165,6 +166,11 @@ test("concurrent live room requests generate once, and retry after reload keeps 
         restored.encounters[a.id].problem,
       );
     assert.equal(restored.encounters[a.id].problem!.title, "One room question");
+    assert.equal(restored.fieldPacing!.floors[0].estimatedSolveSeconds, 600);
+    assert.ok(
+      restored.floors[0].furniture.find((o) => o.field?.publicEntry)!.maxHp >
+        g.floors[0].furniture.find((o) => o.field?.publicEntry)!.maxHp,
+    );
     assert.equal(
       Object.keys(restored.encounters).filter(
         (id) => restored.encounters[id].problem,

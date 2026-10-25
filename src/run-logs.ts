@@ -1,5 +1,13 @@
 import { isRecord } from "./records";
 import type { Game } from "./model";
+import {
+  AUDIT_LIMITS,
+  auditJson,
+  restoreAudit,
+  spectatorRecord,
+  updateAudit,
+  type RunAudit,
+} from "./run-log-audit";
 export const LOG_KEY = "recent-game-diagnostics-v1";
 export const LOG_LIMITS = { games: 3, entries: 400, bytesPerGame: 256_000 };
 interface Entry {
@@ -12,6 +20,7 @@ interface RunLog {
   seed: number;
   started: string;
   entries: Entry[];
+  audit?: RunAudit;
   summary?: {
     duration: number;
     outcome: string;
@@ -146,27 +155,38 @@ export class RunLogs {
     return c;
   }
   private suffix(run: RunLog) {
-    return run.summary === undefined
-      ? "]}"
-      : `],"summary":${JSON.stringify(run.summary)}}`;
+    const summary =
+      run.summary === undefined
+        ? ""
+        : `,"summary":${JSON.stringify(run.summary)}`;
+    const audit =
+      run.audit === undefined ? "" : `,"audit":${auditJson(run.audit)}`;
+    return `]${summary}${audit}}`;
   }
   private drop(run: RunLog, c: RunCache, count: number) {
     if (count <= 0) return;
     run.entries.splice(0, count);
     c.json.splice(0, count);
     for (const b of c.bytes.splice(0, count)) c.sum -= b;
+    if (run.audit) run.audit.dropped.details += count;
   }
   /**
-   * Retains exactly the newest contiguous tail that the previous whole-run
-   * stringify policy kept: count cap first, then UTF-8 byte cap of the run
-   * document (an oversized newest entry clears the tail).
+   * Bounds the detail tail by count and UTF-8 bytes. Real runs reserve 64 KB
+   * for lifecycle evidence; older minimal logs retain their original policy.
    */
   private trim(run: RunLog) {
     const c = this.cache(run);
     if (run.entries.length > LOG_LIMITS.entries)
       this.drop(run, c, run.entries.length - LOG_LIMITS.entries);
-    // Header equals JSON.stringify({ ...run, entries: [] }) byte-for-byte.
-    const header = c.prefixBytes + utf8Length(this.suffix(run));
+    // Reserve audit space from the start: spectator samples and late transport
+    // receipts must never compete with the playable detail tail after death.
+    const header =
+      c.prefixBytes +
+      utf8Length(this.suffix(run)) +
+      (run.audit
+        ? Math.max(0, AUDIT_LIMITS.bytes - utf8Length(auditJson(run.audit))) +
+          32
+        : 0);
     const n = run.entries.length;
     if (header + c.sum + Math.max(0, n - 1) <= LOG_LIMITS.bytesPerGame) return;
     let bytes = header;
@@ -228,6 +248,14 @@ export class RunLogs {
       ),
     };
     if (type === "snapshot") run.summary.snapshots++;
+    run.audit = updateAudit(g, run.audit, entry);
+    // Leave old minimal/legacy records byte-compatible with the rolling
+    // logger; only real worlds acquire the optional lifecycle audit.
+    if (!run.audit) delete run.audit;
+    if (spectatorRecord(run.audit, at)) {
+      this.trim(run);
+      return;
+    }
     const c = this.cache(run);
     run.entries.push(entry);
     c.json.push(json);
@@ -264,90 +292,112 @@ export class RunLogs {
     for (const e of g.events.filter((e) => e.seq > (previous?.seq ?? 0)))
       this.record(g, "world", {
         seq: e.seq,
+        occurredAt: e.at,
         type: e.type,
         actor: e.actor,
         floor: e.floor,
+        encounter: e.encounter,
+        position: e.position,
       });
     const round = (n: number) => Math.round(n * 100) / 100;
-    this.record(g, "snapshot", {
-      status: g.status,
-      paused: !!g.paused,
-      actors: g.survivors.map((a) => ({
-        id: a.id,
-        floor: a.floor,
-        x: round(a.x),
-        y: round(a.y),
-        hp: round(a.hp),
-        alive: a.alive,
-        escaped: a.escaped,
-        activity: a.activity,
-        keys: a.keys,
-        studyLoop: a.studyLoop && {
-          phase: a.studyLoop.phase,
-          station: a.studyLoop.station,
-          target: a.studyLoop.waypoints[0],
-          window: round(a.studyLoop.window),
-        },
-        handling: a.handling,
-        physics: a.physics,
-        blocked: a.blockedTime,
-        doorway: a.doorTraffic && {
-          id: a.doorTraffic.door,
-          lane: a.doorTraffic.lane,
-          side: a.doorTraffic.side,
-        },
-        traffic: a.trafficPass && {
-          side: a.trafficPass.side,
-          remaining: round(Math.max(0, a.trafficPass.until - g.time)),
-        },
-        path: a.path.slice(0, 2),
-        plan: a.defensePlan && {
-          object: a.defensePlan.object,
-          idle: a.defensePlan.idle,
-          target: a.defensePlan.target,
-        },
-      })),
-      furniture: g.floors.flatMap((f) =>
-        f.furniture
-          .filter(
-            (o) =>
-              o.moved > 0 ||
-              o.hp < o.maxHp ||
-              o.door ||
-              o.field ||
-              o.id === "main-gate",
-          )
-          .map((o) => ({
-            id: o.id,
-            kind: o.kind,
-            turning: o.turning,
-            x: round(o.x),
-            y: round(o.y),
-            w: o.w,
-            h: o.h,
-            angle: round(o.angle ?? 0),
-            physics: o.physics,
-            door: o.door && { latched: o.door.latched, side: o.door.side },
-            field: o.field && {
-              used: o.field.used,
-              limit: o.field.limit,
-              authorized: [...o.field.authorized],
-              crossing: [...o.field.crossing],
-            },
-            hp: round(o.hp),
-            destroyed: o.destroyed,
-          })),
-      ),
-      zombies: g.zombies
-        .filter((z) => z.hp > 0)
-        .slice(-80)
-        .map((z) => ({
-          floor: z.floor,
-          x: round(z.x),
-          y: round(z.y),
-          hp: round(z.hp),
-        })),
-    });
+    const audit = this.runs.find((r) => r.id === g.id)?.audit;
+    this.record(
+      g,
+      "snapshot",
+      spectatorRecord(audit, round(g.time))
+        ? null
+        : {
+            status: g.status,
+            paused: !!g.paused,
+            actors: g.survivors.map((a) => ({
+              id: a.id,
+              floor: a.floor,
+              x: round(a.x),
+              y: round(a.y),
+              hp: round(a.hp),
+              alive: a.alive,
+              escaped: a.escaped,
+              activity: a.activity,
+              keys: a.keys,
+              studyLoop: a.studyLoop && {
+                phase: a.studyLoop.phase,
+                station: a.studyLoop.station,
+                target: a.studyLoop.waypoints[0],
+                window: round(a.studyLoop.window),
+              },
+              handling: a.handling,
+              physics: a.physics,
+              blocked: a.blockedTime,
+              doorway: a.doorTraffic && {
+                id: a.doorTraffic.door,
+                lane: a.doorTraffic.lane,
+                side: a.doorTraffic.side,
+              },
+              traffic: a.trafficPass && {
+                side: a.trafficPass.side,
+                remaining: round(Math.max(0, a.trafficPass.until - g.time)),
+              },
+              path: a.path.slice(0, 2),
+              plan: a.defensePlan && {
+                object: a.defensePlan.object,
+                idle: a.defensePlan.idle,
+                target: a.defensePlan.target,
+              },
+            })),
+            furniture: g.floors.flatMap((f) =>
+              f.furniture
+                .filter(
+                  (o) =>
+                    o.moved > 0 ||
+                    o.hp < o.maxHp ||
+                    o.door ||
+                    o.field ||
+                    o.id === "main-gate",
+                )
+                .map((o) => ({
+                  id: o.id,
+                  kind: o.kind,
+                  turning: o.turning,
+                  x: round(o.x),
+                  y: round(o.y),
+                  w: o.w,
+                  h: o.h,
+                  angle: round(o.angle ?? 0),
+                  physics: o.physics,
+                  door: o.door && {
+                    latched: o.door.latched,
+                    side: o.door.side,
+                  },
+                  field: o.field && {
+                    used: o.field.used,
+                    limit: o.field.limit,
+                    authorized: [...o.field.authorized],
+                    crossing: [...o.field.crossing],
+                  },
+                  hp: round(o.hp),
+                  maxHp: round(o.maxHp),
+                  destroyed: o.destroyed,
+                })),
+            ),
+            zombieCount: g.zombies.filter((z) => z.hp > 0).length,
+            zombiesOmitted: Math.max(
+              0,
+              g.zombies.filter((z) => z.hp > 0).length - 80,
+            ),
+            zombies: g.zombies
+              .filter((z) => z.hp > 0)
+              .slice(-80)
+              .map((z) => ({
+                id: z.id,
+                floor: z.floor,
+                x: round(z.x),
+                y: round(z.y),
+                hp: round(z.hp),
+                target: z.target,
+                path: z.path.slice(0, 2),
+              })),
+          },
+    );
     this.observed.set(g.id, {
       seq: g.seq,
       time: g.time,
@@ -444,5 +494,7 @@ function restoredRun(value: unknown): RunLog | undefined {
         peakZombies: summary.peakZombies as number,
       };
   }
+  const audit = restoreAudit(value.audit);
+  if (audit) run.audit = audit;
   return run;
 }

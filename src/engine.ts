@@ -1,3 +1,4 @@
+import { BARRICADE_ATTACK } from "./barricade-combat";
 import {
   planZombieRoute,
   prepareZombieSearch,
@@ -1519,7 +1520,9 @@ function npc(g: Game, a: Actor, dt: number) {
         ))
     ) {
       a.fleeTarget = chooseRetreat(g, a, planningThreats, pickup);
-      a.fleeUntil = g.time + 3;
+      // Hold a direction long enough to avoid frame-by-frame rerolls, but
+      // reconsider before a moving pack can cut off a three-second retreat.
+      a.fleeUntil = g.time + 1;
       a.fleeFloor = a.floor;
       // A changed threat can invalidate the route even when the replacement
       // destination is close to the old one. Follow must honor the new choice.
@@ -2095,7 +2098,10 @@ function strikeFurniture(
   floor: number,
   position: Point,
 ) {
-  ob.hp -= g.surge.state === "active" ? 7 : 4;
+  ob.hp -=
+    g.surge.state === "active"
+      ? BARRICADE_ATTACK.surgeDamage
+      : BARRICADE_ATTACK.damage;
   const hit = event(
     g,
     "barricade-hit",
@@ -2107,7 +2113,7 @@ function strikeFurniture(
   );
   hit.position = { x: position.x, y: position.y };
   if (floor !== z.floor) hit.stairContact = true;
-  z.cooldown = 1.25;
+  z.cooldown = BARRICADE_ATTACK.cooldown;
   if (ob.hp <= 0) {
     ob.destroyed = true;
     ob.hp = 0;
@@ -2276,6 +2282,11 @@ function zombie(
   )
     z.path.shift();
   p = z.path[0];
+  // A visible moving survivor is a live steering target, not a cell centre
+  // captured by the slower exploration planner. Sweep the full body so this
+  // shortcut cannot cut corners or walk through desks/force fields. Decoys
+  // retain priority and obstructed prey still use the local search route.
+  if (prey && !decoy && walkSegment(f, z, prey)) p = prey;
   if (p && !clearWallSegment(f, z, p))
     p = { x: Math.floor(z.x) + 0.5, y: Math.floor(z.y) + 0.5 };
   // Grid search has no edge when both positions share a cell. Finish the
