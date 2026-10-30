@@ -1,4 +1,5 @@
 import { fieldAllows } from "./force-fields";
+import { citySolid, cityWall } from "./city-layout";
 import { boxBounds, boxesOverlap, localPoint } from "./furniture-geometry";
 import { type Floor, type Furniture, H, type Point, W } from "./model";
 export function inFurniture(p: Point, f: Furniture, pad = 0) {
@@ -91,6 +92,8 @@ export function furnitureNear(
   return index.cells[y * W + x];
 }
 export function wall(f: Floor, x: number, y: number) {
+  const city = cityWall(f, x, y);
+  if (city !== undefined) return city;
   return (
     x < 0 ||
     y < 0 ||
@@ -106,9 +109,11 @@ export function solid(
   ignore?: string,
   pushDoors = false,
 ) {
+  if (citySolid(f, p, pad)) return true;
   for (let y = Math.floor(p.y - pad); y <= Math.floor(p.y + pad); y++)
     for (let x = Math.floor(p.x - pad); x <= Math.floor(p.x + pad); x++)
       if (
+        cityWall(f, x + 0.5, y + 0.5) === undefined &&
         wall(f, x + 0.5, y + 0.5) &&
         Math.hypot(
           Math.max(x - p.x, 0, p.x - x - 1),
@@ -180,6 +185,7 @@ export function line(
   return true;
 }
 interface PathCache {
+  city?: Floor["city"];
   tiles: Uint8Array;
   ids: string[];
   poses: Float64Array;
@@ -208,9 +214,15 @@ function snapshot(f: Floor) {
       i * POSE,
     );
   });
-  return { tiles, poses, ids: f.furniture.map((o) => `${o.id}/${o.kind}`) };
+  return {
+    city: f.city,
+    tiles,
+    poses,
+    ids: f.furniture.map((o) => `${o.id}/${o.kind}`),
+  };
 }
 function unchanged(cache: PathCache, f: Floor) {
+  if (cache.city !== f.city) return false;
   if (cache.ids.length !== f.furniture.length) return false;
   for (let y = 0; y < H; y++)
     for (let x = 0; x < W; x++)
@@ -236,6 +248,9 @@ function unchanged(cache: PathCache, f: Floor) {
   return true;
 }
 export function path(f: Floor, a: Point, b: Point, breakable = false): Point[] {
+  // This bounded grid owns indoor guidance. Public exterior recovery has its
+  // own road graph; out-of-range indices must never enter a typed-array path.
+  if (!gridPoint(a) || !gridPoint(b)) return [];
   // Exact grid queries recur while a crowd waits at a barricade. Geometry is
   // authoritative, including externally loaded/edited floors; HP is not a cost.
   let cache = routeCache.get(f);
@@ -335,6 +350,7 @@ function computePath(
     ]) {
       const xx = x + dx,
         yy = y + dy;
+      if (xx < 0 || yy < 0 || xx >= W || yy >= H) continue;
       if (wall(f, xx + 0.5, yy + 0.5)) continue;
       const id = yy * W + xx;
       if (closed[id]) continue;
@@ -348,16 +364,28 @@ function computePath(
       }
     }
   }
-  if (prev[end] < 0) return [];
+  if (!Number.isFinite(dist[end]) || prev[end] < 0) return [];
   const out: Point[] = [];
-  for (let v = end; v !== start; v = prev[v]) {
-    if (v < 0) return [];
+  for (let v = end, count = 0; v !== start; v = prev[v]) {
+    if (!Number.isSafeInteger(v) || v < 0 || v >= W * H || ++count > W * H)
+      return [];
     out.push({ x: (v % W) + 0.5, y: Math.floor(v / W) + 0.5 });
   }
   return out.reverse();
 }
+function gridPoint(p: Point) {
+  return (
+    Number.isFinite(p.x) &&
+    Number.isFinite(p.y) &&
+    p.x >= 0 &&
+    p.y >= 0 &&
+    p.x < W &&
+    p.y < H
+  );
+}
 export function soundGain(f: Floor, a: Point, b: Point) {
   if (line(f, a, b, true)) return 1;
+  if (f.city && (!gridPoint(a) || !gridPoint(b))) return 0.15;
   const open = path(f, a, b, false);
   return open.length ? Math.max(0.25, 1 - open.length / 100) : 0.025;
 }
@@ -375,6 +403,20 @@ export function canPlace(
   const box = { ...p, w, h, angle },
     bounds = boxBounds(box),
     eps = 1e-7;
+  if (f.city) {
+    const city = f.city.bounds;
+    if (
+      p.x - bounds.w / 2 < city.left ||
+      p.x + bounds.w / 2 > city.right ||
+      p.y - bounds.h / 2 < city.top ||
+      p.y + bounds.h / 2 > city.bottom
+    )
+      return false;
+    if (
+      f.city.obstacles.some((obstacle) => boxesOverlap(box, obstacle, margin))
+    )
+      return false;
+  }
   for (
     let y = Math.floor(p.y - bounds.h / 2 + eps);
     y <= Math.floor(p.y + bounds.h / 2 - eps);
@@ -386,6 +428,7 @@ export function canPlace(
       x++
     )
       if (
+        cityWall(f, x + 0.5, y + 0.5) === undefined &&
         wall(f, x + 0.5, y + 0.5) &&
         boxesOverlap(box, { x: x + 0.5, y: y + 0.5, w: 1, h: 1 })
       )

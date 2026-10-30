@@ -2,18 +2,41 @@ import { expect, test, type Page } from "./helpers/offline-test";
 import { flushNativeSave, mockNativeStudy } from "./native-study-harness";
 import { openGameMenu, openPlayerMenu } from "./helpers/game-menu";
 
-async function startFirstPerson(page: Page) {
-  // Exercise the supported fallback deterministically, including in headless
-  // Chromium and embedded hosts where a native lock is never granted.
-  await page.addInitScript(() => {
+async function startFirstPerson(
+  page: Page,
+  lock: "refused" | "synthetic" = "refused",
+) {
+  // Headless Chromium refuses native capture with WrongDocumentError. Model
+  // grants/loss events for integration coverage; keep refusal cases explicit.
+  await page.addInitScript((lock) => {
     (window as any).__lookLockRequests = 0;
-    HTMLCanvasElement.prototype.requestPointerLock = () => {
+    (window as any).__lookLockExits = 0;
+    let owner: Element | null = null;
+    if (lock === "synthetic") {
+      Object.defineProperty(document, "pointerLockElement", {
+        configurable: true,
+        get: () => owner,
+      });
+      document.exitPointerLock = () => {
+        (window as any).__lookLockExits++;
+        owner = null;
+        document.dispatchEvent(new Event("pointerlockchange"));
+      };
+    }
+    HTMLCanvasElement.prototype.requestPointerLock = function () {
       (window as any).__lookLockRequests++;
+      if (lock === "synthetic") {
+        owner = this;
+        queueMicrotask(() =>
+          document.dispatchEvent(new Event("pointerlockchange")),
+        );
+        return Promise.resolve();
+      }
       return Promise.reject(
         new DOMException("Synthetic lock refusal", "SecurityError"),
       );
     };
-  });
+  }, lock);
   await page.goto("/");
   await page.getByRole("button", { name: "Enter the building" }).click();
   await page.evaluate(() => {
@@ -53,17 +76,75 @@ async function look(page: Page) {
   );
 }
 
-async function dragLook(page: Page) {
-  const canvas = page.locator("#view3d");
-  await canvas.scrollIntoViewIfNeeded();
-  const box = (await canvas.boundingBox())!;
-  const x = box.x + box.width * 0.5,
-    y = box.y + box.height * 0.65;
-  await page.mouse.move(x, y);
+test("entering and resuming capture the mouse for button-free look until Esc pauses", async ({
+  page,
+}) => {
+  await startFirstPerson(page, "synthetic");
+  const lockedCanvas = () =>
+    page.evaluate(() => document.pointerLockElement?.id ?? null);
+  await expect.poll(lockedCanvas).toBe("view3d");
+  expect(await page.evaluate(() => (window as any).__lookLockRequests)).toBe(1);
+  for (const key of ["Tab", "Shift+Tab"]) {
+    await page.keyboard.press(key);
+    await expect(page.locator("#view3d")).toBeFocused();
+    expect(await lockedCanvas()).toBe("view3d");
+    expect(await page.evaluate(() => (window as any).__lookLockExits)).toBe(0);
+  }
+
+  await page.evaluate(() => {
+    (window as any).__deadAir.setLook(0.3, 0.1);
+    document.addEventListener("mousemove", (event) => {
+      (window as any).__lookMouseButtons = event.buttons;
+    });
+  });
+  const stationary = await pose(page);
+  await page.mouse.move(720, 550);
+  const beforeMove = await look(page);
+  await page.mouse.move(840, 510, { steps: 4 });
+  const afterMove = await look(page);
+  expect(afterMove.yaw).toBeCloseTo(beforeMove.yaw + 120 * 0.0022, 5);
+  expect(afterMove.pitch).toBeCloseTo(beforeMove.pitch + 40 * 0.0022, 5);
+  expect(await pose(page)).toEqual(stationary);
+  expect(await page.evaluate(() => (window as any).__lookMouseButtons)).toBe(0);
   await page.mouse.down();
-  await page.mouse.move(x + 120, y - 40, { steps: 4 });
   await page.mouse.up();
-}
+  expect(await lockedCanvas()).toBe("view3d");
+  expect(await page.evaluate(() => (window as any).__lookLockRequests)).toBe(1);
+
+  await page.keyboard.press("Escape");
+  await expect(page.locator("#pause-menu")).toBeVisible();
+  await expect.poll(lockedCanvas).toBeNull();
+  await expect(page.locator("#resume-game")).toBeFocused();
+  await page.keyboard.press("Tab");
+  await expect(page.locator("#study-only-menu")).toBeFocused();
+  await page.keyboard.press("Shift+Tab");
+  await expect(page.locator("#resume-game")).toBeFocused();
+  const pausedLook = await look(page),
+    pausedTime = await page.evaluate(() => (window as any).__deadAir.game.time);
+  await page.mouse.move(500, 400);
+  await page.waitForTimeout(200);
+  expect(await look(page)).toEqual(pausedLook);
+  expect(await page.evaluate(() => (window as any).__deadAir.game.time)).toBe(
+    pausedTime,
+  );
+
+  await page.locator("#resume-game").click();
+  await expect(page.locator("#pause-menu")).toBeHidden();
+  await expect.poll(lockedCanvas).toBe("view3d");
+  await page.mouse.move(500, 400);
+  const resumedLook = await look(page);
+  await page.mouse.move(560, 400);
+  expect((await look(page)).yaw).toBeCloseTo(resumedLook.yaw + 60 * 0.0022, 5);
+
+  await page.keyboard.press("Escape");
+  await expect(page.locator("#pause-menu")).toBeVisible();
+  await expect.poll(lockedCanvas).toBeNull();
+  // Wait past the lock-loss duplicate-key guard before the next real Esc.
+  await page.waitForTimeout(200);
+  await page.keyboard.press("Escape");
+  await expect(page.locator("#pause-menu")).toBeHidden();
+  await expect.poll(lockedCanvas).toBe("view3d");
+});
 
 test("reloading a first-person save without view state restores yaw from the survivor heading", async ({
   page,
@@ -119,7 +200,7 @@ test("camera yaw and pitch survive view re-entry and reload independently of mov
   expect((await pose(page)).heading).toEqual({ x: -1, y: 0 });
 });
 
-test("first-person WebGL draws, fallback look turns, relative WASD moves and lock loss pauses", async ({
+test("first-person WebGL draws, keyboard look turns on capture refusal, relative WASD moves and lock loss pauses", async ({
   page,
 }) => {
   const errors: string[] = [];
@@ -163,24 +244,25 @@ test("first-person WebGL draws, fallback look turns, relative WASD moves and loc
   expect(webgl.lost).toBe(false);
   expect(webgl.pixelRatio).toBeLessThanOrEqual(1.51);
 
-  await page.locator("#view3d").click();
   await expect
     .poll(() => page.evaluate(() => (window as any).__lookLockRequests))
     .toBe(1);
+  await page.locator("#view3d").click();
+  await expect
+    .poll(() => page.evaluate(() => (window as any).__lookLockRequests))
+    .toBe(2);
   await expect
     .poll(() => page.evaluate(() => (window as any).__deadAir.game.notice))
-    .toContain("Click again");
+    .toContain("Click to capture");
   expect(await page.evaluate(() => document.pointerLockElement)).toBeNull();
   await page.evaluate(() => (window as any).__deadAir.setLook(0.3, 0.1));
   expect(await look(page)).toEqual({ yaw: 0.3, pitch: 0.1 });
   const stationary = await pose(page);
-  await dragLook(page);
-  const dragged = await look(page);
-  expect(dragged.yaw).toBeCloseTo(0.3 + 120 * 0.0022, 5);
-  expect(dragged.pitch).toBeCloseTo(0.1 + 40 * 0.0022, 5);
+  await page.mouse.move(840, 510, { steps: 4 });
+  expect(await look(page)).toEqual({ yaw: 0.3, pitch: 0.1 });
   await page.keyboard.down("ArrowRight");
   await expect
-    .poll(async () => (await look(page)).yaw - dragged.yaw)
+    .poll(async () => (await look(page)).yaw - 0.3)
     .toBeGreaterThan(0.25);
   await page.keyboard.up("ArrowRight");
   expect(await pose(page)).toEqual(stationary);
@@ -390,11 +472,11 @@ test("Space snapshots camera facing only when the real vault handler runs", asyn
   expect((await pose(page)).heading.y).toBeCloseTo(0, 5);
 });
 
-test("the docked study HUD releases lock once, preserves text focus, and completed questions leave look and E available", async ({
+test("the docked study HUD keeps mouse capture until text focus and completed questions leave look and E available", async ({
   page,
 }) => {
   const relay = await mockNativeStudy(page);
-  await startFirstPerson(page);
+  await startFirstPerson(page, "synthetic");
   await page.evaluate(async () => {
     const d = (window as any).__deadAir,
       g = d.game,
@@ -407,45 +489,21 @@ test("the docked study HUD releases lock once, preserves text focus, and complet
       { id: "first-person-terminal", encounter: e.id, x: a.x + 0.8, y: a.y },
     ];
     d.setLook(0, 0);
-    // Model the initial grant and release through the browser's change event;
-    // subsequent requests use the headless-safe refusal fallback.
-    let owner: Element | null = null;
-    Object.defineProperty(document, "pointerLockElement", {
-      configurable: true,
-      get: () => owner,
-    });
-    (window as any).__studyUiExits = 0;
-    document.exitPointerLock = () => {
-      (window as any).__studyUiExits++;
-      owner = null;
-      document.dispatchEvent(new Event("pointerlockchange"));
-    };
-    const canvas = document.querySelector<HTMLCanvasElement>("#view3d")!,
-      requestPointerLock = canvas.requestPointerLock;
-    let granted = false;
-    canvas.requestPointerLock = (...args) => {
-      // Every request is counted; only the first is granted.
-      (window as any).__lookLockRequests++;
-      if (granted) return requestPointerLock.apply(canvas, args);
-      granted = true;
-      owner = canvas;
-      document.dispatchEvent(new Event("pointerlockchange"));
-      return Promise.resolve();
-    };
   });
   const canvas = page.locator("#view3d");
   await expect(page.locator("#interaction-prompt")).toHaveText(
     "E · Open terminal",
   );
-  await canvas.click();
   expect(await page.evaluate(() => document.pointerLockElement?.id)).toBe(
     "view3d",
   );
   await page.keyboard.press("e");
   await expect(page.locator("#native-study")).toBeVisible();
   await expect.poll(() => relay.calls.length).toBe(1);
-  expect(await page.evaluate(() => document.pointerLockElement)).toBeNull();
-  expect(await page.evaluate(() => (window as any).__studyUiExits)).toBe(1);
+  expect(await page.evaluate(() => document.pointerLockElement?.id)).toBe(
+    "view3d",
+  );
+  expect(await page.evaluate(() => (window as any).__lookLockExits)).toBe(0);
   expect(
     await page.evaluate(() => !!(window as any).__deadAir.game.paused),
   ).toBe(false);
@@ -454,18 +512,13 @@ test("the docked study HUD releases lock once, preserves text focus, and complet
     .poll(() => page.evaluate(() => (window as any).__deadAir.game.time))
     .toBeGreaterThan(time);
 
-  await canvas.click();
-  // The refused real request may be retried silently after the cooldown.
-  await expect
-    .poll(() => page.evaluate(() => (window as any).__lookLockRequests))
-    .toBeGreaterThanOrEqual(2);
   const resumedLook = await look(page);
   await page.keyboard.down("ArrowRight");
   await expect
     .poll(async () => (await look(page)).yaw - resumedLook.yaw)
     .toBeGreaterThan(0.25);
   await page.keyboard.up("ArrowRight");
-  expect(await page.evaluate(() => (window as any).__studyUiExits)).toBe(1);
+  expect(await page.evaluate(() => (window as any).__lookLockExits)).toBe(0);
   await page.evaluate(() => {
     navigator.clipboard.writeText = async () => {
       throw new Error("Synthetic clipboard denial");
@@ -479,6 +532,8 @@ test("the docked study HUD releases lock once, preserves text focus, and complet
   await field.focus();
   await page.keyboard.type("wasd e ");
   await expect(field).toBeFocused();
+  expect(await page.evaluate(() => document.pointerLockElement)).toBeNull();
+  expect(await page.evaluate(() => (window as any).__lookLockExits)).toBe(1);
   expect(await pose(page)).toEqual(before);
   expect(await look(page)).toEqual(fixedLook);
   await expect(page.locator("#pause-menu")).toBeHidden();
@@ -526,21 +581,24 @@ test("the docked study HUD releases lock once, preserves text focus, and complet
     .poll(async () => (await look(page)).yaw)
     .toBeLessThan(completedLook.yaw + 0.1);
   await page.keyboard.up("ArrowLeft");
-  const beforeDrag = await look(page);
-  await dragLook(page);
-  expect((await look(page)).yaw).toBeCloseTo(beforeDrag.yaw + 120 * 0.0022, 5);
+  await canvas.click();
+  await expect
+    .poll(() => page.evaluate(() => document.pointerLockElement?.id))
+    .toBe("view3d");
+  const box = (await canvas.boundingBox())!,
+    x = box.x + box.width * 0.5,
+    y = box.y + box.height * 0.65;
+  await page.mouse.move(x, y);
+  const beforeMove = await look(page);
+  await page.mouse.move(x + 120, y - 40, { steps: 4 });
+  expect((await look(page)).yaw).toBeCloseTo(beforeMove.yaw + 120 * 0.0022, 5);
   expect((await look(page)).pitch).toBeCloseTo(
-    beforeDrag.pitch + 40 * 0.0022,
+    beforeMove.pitch + 40 * 0.0022,
     5,
   );
-  // Drags and silent retries also request; this click must add a request.
-  const requestsBeforeClick = await page.evaluate(
-    () => (window as any).__lookLockRequests,
+  expect(await page.evaluate(() => document.pointerLockElement?.id)).toBe(
+    "view3d",
   );
-  await canvas.click({ position: { x: 100, y: 100 } });
-  await expect
-    .poll(() => page.evaluate(() => (window as any).__lookLockRequests))
-    .toBeGreaterThan(requestsBeforeClick);
   await expect(page.locator("#native-study")).toBeVisible();
   await expect(page.locator("#pause-menu")).toBeHidden();
 });

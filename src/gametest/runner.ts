@@ -18,6 +18,7 @@ import {
   type Scenario,
 } from "./schema";
 import { createTestWorld, entity, spawn } from "./world";
+import { populateCity } from "../world";
 export const TEST_DT = 1 / 30;
 export interface CheckResult {
   name: string;
@@ -122,13 +123,18 @@ export class TestRunner {
   error?: string;
   readonly results: CheckResult[];
   readonly actionResults: { tick: number; type: string; ok: boolean }[] = [];
-  private moves = new Map<string, Point>();
+  private moves = new Map<string, Point & { stairWalk?: boolean }>();
   private endedTravel = { npcTravel: 0, zombieTravel: 0 };
   constructor(s: Scenario, roadmap: Roadmap) {
     this.scenario = parseScenario(s);
     this.game = createTestWorld(this.scenario, roadmap);
     if (this.scenario.pacing === "study") {
       applyStudyPacing(this.game);
+      if (!this.scenario.naturalSpawns)
+        this.game.nextSpawn = Number.MAX_SAFE_INTEGER;
+    }
+    if (this.scenario.city) {
+      populateCity(this.game, this.scenario.naturalSpawns);
       if (!this.scenario.naturalSpawns)
         this.game.nextSpawn = Number.MAX_SAFE_INTEGER;
     }
@@ -169,7 +175,11 @@ export class TestRunner {
     if (!e || !("alive" in e || "origin" in e))
       throw Error(`Missing character ${a.id}`);
     if (a.type === "move") {
-      this.moves.set(a.id, { x: a.x, y: a.y });
+      this.moves.set(a.id, {
+        x: a.x,
+        y: a.y,
+        ...(a.stairWalk === undefined ? {} : { stairWalk: a.stairWalk }),
+      });
       if ("heading" in e && Math.hypot(a.x, a.y) > 0)
         e.heading = {
           x: a.x / Math.hypot(a.x, a.y),

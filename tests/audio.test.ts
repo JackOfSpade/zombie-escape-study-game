@@ -4,7 +4,11 @@ import { test } from "node:test";
 import { AudioDirector } from "../src/audio";
 import { step } from "../src/engine";
 import { type Floor, type Furniture, type Roadmap, event } from "../src/model";
-import { hordeSound, soundEvents } from "../src/soundscape";
+import {
+  captureHordeAcoustics,
+  hordeSound,
+  soundEvents,
+} from "../src/soundscape";
 import { createGame } from "../src/world";
 const r: Roadmap = JSON.parse(readFileSync("public/curriculum.json", "utf8"));
 function floor(): Floor {
@@ -244,6 +248,190 @@ test("ambient selection favors nearby audible sources and captions expose no hid
   assert.deepEqual(hordeSound(g), before);
   assert.ok(before.gain > 0.1);
   assert.doesNotMatch(before.caption, /hidden|\d|north|east|west|south/i);
+});
+test("cached horde propagation remixes live listener and source distances without advancing time", () => {
+  const g = fixture(),
+    a = g.survivors[0];
+  g.zombies = [
+    {
+      id: "moving-voice",
+      x: 13.5,
+      y: 15.5,
+      floor: 0,
+      hp: 100,
+      path: [],
+      repath: 0,
+      cooldown: 0,
+      memory: 0,
+      stagger: 0,
+      origin: "outside",
+    },
+  ];
+  const zombie = g.zombies[0],
+    cache = captureHordeAcoustics(g),
+    before = hordeSound(g, cache);
+  a.x = 7.5;
+  const far = hordeSound(g, cache);
+  assert.ok(
+    far.gain < before.gain,
+    "walking away reduces an existing emitter immediately",
+  );
+  a.x = 12.5;
+  assert.ok(
+    hordeSound(g, cache).gain > before.gain,
+    "walking closer increases it immediately",
+  );
+  zombie.x = 20.5;
+  assert.ok(
+    hordeSound(g, cache).gain < far.gain,
+    "a moving emitter also changes its live distance",
+  );
+  assert.equal(hordeSound(g, cache).origin?.x, zombie.x);
+  a.x = 1.5;
+  assert.equal(
+    hordeSound(g, cache).gain,
+    0,
+    "a cached actor outside hearing range is silent",
+  );
+  a.x = 10.5;
+  zombie.hp = 0;
+  assert.equal(
+    hordeSound(g, cache).gain,
+    0,
+    "a dead emitter disappears before the next propagation refresh",
+  );
+  zombie.hp = 100;
+  a.floor = 1;
+  assert.equal(
+    hordeSound(g, cache).gain,
+    0,
+    "a previous floor's cache is not reused on another floor",
+  );
+  assert.equal(g.time, 100);
+});
+test("horde propagation caches at most twelve deterministically selected source references", () => {
+  const g = fixture();
+  g.zombies = Array.from({ length: 40 }, (_, i) => ({
+    id: `cached-${i.toString().padStart(2, "0")}`,
+    x: i === 39 ? 11 : 20,
+    y: 15.5,
+    floor: 0,
+    hp: 100,
+    path: [],
+    repath: 0,
+    cooldown: 0,
+    memory: 0,
+    stagger: 0,
+    origin: "outside" as const,
+  }));
+  const originalOrder = g.zombies.map((z) => z.id),
+    first = captureHordeAcoustics(g);
+  assert.equal(first.sources.length, 12);
+  assert.equal(first.sources[0].actor.id, "cached-39");
+  assert.ok(first.sources.every((s) => g.zombies.includes(s.actor)));
+  assert.deepEqual(
+    g.zombies.map((z) => z.id),
+    originalOrder,
+    "capturing audio never sorts the world array",
+  );
+  g.zombies.reverse();
+  assert.deepEqual(
+    captureHordeAcoustics(g).sources.map((s) => s.actor.id),
+    first.sources.map((s) => s.actor.id),
+  );
+});
+test("removed or replaced living zombies cannot remain audible through a cached horde emitter", () => {
+  const g = fixture();
+  g.zombies = [
+    {
+      id: "replaced-emitter",
+      x: 13.5,
+      y: 15.5,
+      floor: 0,
+      hp: 100,
+      path: [],
+      repath: 0,
+      cooldown: 0,
+      memory: 0,
+      stagger: 0,
+      origin: "outside",
+    },
+  ];
+  const original = g.zombies[0],
+    cache = captureHordeAcoustics(g);
+  assert.ok(hordeSound(g, cache).gain > 0);
+  g.zombies = [];
+  assert.equal(original.hp, 100, "removal did not kill the detached object");
+  assert.equal(hordeSound(g, cache).gain, 0);
+  assert.equal(hordeSound(g, cache).origin, undefined);
+  g.zombies = [{ ...original, x: 17.5 }];
+  assert.equal(g.zombies[0].id, original.id);
+  assert.equal(
+    hordeSound(g, cache).gain,
+    0,
+    "reusing an ID cannot revive the detached emitter's cached position",
+  );
+  const refreshed = hordeSound(g);
+  assert.ok(refreshed.gain > 0);
+  assert.equal(refreshed.origin?.x, 17.5);
+  assert.equal(g.time, 100);
+});
+test("the already-playing horde loop attenuates every update as the player approaches or leaves", () => {
+  const { ctx } = context(),
+    d = new AudioDirector(
+      () => ctx,
+      async () => new Map(),
+    ),
+    g = fixture(),
+    a = g.survivors[0];
+  g.zombies = [
+    {
+      id: "continuous-horde",
+      x: 13.5,
+      y: 15.5,
+      floor: 0,
+      hp: 100,
+      path: [],
+      repath: 0,
+      cooldown: 0,
+      memory: 0,
+      stagger: 0,
+      origin: "outside",
+    },
+  ];
+  d.start();
+  d.update(g, { yaw: 0 });
+  const gain = d.horde!.gain as unknown as Param,
+    initial = gain.calls.at(-1)!.value;
+  assert.ok(initial > 0);
+  a.x = 7.5;
+  d.update(g, { yaw: Math.PI });
+  const far = gain.calls.at(-1)!.value;
+  assert.ok(
+    far < initial,
+    "gain follows movement between acoustic refresh ticks",
+  );
+  a.x = 12.5;
+  d.update(g, { yaw: 0 });
+  assert.ok(gain.calls.at(-1)!.value > initial);
+  const living = g.zombies[0];
+  g.zombies = [];
+  d.update(g, { yaw: 0 });
+  assert.equal(
+    gain.calls.at(-1)!.value,
+    0,
+    "detached living emitters stop immediately",
+  );
+  g.zombies = [living];
+  g.zombies[0].hp = 0;
+  d.update(g, { yaw: 0 });
+  assert.equal(gain.calls.at(-1)!.value, 0);
+  assert.equal(
+    g.time,
+    100,
+    "no simulation tick or new loop playback was needed",
+  );
+  d.stop();
 });
 test("audio failure and mute retain simulation-driven captions without fabricating default banners", () => {
   const g = fixture(),

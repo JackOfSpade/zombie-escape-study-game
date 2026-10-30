@@ -392,6 +392,7 @@ test("door and field lintels close the wall above fixed frames without filling t
         staticWorld,
         clearStatic() {},
         exterior: { build() {} },
+        building: { build() {} },
         materials: { wall: material, ceiling: material, stairs: material },
         floorMaterials: new Map(
           ["carpet", "carpetAlt", "lino", "concrete", "roof"].map((finish) => [

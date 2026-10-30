@@ -4,7 +4,12 @@ import { executionRoute } from "./execution-route.mjs";
 import { autonomousHandoff } from "./chatgpt-handoff-queue.mjs";
 
 /** Construct the actual loopback relay without launching Vite, for isolated transport verification. */
-export function createStudyBridgeServer({ endpoint, key, handoff } = {}) {
+export function createStudyBridgeServer({
+  endpoint,
+  key,
+  handoff,
+  speech,
+} = {}) {
   return createServer(async (req, res) => {
     res.setHeader("Content-Type", "application/json");
     res.setHeader("Cache-Control", "no-store");
@@ -20,6 +25,7 @@ export function createStudyBridgeServer({ endpoint, key, handoff } = {}) {
       return;
     }
     try {
+      if (speech && (await speech.route(req, res))) return;
       if (handoff && (await handoff.route(req, res))) return;
       if (req.url === "/api/execute") {
         await executionRoute(req, res);
@@ -97,6 +103,8 @@ export function createStudyBridgeServer({ endpoint, key, handoff } = {}) {
             "materialize-outcome",
             "review-environment",
             "reconcile-roadmap",
+            "npc-chatter",
+            "npc-chatter-review",
           ].includes(parsed.operation)
         )
           throw new HttpInputError(400, "Unknown operation");

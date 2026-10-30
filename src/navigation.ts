@@ -4,6 +4,7 @@ import { boxBounds, worldPoint } from "./furniture-geometry";
 import { H, W, distance, type Floor, type Point } from "./model";
 import { inFurniture, solid, wall } from "./spatial";
 import { rayBodyDistance } from "./visibility";
+import { cityWall } from "./city-layout";
 export interface NavStep extends Point {
   action?: "door" | "vault";
   obstacle?: string;
@@ -15,6 +16,7 @@ interface Edge {
   obstacle?: string;
 }
 interface Graph {
+  city?: Floor["city"];
   signature: string;
   points: Point[];
   edges: Edge[][];
@@ -23,7 +25,7 @@ const cache = new WeakMap<Floor, Graph>();
 // Furniture moves invalidate routes, but not the fixed grid's wall clearance.
 const wallEdgeCache = new WeakMap<
   Floor,
-  { signature: string; edges: Map<string, boolean> }
+  { signature: string; city?: Floor["city"]; edges: Map<string, boolean> }
 >();
 /** Continuous swept actor footprint, including shallow corner intersections. */
 export function walkSegment(f: Floor, a: Point, b: Point, ignore?: string) {
@@ -119,6 +121,18 @@ function wallClearance(
   maxY: number,
   pad: number,
 ) {
+  if (f.city)
+    for (const obstacle of f.city.obstacles) {
+      if (
+        obstacle.x + obstacle.w / 2 < minX ||
+        obstacle.x - obstacle.w / 2 > maxX ||
+        obstacle.y + obstacle.h / 2 < minY ||
+        obstacle.y - obstacle.h / 2 > maxY
+      )
+        continue;
+      if (rayBodyDistance(a, dx, dy, obstacle, pad - 1e-8) < d - 1e-7)
+        return false;
+    }
   for (
     let y = Math.max(-1, Math.floor(minY));
     y <= Math.min(H, Math.floor(maxY));
@@ -130,6 +144,7 @@ function wallClearance(
       x++
     )
       if (
+        cityWall(f, x + 0.5, y + 0.5) === undefined &&
         wall(f, x + 0.5, y + 0.5) &&
         rayBodyDistance(
           a,
@@ -153,10 +168,10 @@ function graph(f: Floor): Graph {
   const walls = f.tiles.map((r) => r.join("")).join("");
   const signature = `${walls};${f.furniture.map((o) => `${o.id},${o.kind},${o.x},${o.y},${o.w},${o.h},${o.angle ?? 0},${o.destroyed},${o.open},${o.turning < 0}`).join(";")}`;
   const saved = cache.get(f);
-  if (saved?.signature === signature) return saved;
+  if (saved?.signature === signature && saved.city === f.city) return saved;
   let wallEdges = wallEdgeCache.get(f);
-  if (wallEdges?.signature !== walls) {
-    wallEdges = { signature: walls, edges: new Map() };
+  if (wallEdges?.signature !== walls || wallEdges.city !== f.city) {
+    wallEdges = { signature: walls, city: f.city, edges: new Map() };
     wallEdgeCache.set(f, wallEdges);
   }
   const points: Point[] = [],
@@ -307,7 +322,7 @@ function graph(f: Floor): Graph {
       }
     }
   }
-  const result = { signature, points, edges };
+  const result = { signature, city: f.city, points, edges };
   cache.set(f, result);
   return result;
 }

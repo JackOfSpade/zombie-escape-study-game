@@ -62,7 +62,7 @@ export class FirstPersonHud {
     private damage: HTMLElement,
   ) {
     this.hint.textContent =
-      "Click or drag to look · ←/→ turn · ↑/↓ or WASD move · Esc pauses";
+      "Click to capture mouse · Move mouse to look · WASD move · Esc pauses";
   }
 
   update(

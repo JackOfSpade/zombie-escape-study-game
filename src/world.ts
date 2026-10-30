@@ -18,6 +18,22 @@ import {
 } from "./model";
 import { makeNpcProfile } from "./npc-cognition";
 import { applyStudyPacing } from "./study-pacing";
+import { spawnGrace } from "./study-pacing";
+import { createCityPlan } from "./city-layout";
+import { cityZombieSpeed, initCityInvasion } from "./city-invasion";
+
+/** Only a fresh run opts into a new neighbourhood; saves retain their exact city. */
+export function populateCity(g: Game, invasion = true) {
+  const floor = g.floors[0];
+  if (!floor.boundary) return g;
+  floor.city = createCityPlan(
+    floor,
+    g.seed,
+    spawnGrace(g) * cityZombieSpeed(g),
+  );
+  if (invasion) initCityInvasion(g);
+  return g;
+}
 export function actor(id: string, name: string, index: number): Actor {
   const result: Actor = {
     id,
@@ -101,7 +117,14 @@ export function createPlayableGame(
     // A temporarily unavailable curriculum question must not prevent the
     // physical world from starting. Generation keeps its own eligibility gate.
   }
-  return applyStudyPacing(g, depth);
+  applyStudyPacing(g, depth);
+  populateCity(g);
+  // The opening view presents the approaching street horde immediately.
+  // Refuge is just behind the player, where the other survivors are entering.
+  g.survivors[0].heading = { x: 0, y: 1 };
+  g.notice =
+    "Zombies are already approaching. The entrance is behind you; they will reach it in about three minutes.";
+  return g;
 }
 /** Legacy layout remains the default for existing scenario/benchmark compatibility. */
 export function createGame(

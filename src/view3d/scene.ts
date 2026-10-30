@@ -10,12 +10,10 @@ import {
   Mesh,
   MeshStandardMaterial,
   OctahedronGeometry,
-  PCFShadowMap,
   PerspectiveCamera,
   PlaneGeometry,
   PointLight,
   Scene,
-  SpotLight,
   Sprite,
   SpriteMaterial,
   CanvasTexture,
@@ -45,8 +43,13 @@ import {
 import { floorZone } from "../office-art";
 import { mutation, normal } from "../render";
 import { stairwell } from "../stairwell";
+import { npcSpeechBubble, speechLines } from "../speech-bubbles";
 import { playerCanSee, sightRadius } from "../visibility";
-import { GeometryChangeCache, wallRectangles } from "./geometry";
+import {
+  GeometryChangeCache,
+  geometrySignature,
+  wallRectangles,
+} from "./geometry";
 import { InstancePool } from "./instances";
 import { furnitureHeight } from "./furniture-height";
 import { lootSlot } from "./targeting";
@@ -61,12 +64,10 @@ import {
   type Motion,
 } from "./animation";
 import { floorTexture, type FloorFinish } from "./textures";
-import {
-  flashlightDistanceScale,
-  flashlightSurfaceDistance,
-  smoothFlashlightScale,
-} from "./flashlight";
-import { createViewmodel, positionViewmodel } from "./viewmodel";
+import { BuildingShell, isPerimeterWall } from "./building";
+import { StairGallery } from "./stair-gallery";
+import { InteriorAtmosphere } from "./interior-atmosphere";
+import { FLOOR_HEIGHT, sampleStairRoute } from "../stair-route";
 import {
   ExteriorDressing,
   exteriorWallTiles,
@@ -135,12 +136,23 @@ interface Visual {
   door?: boolean;
   motion?: Motion;
   label?: Sprite;
+  speech?: Sprite;
+  speechId?: string;
 }
 interface Panel {
   x: number;
   y: number;
   slot: number;
   lit: boolean;
+}
+interface FloorSceneState {
+  root: Group;
+  staticWorld: Group;
+  pools: Record<Batch, InstancePool>;
+  poolList: InstancePool[];
+  visuals: Map<object, Visual>;
+  panels: Panel[];
+  geometry: GeometryChangeCache;
 }
 const FINISHES: FloorFinish[] = [
   "carpet",
@@ -151,42 +163,45 @@ const FINISHES: FloorFinish[] = [
 ];
 const WHITE = new Color(0xffffff);
 
-/** Presentation only. World (x,y) maps to Three (x,0,y); visual state is never saved. */
+/** Presentation only. Each floor is stacked at its real storey elevation. */
 export class FirstPersonView {
   readonly renderer: WebGLRenderer;
-  /** Agent benchmark hook. The renderer counts the complete world/shadow/overlay frame. */
+  /** Agent benchmark hook for the complete rendered frame. */
   get drawCalls() {
     return this.renderer.info.render.calls;
   }
   /** Number of actual shown actor slots in the current rendered frame. */
   get visibleActors() {
     let count = 0;
-    for (const visual of this.visuals.values())
-      if (
-        visual.visible &&
-        visual.frame === this.frame &&
-        (visual.kind === "zombie" || visual.kind === "survivor")
-      )
-        count++;
+    for (const context of this.floorScenes.values()) {
+      if (!context.root.visible) continue;
+      for (const visual of context.visuals.values())
+        if (
+          visual.visible &&
+          (visual.kind === "zombie" || visual.kind === "survivor")
+        )
+          count++;
+    }
     return count;
   }
-  readonly camera = new PerspectiveCamera(75, 1, 0.05, 60);
+  // The body already keeps the eye farther than 10 cm from solid surfaces.
+  // Avoid spending most of a conventional depth buffer on an unused 5 cm
+  // near range, especially while viewing the city at shallow angles.
+  readonly camera = new PerspectiveCamera(75, 1, 0.1, 900);
   private scene = new Scene();
-  private viewmodelScene = new Scene();
-  private viewmodelCamera = new PerspectiveCamera(75, 1, 0.05, 2);
-  private viewmodelAnchor = new Vector3();
-  private flashlightScale = 1;
-  // Candela, inverse-square falloff. The off-axis origin avoids a flat white disc.
-  private flashlight = new SpotLight("#e6f1d7", 7, 14, Math.PI / 4.2, 0.82, 2);
-  private fill = new HemisphereLight("#9fb4ca", "#31383b", 0.65);
+  private fill = new HemisphereLight("#b5c8d2", "#3f494c", 1.1);
   private moon = new DirectionalLight("#91abc9", 0.38);
   private localLights = Array.from(
     { length: 4 },
     () => new PointLight("#d6e5cd", 1.8, 4.5, 2),
   );
+  private floorScenes = new Map<Floor, FloorSceneState>();
+  private floorRoot = new Group();
   private staticWorld = new Group();
+  private building = new BuildingShell();
+  private gallery = new StairGallery();
   private exterior = new ExteriorDressing();
-  private viewmodel = new Group();
+  private atmosphere = new InteriorAtmosphere();
   private pools!: Record<Batch, InstancePool>;
   private poolList: InstancePool[] = [];
   private visuals = new Map<object, Visual>();
@@ -231,25 +246,13 @@ export class FirstPersonView {
     wall: new MeshStandardMaterial({ color: normal.edge, roughness: 0.92 }),
     ceiling: new MeshStandardMaterial({ color: "#929b93", roughness: 1 }),
     stairs: new MeshStandardMaterial({ color: normal.edge, roughness: 0.8 }),
-    sleeve: new MeshStandardMaterial({ color: "#465d6c", roughness: 0.9 }),
-    hand: new MeshStandardMaterial({ color: "#b8ac8b", roughness: 0.85 }),
-    torch: new MeshStandardMaterial({
-      color: "#252a2d",
-      roughness: 0.96,
-      metalness: 0,
-    }),
-    lens: new MeshStandardMaterial({
-      color: "#64563e",
-      emissive: "#c89a58",
-      emissiveIntensity: 0.24,
-      roughness: 0.9,
-    }),
   };
   private floorMaterials = new Map<FloorFinish, MeshStandardMaterial>();
   private geometry = new GeometryChangeCache();
-  private floor?: Floor;
   private run?: Game;
   private theme = "";
+  private architectureKey = "";
+  private shellKey = "";
   private frame = 0;
   private tint = new Color();
   private limbPose = { x: 0, y: 0, rotation: 0 };
@@ -276,30 +279,12 @@ export class FirstPersonView {
     this.renderer.outputColorSpace = SRGBColorSpace;
     this.renderer.toneMapping = ACESFilmicToneMapping;
     this.renderer.toneMappingExposure = 1;
-    // Retain the complete world + depth-isolated viewmodel draw-call count.
     this.renderer.autoClear = false;
     this.renderer.info.autoReset = false;
     this.pixelRatio = Math.min(globalThis.devicePixelRatio || 1, 1.5);
     this.adaptive = new AdaptiveResolution(this.pixelRatio);
     this.renderer.setPixelRatio(this.pixelRatio);
-    this.renderer.shadowMap.enabled = true;
-    this.renderer.shadowMap.type = PCFShadowMap;
-    this.flashlight.castShadow = true;
-    this.flashlight.shadow.mapSize.set(1024, 1024);
-    this.flashlight.shadow.camera.near = 0.12;
-    this.flashlight.shadow.camera.far = 14;
-    this.flashlight.shadow.bias = -0.001;
-    this.flashlight.shadow.normalBias = 0.025;
-    this.flashlight.shadow.radius = 2;
-    this.flashlight.position.set(0.06, -0.04, -0.08);
-    // A camera-local point on the crosshair's forward ray, independent of the
-    // decorative torch axis and sway.
-    this.flashlight.target.position.set(0, 0, -10);
-    this.camera.add(this.flashlight, this.flashlight.target);
-    this.viewmodelScene.add(
-      this.viewmodel,
-      new HemisphereLight("#b8c2c7", "#262b2e", 1.1),
-    );
+
     this.moon.position.set(-12, 24, 8);
     this.moon.castShadow = false;
     this.scene.add(
@@ -307,9 +292,10 @@ export class FirstPersonView {
       this.fill,
       this.moon,
       this.moon.target,
-      this.staticWorld,
+      this.building.group,
+      this.gallery.group,
       this.exterior.group,
-      ...this.localLights,
+      this.atmosphere.group,
     );
     this.scene.background = new Color(normal.sky);
     this.scene.fog = new Fog(normal.sky, 2, 12);
@@ -322,7 +308,6 @@ export class FirstPersonView {
           roughness: 0.98,
         }),
       );
-    this.viewmodel.add(createViewmodel(this.materials));
   }
 
   render(game: Game, yaw: number, pitch: number, dt: number, stalled = false) {
@@ -332,17 +317,15 @@ export class FirstPersonView {
       floor = game.floors[a.floor],
       theme = game.surge.state === "active" ? "mutation" : "normal",
       palette = PALETTES[theme];
-    if (this.run !== game || this.floor !== floor) {
+    if (this.run !== game) {
       this.clearFloor();
       this.run = game;
-      this.floor = floor;
-      this.playerMotion = createMotion(a.x, a.y, game.time, a.hp);
-      this.flashlightScale = flashlightDistanceScale(
-        flashlightSurfaceDistance(floor, a, yaw, pitch),
-      );
-      this.adaptive.reset(this.pixelRatio);
-      this.createPools();
     }
+    this.useFloor(floor);
+    this.playerMotion ??= createMotion(a.x, a.y, game.time, a.hp);
+    for (const context of this.floorScenes.values())
+      context.root.visible = false;
+    this.floorRoot.visible = true;
     if (this.geometry.changed(floor)) this.buildStatic(floor);
     if (theme !== this.theme) {
       this.theme = theme;
@@ -353,53 +336,82 @@ export class FirstPersonView {
       this.materials.stairs.color.copy(palette.edge);
       this.materials.screen.emissive.copy(palette.terminal);
     }
-    const radius = sightRadius(floor),
-      fog = this.scene.fog as Fog,
-      outside = this.exterior.enabled && outsideBuilding(floor, a.x, a.y);
-    fog.near = outside ? 7 : radius * (floor.dark > 0.8 ? 0.2 : 0.3);
-    fog.far = outside ? 34 : radius;
-    fog.color.copy(outside ? this.exterior.horizon : palette.sky);
+    const fog = this.scene.fog as Fog,
+      outside =
+        this.exterior.enabled &&
+        (outsideBuilding(floor, a.x, a.y) ||
+          a.stairTravel?.walked !== undefined);
+    // Architectural depth, rather than an opaque near fog curtain, closes
+    // rooms. City sightlines must survive through real perimeter windows.
+    const city = game.floors[0].city;
+    fog.near = city ? 100 : 38;
+    fog.far = city ? 700 : 170;
+    fog.color.copy(this.exterior.enabled ? this.exterior.horizon : palette.sky);
     (this.scene.background as Color).copy(fog.color);
-    this.fill.intensity = outside ? 0.85 : 0.43 + (1 - floor.dark) * 0.3;
-    this.moon.intensity = outside ? 0.55 : 0.32 + (1 - floor.dark) * 0.08;
-    this.moon.target.position.set(a.x, 0, a.y);
-    this.moon.position.set(a.x - 12, 24, a.y + 8);
-    this.flashlight.distance = radius + 1;
-    this.flashlightScale = smoothFlashlightScale(
-      this.flashlightScale,
-      flashlightDistanceScale(flashlightSurfaceDistance(floor, a, yaw, pitch)),
-      dt,
-    );
-    this.flashlight.intensity = 7 * this.flashlightScale;
+    this.fill.intensity = outside ? 1.1 : 0.95 + (1 - floor.dark) * 0.22;
+    this.moon.intensity = outside ? 0.8 : floor.boundary ? 0.12 : 0.7;
+    const elevation = floor.index * FLOOR_HEIGHT;
+    this.moon.target.position.set(a.x, elevation, a.y);
+    this.moon.position.set(a.x - 12, elevation + 24, a.y + 8);
     this.resize();
-    const horizontal = Math.cos(pitch);
-    this.camera.position.set(a.x, 1.6, a.y);
+    const horizontal = Math.cos(pitch),
+      route =
+        a.stairTravel?.walked !== undefined
+          ? sampleStairRoute(game, a.stairTravel)
+          : undefined,
+      eyeX = route?.x ?? a.x,
+      eyeY = (route?.y ?? elevation) + 1.6,
+      eyeZ = route?.z ?? a.y;
+    this.camera.position.set(eyeX, eyeY, eyeZ);
     this.target.set(
-      a.x + horizontal * Math.cos(yaw),
-      1.6 + Math.sin(pitch),
-      a.y + horizontal * Math.sin(yaw),
+      eyeX + horizontal * Math.cos(yaw),
+      eyeY + Math.sin(pitch),
+      eyeZ + horizontal * Math.sin(yaw),
     );
     this.camera.lookAt(this.target);
+    this.exterior.update(game.time, game.settings.reducedFlash);
+    this.atmosphere.group.visible = !!floor.boundary;
+    if (floor.boundary) {
+      this.atmosphere.update(game, this.camera, dt);
+      if (!outside)
+        this.fill.intensity = 0.22 + this.atmosphere.currentLight * 0.22;
+    } else this.atmosphere.phone.visible = false;
     updateMotion(this.playerMotion!, a.x, a.y, game.time, a.hp);
-    const motion = this.playerMotion!,
-      bob = game.settings.reducedFlash ? 0 : Math.min(1, motion.speed / 1.7);
-    this.viewmodel.position.set(
-      this.viewmodelAnchor.x + Math.sin(motion.phase) * 0.004 * bob,
-      this.viewmodelAnchor.y + Math.cos(motion.phase * 2) * 0.0045 * bob,
-      this.viewmodelAnchor.z,
-    );
-    this.viewmodel.rotation.z = Math.sin(motion.phase) * 0.008 * bob;
     this.sync(game, a, floor, palette);
     this.syncPanels(game, a, floor);
     for (const pool of this.poolList) pool.flush();
+    if (a.stairTravel?.walked !== undefined) {
+      // The real destination is drawn before crossing its threshold. Retain
+      // both floor scenes so arriving changes simulation ownership only.
+      const destination = game.floors[a.stairTravel.toFloor];
+      if (destination && destination !== floor) {
+        this.useFloor(destination);
+        this.floorRoot.visible = true;
+        if (this.geometry.changed(destination)) this.buildStatic(destination);
+        this.sync(game, a, destination, palette);
+        this.syncPanels(game, a, destination);
+        for (const pool of this.poolList) pool.flush();
+        this.useFloor(floor);
+        this.syncPanels(game, a, floor);
+      }
+    }
+    if (a.floor > 0 && game.floors[0].city) {
+      // Upper windows and the open emergency gallery overlook the same real
+      // street population. Keep their bodies at ground height; actual slabs,
+      // facades and city blocks depth-test them instead of lifting them onto
+      // the player's current floor or drawing hidden indoor occupants.
+      const ground = game.floors[0];
+      this.useFloor(ground);
+      this.floorRoot.visible = true;
+      if (this.geometry.changed(ground)) this.buildStatic(ground);
+      this.sync(game, a, ground, palette, true);
+      for (const pool of this.poolList) pool.flush();
+      this.useFloor(floor);
+    }
     this.renderer.info.reset();
     this.gpuTimer.begin();
     this.renderer.clear();
     this.renderer.render(this.scene, this.camera);
-    // Independent depth keeps the small viewmodel from intersecting walls;
-    // its scene has no fog or flashlight, and its meshes retain depthTest.
-    this.renderer.clearDepth();
-    this.renderer.render(this.viewmodelScene, this.viewmodelCamera);
     this.gpuTimer.end();
     const next = this.adaptive.update(
       performance.now() - start,
@@ -425,50 +437,83 @@ export class FirstPersonView {
     this.renderer.setSize(width, height, false);
     this.camera.aspect = width / height;
     this.camera.updateProjectionMatrix();
-    this.viewmodelCamera.aspect = width / height;
-    this.viewmodelCamera.updateProjectionMatrix();
-    // Keep a 6% edge inset at the nearest sleeve corner. Half-size geometry
-    // bounds occupy <6% of both 16:10 and 4:3 viewports, including perspective.
-    positionViewmodel(this.viewmodelAnchor, width / height);
+  }
+
+  private useFloor(floor: Floor) {
+    let context = this.floorScenes.get(floor);
+    if (!context) {
+      this.floorRoot = new Group();
+      this.floorRoot.name = `floor-${floor.index}`;
+      this.floorRoot.position.y = floor.index * FLOOR_HEIGHT;
+      this.staticWorld = new Group();
+      this.floorRoot.add(this.staticWorld);
+      this.scene.add(this.floorRoot);
+      this.visuals = new Map();
+      this.panels = [];
+      this.geometry = new GeometryChangeCache();
+      this.createPools();
+      context = {
+        root: this.floorRoot,
+        staticWorld: this.staticWorld,
+        pools: this.pools,
+        poolList: this.poolList,
+        visuals: this.visuals,
+        panels: this.panels,
+        geometry: this.geometry,
+      };
+      this.floorScenes.set(floor, context);
+    } else {
+      this.floorRoot = context.root;
+      this.staticWorld = context.staticWorld;
+      this.pools = context.pools;
+      this.poolList = context.poolList;
+      this.visuals = context.visuals;
+      this.panels = context.panels;
+      this.geometry = context.geometry;
+    }
+    for (const light of this.localLights) {
+      light.visible = !floor.boundary;
+      this.floorRoot.add(light);
+    }
   }
 
   private createPools() {
     this.pools = {
       box: new InstancePool(
-        this.scene,
+        this.floorRoot,
         new BoxGeometry(1, 1, 1),
         this.materials.box,
         8192,
       ),
       head: new InstancePool(
-        this.scene,
+        this.floorRoot,
         new OctahedronGeometry(0.5, 1),
         this.materials.head,
         1024,
       ),
       screen: new InstancePool(
-        this.scene,
+        this.floorRoot,
         new BoxGeometry(1, 1, 1),
         this.materials.screen,
         1024,
         false,
       ),
       field: new InstancePool(
-        this.scene,
+        this.floorRoot,
         new BoxGeometry(1, 1, 1),
         this.materials.field,
         256,
         false,
       ),
       panel: new InstancePool(
-        this.scene,
+        this.floorRoot,
         new BoxGeometry(1, 1, 1),
         this.materials.panel,
         256,
         false,
       ),
       eye: new InstancePool(
-        this.scene,
+        this.floorRoot,
         new BoxGeometry(1, 1, 1),
         this.materials.eye,
         1024,
@@ -478,11 +523,53 @@ export class FirstPersonView {
     this.poolList = Object.values(this.pools);
   }
 
+  private updateArchitecture(game: Game) {
+    const key = JSON.stringify(
+      game.floors.map((f) => [
+        f.index,
+        f.boundary,
+        f.stairs,
+        f.entry,
+        f.city && [f.city.version, f.city.seed, f.city.bounds],
+      ]),
+    );
+    if (key !== this.architectureKey) {
+      this.exterior.build(game.floors[0], game.floors);
+      this.gallery.build(game);
+      this.architectureKey = key;
+    }
+    // The shell is already built for every storey. Visiting a floor must not
+    // re-merge the city or recreate its signs in the middle of a stair walk.
+    // Value signatures still catch synthetic/editor occupancy changes.
+    const shellKey =
+      key + game.floors.map((f) => geometrySignature(f.tiles)).join("|");
+    if (shellKey !== this.shellKey) {
+      this.building.build(game.floors);
+      this.shellKey = shellKey;
+    }
+  }
+
   private buildStatic(floor: Floor) {
     this.clearStatic();
-    this.exterior.build(floor);
+    if (this.run) this.updateArchitecture(this.run);
+    else {
+      this.exterior.build(floor);
+      this.building.build([floor]);
+    }
     const boxes: BufferGeometry[] = [];
-    for (const r of wallRectangles(exteriorWallTiles(floor)))
+    const interiorTiles = exteriorWallTiles(floor).map((row, z) =>
+      row.map((tile, x) =>
+        isPerimeterWall(floor, x, z) ||
+        (floor.boundary &&
+          ((floor.index < CONFIG.floors && z < floor.boundary.top) ||
+            (floor.index > 0 && z >= floor.boundary.bottom)) &&
+          x >= 21 &&
+          x <= 22)
+          ? 0
+          : tile,
+      ),
+    );
+    for (const r of wallRectangles(interiorTiles))
       boxes.push(
         new BoxGeometry(r.w, 2.8, r.h).translate(
           r.x + r.w / 2,
@@ -516,13 +603,25 @@ export class FirstPersonView {
     this.addMerged(boxes, this.materials.wall, "walls", true);
     const surfaces = new Map<FloorFinish, BufferGeometry[]>();
     const ceilings: BufferGeometry[] = [];
+    // The city owns all ground-level outdoor asphalt. Upper-floor well
+    // approaches still need their local floor finish beside the stair deck.
+    // Never stack a second nearly coplanar floor over the same outside lane.
+    const ownsFinish = (x: number, y: number) =>
+      !floor.boundary ||
+      !outsideBuilding(floor, x + 0.5, y + 0.5) ||
+      (floor.index > 0 && floor.tiles[y][x] === 0);
     for (const finish of FINISHES) surfaces.set(finish, []);
     for (let y = 0; y < H; y++) {
       let x = 0;
       while (x < W) {
+        if (!ownsFinish(x, y)) {
+          x++;
+          continue;
+        }
         const finish = floorZone(floor, x, y),
           start = x;
-        while (x < W && floorZone(floor, x, y) === finish) x++;
+        while (x < W && floorZone(floor, x, y) === finish && ownsFinish(x, y))
+          x++;
         const plane = new PlaneGeometry(x - start, 1)
           .rotateX(-Math.PI / 2)
           .translate((start + x) / 2, -0.025, y + 0.5);
@@ -558,6 +657,7 @@ export class FirstPersonView {
         (kind === "down" && floor.index === 0)
       )
         continue;
+      if (floor.boundary) continue;
       const well = stairwell(floor, kind);
       for (let i = 0; i < 6; i++) {
         const depth = well.h / 6,
@@ -576,7 +676,8 @@ export class FirstPersonView {
       }
     }
     this.addMerged(treads, this.materials.stairs, "stairs", true);
-    if (floor.index < CONFIG.floors) this.buildPanels(floor);
+    if (floor.boundary) this.atmosphere.build(floor, this.run?.seed ?? 0);
+    else if (floor.index < CONFIG.floors) this.buildPanels(floor);
     this.theme = "";
   }
 
@@ -625,6 +726,10 @@ export class FirstPersonView {
   }
 
   private syncPanels(game: Game, a: Actor, floor: Floor) {
+    if (floor.boundary) {
+      for (const light of this.localLights) light.intensity = 0;
+      return;
+    }
     this.nearestDistances.fill(Infinity);
     this.nearestPanels.fill(undefined);
     for (let i = 0; i < this.panels.length; i++) {
@@ -722,50 +827,76 @@ export class FirstPersonView {
     if (visual) visual.present = this.frame;
   }
 
-  private sync(game: Game, a: Actor, floor: Floor, palette: Palette) {
+  private sync(
+    game: Game,
+    a: Actor,
+    floor: Floor,
+    palette: Palette,
+    exteriorOnly = false,
+  ) {
     this.frame++;
     // Static objects rely on depth-tested walls for occlusion. A centre-point
     // LOS query can hide a visible door face or a desk extending around a corner.
-    const fogDistance = (this.scene.fog as Fog).far;
-    for (const o of floor.furniture) {
-      this.markPresent(o);
-      if (
-        Math.hypot(o.x - a.x, o.y - a.y) >
-          fogDistance + Math.hypot(o.w, o.h) / 2 ||
-        (o.kind === "gate" && o.turning < 0)
-      )
-        continue;
-      this.furniture(o, a, palette);
-    }
-    for (const station of floor.stations) {
-      this.markPresent(station);
-      if (Math.hypot(station.x - a.x, station.y - a.y) <= fogDistance + 0.6)
-        this.station(station, game, palette);
-      const encounter = game.encounters[station.encounter];
-      if (encounter?.state === "consumed" && encounter.reward === "loot")
-        for (let i = 0; i < encounter.loot.length; i++) {
-          const item = encounter.loot[i];
-          this.markPresent(item);
-          lootSlot(station, i, this.scratchPoint);
-          if (
-            Math.hypot(this.scratchPoint.x - a.x, this.scratchPoint.y - a.y) <=
-            fogDistance + 0.14
-          )
-            this.loot(item, this.scratchPoint, palette);
+    const fogDistance = sightRadius(floor) + 3;
+    if (!exteriorOnly) {
+      for (const o of floor.furniture) {
+        this.markPresent(o);
+        if (
+          Math.hypot(o.x - a.x, o.y - a.y) >
+            fogDistance + Math.hypot(o.w, o.h) / 2 ||
+          (o.kind === "gate" && o.turning < 0)
+        )
+          continue;
+        this.furniture(o, a, palette);
+      }
+      for (const station of floor.stations) {
+        this.markPresent(station);
+        if (Math.hypot(station.x - a.x, station.y - a.y) <= fogDistance + 0.6)
+          this.station(station, game, palette);
+        const encounter = game.encounters[station.encounter];
+        if (encounter?.state === "consumed" && encounter.reward === "loot")
+          for (let i = 0; i < encounter.loot.length; i++) {
+            const item = encounter.loot[i];
+            this.markPresent(item);
+            lootSlot(station, i, this.scratchPoint);
+            if (
+              Math.hypot(
+                this.scratchPoint.x - a.x,
+                this.scratchPoint.y - a.y,
+              ) <=
+              fogDistance + 0.14
+            )
+              this.loot(item, this.scratchPoint, palette);
+          }
+      }
+      for (const actor of game.survivors)
+        if (actor.floor === floor.index && !actor.escaped && actor !== a) {
+          this.markPresent(actor);
+          if (playerCanSee(floor, a, actor))
+            this.actor(actor, game, palette, a);
         }
     }
-    for (const actor of game.survivors)
-      if (actor.floor === floor.index && !actor.escaped && actor !== a) {
-        this.markPresent(actor);
-        if (playerCanSee(floor, a, actor)) this.actor(actor, game, palette, a);
-      }
     for (const zombie of game.zombies)
       if (zombie.floor === floor.index) {
         this.markPresent(zombie);
-        if (playerCanSee(floor, a, zombie))
+        const exteriorStairView =
+          game.floors[0].city &&
+          a.stairTravel?.walked !== undefined &&
+          zombie.floor === 0;
+        if (
+          exteriorOnly || exteriorStairView
+            ? outsideBuilding(floor, zombie.x, zombie.y) &&
+              Math.hypot(zombie.x - a.x, zombie.y - a.y) < this.camera.far
+            : playerCanSee(floor, a, zombie)
+        )
           this.actor(zombie, game, palette, a);
       }
     for (const [object, visual] of this.visuals) {
+      if (
+        visual.speech &&
+        npcSpeechBubble(game, (object as Actor).id)?.id !== visual.speechId
+      )
+        this.clearSpeech(visual);
       // Removed zombies retain a short, view-only collapse, without resurrecting a sim entity.
       if (
         visual.present !== this.frame &&
@@ -791,6 +922,7 @@ export class FirstPersonView {
       } else if (visual.frame !== this.frame && visual.visible) {
         for (const p of visual.parts) this.pools[p.batch].hide(p.slot);
         if (visual.label) visual.label.visible = false;
+        if (visual.speech) visual.speech.visible = false;
         visual.visible = false;
       }
     }
@@ -922,7 +1054,7 @@ export class FirstPersonView {
           0.13,
           "metal",
         );
-      part(0, 1.15, 0, w, 2.3, d, "screen", "field", "pane");
+      part(0, 1.15, 0, w, 2.27, d, "screen", "field", "pane");
       part(
         0,
         2.45,
@@ -938,7 +1070,7 @@ export class FirstPersonView {
     }
     const health = o.hp / Math.max(1, o.maxHp);
     if (health < 0.65) {
-      // Dark diagonal fractures and a dropped panel stay readable in torch light.
+      // Dark diagonal fractures and a dropped panel stay readable under the room lighting.
       part(
         -w * 0.12,
         height * 0.58,
@@ -964,7 +1096,7 @@ export class FirstPersonView {
       if (health < 0.35)
         part(
           w * 0.32,
-          0.075,
+          0.085,
           d * 0.22,
           w * 0.27,
           0.1,
@@ -976,7 +1108,8 @@ export class FirstPersonView {
     }
     if (o.kind === "door" || o.kind === "gate") {
       // The leaf uses the real hinged body pose; trim remains in the saved frame.
-      part(0, height / 2, 0, w, height, d);
+      // Small clearances keep the closed leaf's surfaces distinct from its jambs.
+      part(0, height / 2, 0, w - 0.018, height - 0.024, d - 0.018);
       const frame = doorFrame(o),
         vertical = frame.h > frame.w,
         span = vertical ? frame.h : frame.w;
@@ -1056,7 +1189,9 @@ export class FirstPersonView {
       case "sofa":
       case "armchair":
         part(0, height, 0, w, 0.15, d);
-        part(0, height + 0.3, -d * 0.4, w, 0.58, d * 0.16, "edge");
+        // The back and arms join inside the seat's silhouette. Equal outer
+        // widths produce competing coplanar faces wherever these boxes overlap.
+        part(0, height + 0.3, -d * 0.4, w - 0.028, 0.58, d * 0.16, "edge");
         if (o.kind === "officeChair") {
           part(0, height / 2, 0, 0.08, height, 0.08, "metal");
           part(0, 0.09, 0, w * 0.75, 0.07, 0.08, "metal");
@@ -1082,7 +1217,7 @@ export class FirstPersonView {
         if (o.kind !== "chair")
           for (const sign of [-1, 1])
             part(
-              sign * w * 0.44,
+              sign * (w * 0.44 - 0.012),
               height + 0.14,
               0,
               w * 0.12,
@@ -1103,11 +1238,21 @@ export class FirstPersonView {
             );
         break;
       case "shelf":
-        part(0, height / 2, -d * 0.44, w, height, d * 0.1, "dark");
+        // Backing and shelves fit between the side panels; their edges no
+        // longer share the panels' exposed outer faces.
+        part(
+          0,
+          height / 2,
+          -d * 0.44,
+          w * 0.84 - 0.028,
+          height - 0.028,
+          d * 0.1,
+          "dark",
+        );
         for (const sign of [-1, 1])
           part(sign * w * 0.46, height / 2, 0, w * 0.08, height, d);
         for (let i = 0; i < 4; i++) {
-          part(0, 0.08 + (i * height) / 3, 0, w, 0.07, d);
+          part(0, 0.08 + (i * height) / 3, 0, w * 0.84, 0.07, d);
           if (i < 3)
             for (let j = 0; j < 3; j++)
               part(
@@ -1193,19 +1338,19 @@ export class FirstPersonView {
           part(
             -w * 0.17,
             height * 0.74,
-            d * 0.55,
+            d * 0.52 + 0.025,
             w * 0.45,
             0.025,
-            0.025,
+            0.012,
             "dark",
           );
           part(
             -w * 0.08,
             height * 0.64,
-            d * 0.55,
+            d * 0.52 + 0.025,
             w * 0.62,
             0.025,
-            0.025,
+            0.012,
             "dark",
           );
         }
@@ -1292,7 +1437,7 @@ export class FirstPersonView {
       case "printer":
         part(0, 0.35, 0, w * 0.85, 0.7, d * 0.85);
         part(0, 0.83, 0, w, 0.26, d, "metal");
-        part(0, 0.99, -d * 0.1, w * 0.85, 0.06, d * 0.65, "dark");
+        part(0, 0.99, -d * 0.1, w * 0.85, 0.06, d * 0.62, "dark");
         part(0, 0.83, d * 0.51, w * 0.6, 0.07, 0.04, "dark");
         part(
           w * 0.28,
@@ -1319,7 +1464,7 @@ export class FirstPersonView {
         break;
       case "box":
         part(0, height / 2, 0, w, height, d);
-        part(0, height + 0.008, 0, w * 0.14, 0.015, d, "edge");
+        part(0, height + 0.008, 0, w * 0.14, 0.015, d - 0.028, "edge");
         part(
           0,
           height * 0.55,
@@ -1543,7 +1688,89 @@ export class FirstPersonView {
         rotation,
       );
     }
-    if (!zombie) this.label(visual, actor as Actor, player, dead);
+    if (!zombie) {
+      this.label(visual, actor as Actor, player, dead);
+      this.speechBubble(visual, actor as Actor, player, game, dead);
+    }
+  }
+
+  private clearSpeech(visual: Visual) {
+    if (visual.speech) {
+      visual.speech.removeFromParent();
+      visual.speech.material.map?.dispose();
+      visual.speech.material.dispose();
+    }
+    delete visual.speech;
+    delete visual.speechId;
+  }
+
+  private speechBubble(
+    visual: Visual,
+    actor: Actor,
+    player: Actor,
+    game: Game,
+    dead: boolean,
+  ) {
+    const line = npcSpeechBubble(game, actor.id);
+    if (
+      !line ||
+      dead ||
+      Math.hypot(actor.x - player.x, actor.y - player.y) > 10
+    ) {
+      this.clearSpeech(visual);
+      return;
+    }
+    if (visual.speechId !== line.id) {
+      this.clearSpeech(visual);
+      const lines = speechLines(line.text, 36),
+        canvas = document.createElement("canvas");
+      canvas.width = 640;
+      canvas.height = 36 + lines.length * 34;
+      const context = canvas.getContext("2d")!;
+      context.fillStyle = "rgba(10,23,27,.94)";
+      context.beginPath();
+      context.roundRect(2, 2, 636, canvas.height - 4, 18);
+      context.fill();
+      context.strokeStyle = "#b4d7cb";
+      context.lineWidth = 3;
+      context.stroke();
+      context.fillStyle = "#eaf2dc";
+      context.textAlign = "center";
+      context.font = "500 27px sans-serif";
+      lines.forEach((text, i) => context.fillText(text, 320, 36 + i * 34, 596));
+      const map = new CanvasTexture(canvas);
+      map.colorSpace = SRGBColorSpace;
+      const material = new SpriteMaterial({
+        map,
+        transparent: true,
+        depthWrite: false,
+        toneMapped: false,
+      });
+      visual.speech = new Sprite(material);
+      visual.speech.name = "npc-speech-bubble";
+      visual.speech.userData = {
+        text: line.text,
+        actorId: actor.id,
+        requestId: line.id,
+      };
+      visual.speech.center.set(0.5, 0);
+      // Keep even a full sentence between the speaker's head and the office
+      // ceiling, so architecture cannot clip the last lines of its bubble.
+      visual.speech.scale.set(
+        3.0,
+        Math.min(0.94, (3.0 * canvas.height) / canvas.width),
+        1,
+      );
+      visual.speechId = line.id;
+      this.floorRoot.add(visual.speech);
+    }
+    visual.speech!.visible = true;
+    if (visual.label) visual.label.visible = false;
+    visual.speech!.position.set(
+      actor.x,
+      Math.min(2.18, 2.72 - visual.speech!.scale.y),
+      actor.y,
+    );
   }
 
   private label(visual: Visual, actor: Actor, player: Actor, dead: boolean) {
@@ -1580,7 +1807,7 @@ export class FirstPersonView {
       }
       visual.label = new Sprite(material);
       visual.label.scale.set(1.12, 0.21, 1);
-      this.scene.add(visual.label);
+      this.floorRoot.add(visual.label);
     }
     visual.label.visible = true;
     visual.label.position.set(actor.x, 1.98, actor.y);
@@ -1632,6 +1859,7 @@ export class FirstPersonView {
   }
 
   private release(visual: Visual) {
+    this.clearSpeech(visual);
     for (const part of visual.parts) this.pools[part.batch].release(part.slot);
     visual.label?.removeFromParent();
     delete visual.label;
@@ -1652,14 +1880,22 @@ export class FirstPersonView {
   }
 
   private clearFloor() {
-    this.clearStatic();
-    for (const visual of this.visuals.values())
-      visual.label?.removeFromParent();
-    for (const pool of this.poolList) pool.dispose(false);
-    this.poolList.length = 0;
-    this.visuals.clear();
-    this.geometry = new GeometryChangeCache();
+    this.atmosphere.reset();
+    for (const context of this.floorScenes.values()) {
+      for (const visual of context.visuals.values()) this.clearSpeech(visual);
+      for (const child of context.staticWorld.children)
+        (child as Mesh).geometry.dispose();
+      for (const pool of context.poolList) pool.dispose(false);
+      context.root.removeFromParent();
+    }
+    this.floorScenes.clear();
+    this.poolList = [];
+    this.visuals = new Map();
+    this.panels = [];
+    this.playerMotion = undefined;
     this.theme = "";
+    this.architectureKey = "";
+    this.shellKey = "";
     this.renderer.renderLists.dispose();
   }
 
@@ -1668,9 +1904,9 @@ export class FirstPersonView {
     this.disposed = true;
     this.clearFloor();
     this.exterior.dispose();
-    this.viewmodel.traverse((object) => {
-      if (object instanceof Mesh) object.geometry.dispose();
-    });
+    this.atmosphere.dispose();
+    this.building.dispose();
+    this.gallery.dispose();
     for (const material of Object.values(this.materials)) material.dispose();
     for (const material of this.floorMaterials.values()) {
       material.map?.dispose();
@@ -1681,7 +1917,6 @@ export class FirstPersonView {
       material.dispose();
     }
     this.labels.clear();
-    this.flashlight.shadow.map?.dispose();
     this.gpuTimer.dispose();
     this.renderer.dispose();
   }

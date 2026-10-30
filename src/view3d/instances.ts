@@ -7,7 +7,6 @@ import {
   Matrix4,
   MeshStandardMaterial,
   Object3D,
-  Scene,
 } from "three";
 
 /** Stable slots keep world objects in a handful of draw calls. Freed slots are
@@ -29,7 +28,7 @@ export class InstancePool {
   private colorRange = { start: 0, count: 0 };
 
   constructor(
-    scene: Scene,
+    scene: Object3D,
     geometry: BufferGeometry,
     material: MeshStandardMaterial,
     capacity: number,

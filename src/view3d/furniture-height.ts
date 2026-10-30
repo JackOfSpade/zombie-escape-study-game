@@ -28,7 +28,7 @@ const HEIGHT: Partial<Record<FurnitureKind, number>> = {
   box: 0.45,
 };
 
-/** Shared visible furniture height for mesh construction and flashlight hits. */
+/** Visible furniture height shared by meshes and target placement. */
 export function furnitureHeight(kind: FurnitureKind) {
   return HEIGHT[kind] ?? 0.8;
 }

@@ -17,6 +17,8 @@ import {
 } from "three";
 import { ExteriorDressing } from "../src/view3d/exterior";
 import {
+  cityGroundRectangles,
+  cityLayout,
   clearStreetEdge,
   exteriorWallTiles,
   outsideBuilding,
@@ -59,7 +61,11 @@ test("street decoration requires a ground floor footprint and an open entrance a
     undefined,
     "a footprint without an open street receives no dressing",
   );
-  assert.equal(exteriorWallTiles(floor), floor.tiles);
+  assert.notEqual(
+    exteriorWallTiles(floor),
+    floor.tiles,
+    "closed entrances still use the exterior shell on upper floors",
+  );
   delete floor.boundary;
   assert.equal(streetLayout(floor), undefined);
   assert.equal(outsideBuilding(floor, 20, 30), false);
@@ -160,6 +166,7 @@ test("street dressing closes the actual south map edge across the arrival lane",
     solid: new MeshStandardMaterial(),
     glass: new MeshStandardMaterial(),
     warm: new MeshStandardMaterial(),
+    emergency: new MeshStandardMaterial(),
     signMaterial: new MeshStandardMaterial(),
     entranceLight: new PointLight(),
     streetLight: new PointLight(),
@@ -184,4 +191,246 @@ test("street dressing closes the actual south map edge across the arrival lane",
   }
   for (const child of world.children)
     (child as Mesh<BufferGeometry>).geometry.dispose();
+});
+
+test("the same city surrounds every floor without consuming simulation state", () => {
+  for (let seed = 1; seed <= 32; seed++) {
+    const floor = street(seed),
+      before = JSON.stringify(floor),
+      city = cityLayout(floor)!;
+    assert.equal(city.blocks.filter((b) => !b.distant).length, 14);
+    assert.equal(city.blocks.filter((b) => b.distant).length, 24);
+    for (const block of city.blocks) {
+      assert.ok(block.stories >= 3);
+      assert.ok(
+        block.x + block.w / 2 < 0 ||
+          block.x - block.w / 2 > 44 ||
+          block.y + block.d / 2 < 0 ||
+          block.y - block.d / 2 > floor.tiles.length,
+        "every raised city block is outside the playable physics grid",
+      );
+    }
+    for (const index of [1, 2, 4])
+      assert.deepEqual(
+        cityLayout({ ...floor, index }),
+        city,
+        "upper windows and the roof look onto the same city",
+      );
+    assert.equal(JSON.stringify(floor), before);
+  }
+});
+
+function syntheticDressing() {
+  return Object.assign(Object.create(ExteriorDressing.prototype), {
+    world: new Group(),
+    group: new Group(),
+    tint: new Color(),
+    asphalt: new MeshStandardMaterial(),
+    solid: new MeshStandardMaterial(),
+    glass: new MeshStandardMaterial(),
+    warm: new MeshStandardMaterial(),
+    emergency: new MeshStandardMaterial(),
+    signMaterial: new MeshStandardMaterial(),
+    quarantineMaterial: new MeshStandardMaterial(),
+    routeMaterial: new MeshStandardMaterial(),
+    entranceLight: new PointLight(),
+    streetLight: new PointLight(),
+  }) as ExteriorDressing;
+}
+
+test("city geometry is present on all sides from street to rooftop and has a bounded mesh budget", () => {
+  const floor = street(),
+    upper = { ...floor, index: 4 },
+    dressing = syntheticDressing();
+  dressing.build(upper, [floor, upper]);
+  assert.ok(dressing.enabled);
+  const world = (dressing as any).world as Group;
+  assert.ok(world.getObjectByName("continuous-city-ground"));
+  assert.ok(world.getObjectByName("evacuation-suspended-sign"));
+  assert.ok(world.getObjectByName("rooftop-assembly-sign"));
+  assert.ok(
+    world.children.length <= 9,
+    "blocks and vehicles are merged, not individual scene objects",
+  );
+  world.updateMatrixWorld(true);
+  for (const height of [1.6, 8.8, 16])
+    for (const direction of [
+      new Vector3(1, 0, 0),
+      new Vector3(-1, 0, 0),
+      new Vector3(0, 0, 1),
+      new Vector3(0, 0, -1),
+    ]) {
+      const ray = new Raycaster(new Vector3(22, height, 16), direction),
+        hits = ray.intersectObjects(world.children, false);
+      assert.ok(
+        hits.length,
+        `city silhouette at height ${height}, heading ${direction.toArray()}`,
+      );
+      assert.ok(hits[0].distance < 120);
+    }
+  const before = JSON.stringify(floor);
+  dressing.build(upper, [floor, upper]);
+  assert.equal(
+    JSON.stringify(floor),
+    before,
+    "rebuilding never edits world tiles",
+  );
+  assert.ok(
+    world.children.length <= 9,
+    "rebuilds replace rather than duplicate city meshes",
+  );
+  (dressing as any).clear();
+});
+
+test("upper floors remove distant blocking masses while retaining their physical stair surrounds", () => {
+  const floor = street();
+  floor.index = 2;
+  const b = floor.boundary!;
+  for (let y = b.top - 2; y < b.top; y++)
+    for (const x of [21, 22]) floor.tiles[y][x] = 0;
+  // An upper floor has the carved two-column well, not the ground fixture's
+  // eight-column arrival lane. Retain its real side jambs in this regression.
+  for (let y = b.bottom; y < floor.tiles.length; y++) floor.tiles[y].fill(1);
+  for (let y = b.bottom; y < b.bottom + 2; y++)
+    for (const x of [21, 22]) floor.tiles[y][x] = 0;
+  const tiles = exteriorWallTiles(floor);
+  assert.equal(tiles[b.top - 1][20], 1);
+  assert.equal(tiles[b.top - 1][21], 0);
+  assert.equal(
+    tiles[b.bottom + 1][23],
+    1,
+    "the descending well retains its jamb",
+  );
+  assert.equal(
+    tiles[b.bottom + 2][23],
+    0,
+    "the outer jamb cannot block the gallery across the landing",
+  );
+  if (b.top >= 3)
+    assert.equal(
+      tiles[b.top - 3][23],
+      0,
+      "the north gallery also stays clear of extended jambs",
+    );
+  assert.equal(tiles[b.bottom + 3][10], 0);
+  assert.equal(tiles[b.top + 4][b.rows[b.top + 4].left - 1], 1);
+});
+
+test("city asphalt owns only exterior ground, with a footprint cutout and no overlapping patches", () => {
+  for (let seed = 1; seed <= 32; seed++) {
+    const floor = street(seed),
+      before = JSON.stringify(floor),
+      b = floor.boundary!,
+      rectangles = cityGroundRectangles(floor),
+      footprintArea = b.rows
+        .slice(b.top, b.bottom)
+        .reduce((sum, row) => sum + row.right - row.left, 0);
+    assert.equal(
+      rectangles.reduce((sum, r) => sum + r.w * r.d, 0),
+      280 * 280 - footprintArea,
+    );
+    for (let i = 0; i < rectangles.length; i++)
+      for (let j = i + 1; j < rectangles.length; j++) {
+        const a = rectangles[i],
+          c = rectangles[j],
+          w =
+            Math.min(a.x + a.w / 2, c.x + c.w / 2) -
+            Math.max(a.x - a.w / 2, c.x - c.w / 2),
+          d =
+            Math.min(a.z + a.d / 2, c.z + c.d / 2) -
+            Math.max(a.z - a.d / 2, c.z - c.d / 2);
+        assert.ok(
+          w <= 1e-7 || d <= 1e-7,
+          "ground patches never share a surface",
+        );
+      }
+    for (let z = 0; z < floor.tiles.length; z++)
+      for (let x = 0; x < floor.tiles[z].length; x++) {
+        const owners = rectangles.filter(
+          (r) =>
+            x + 0.5 > r.x - r.w / 2 &&
+            x + 0.5 < r.x + r.w / 2 &&
+            z + 0.5 > r.z - r.d / 2 &&
+            z + 0.5 < r.z + r.d / 2,
+        );
+        assert.equal(
+          owners.length,
+          outsideBuilding(floor, x + 0.5, z + 0.5) ? 1 : 0,
+          "room floors and outside asphalt each have exactly one surface owner",
+        );
+      }
+    assert.equal(JSON.stringify(floor), before);
+  }
+});
+
+test("sidewalk crossings, ambulance crosses and lamp joints contain only one visible face per plane", () => {
+  const floor = street(),
+    city = cityLayout(floor)!,
+    dressing = syntheticDressing();
+  dressing.build(floor);
+  const world = (dressing as any).world as Group,
+    props = world.getObjectByName("merged-street-facade-props") as Mesh,
+    signals = world.getObjectByName("city-emergency-signals") as Mesh,
+    westRoad = city.left - 9,
+    eastRoad = city.right + 9,
+    northRoad = city.north - 8,
+    southRoad = city.south + 9;
+  assert.equal(
+    world.getObjectByName("asphalt-street"),
+    undefined,
+    "the arrival lane shares city asphalt instead of adding another close ground plane",
+  );
+  world.updateMatrixWorld(true);
+  for (const x of [
+    westRoad - 5.6,
+    westRoad + 5.6,
+    eastRoad - 5.6,
+    eastRoad + 5.6,
+  ])
+    for (const z of [
+      northRoad - 5.6,
+      northRoad + 5.6,
+      southRoad - 5.6,
+      southRoad + 5.6,
+    ]) {
+      const ray = new Raycaster(
+          new Vector3(x + 0.19, 10, z + 0.11),
+          new Vector3(0, -1, 0),
+        ),
+        faces = ray
+          .intersectObject(props)
+          .filter((hit) => Math.abs(hit.point.y - 0.085) < 1e-5);
+      assert.equal(faces.length, 1, `one sidewalk top at crossing ${x},${z}`);
+    }
+  const ax = city.left + 5,
+    az = southRoad - 3;
+  for (const side of [-1, 1]) {
+    const ray = new Raycaster(
+        new Vector3(ax + side * 3, 1.36, az + 0.23),
+        new Vector3(-side, 0, 0),
+      ),
+      faces = ray
+        .intersectObject(signals)
+        .filter((hit) => Math.abs(hit.point.x - (ax + side * 1.0825)) < 1e-5);
+    assert.equal(
+      faces.length,
+      1,
+      "ambulance cross arms do not duplicate the centre face",
+    );
+  }
+  const lx = westRoad + 5,
+    lz = 16,
+    lampRay = new Raycaster(
+      new Vector3(lx + 0.03, 5.38, lz + 2),
+      new Vector3(0, 0, -1),
+    ),
+    lampFaces = lampRay
+      .intersectObject(props)
+      .filter((hit) => Math.abs(hit.point.z - (lz + 0.06)) < 1e-5);
+  assert.equal(
+    lampFaces.length,
+    1,
+    "lamp arm starts above the pole instead of duplicating its side face",
+  );
+  (dressing as any).clear();
 });

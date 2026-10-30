@@ -347,7 +347,10 @@ test("a fresh force-field floor carves the well into the north wall and a surviv
   const locked = walk([]);
   assert.equal(locked.a.floor, 0);
   assert.equal(locked.a.stairTravel, undefined);
-  assert.ok(distance(locked.a, locked.g.floors[0].stairs) < 1.15);
+  // The old grid edge used to stop forward movement here. The real service
+  // court now continues beyond the stairwell at ground level; walking into
+  // that court still cannot grant permission to climb.
+  assert.ok(locked.a.y < locked.g.floors[0].boundary!.top - 2);
   assert.equal(lockedEvents(locked.g), 1);
 });
 

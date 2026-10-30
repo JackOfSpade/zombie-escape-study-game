@@ -90,7 +90,7 @@ test("game look depends on visible modal UI rather than a pending docked questio
   assert.equal(canLookInGame({ ...available, uiVisible: true }), false);
 });
 
-test("a pending docked question permits relock, mouse look and arrow turns after its initial release", (t) => {
+test("a pending docked question permits recapture and look after an intentional UI release", (t) => {
   const { document, canvas, controls, input, state } = fixture(t, () =>
     canLookInGame({
       playing: true,
@@ -277,7 +277,7 @@ test("dispose aborts canvas/document listeners and releases without pausing", (t
   assert.equal(state.looks.length, 0);
 });
 
-test("unlocked dragging rotates the view without requesting pointer lock", (t) => {
+test("unlocked dragging cannot rotate the view; a click retries mouse capture", (t) => {
   const { document, canvas, controls, state } = fixture(t);
   canvas.dispatchEvent(
     Object.assign(new Event("mousedown"), {
@@ -292,18 +292,30 @@ test("unlocked dragging rotates the view without requesting pointer lock", (t) =
       clientY: 70,
     }),
   );
+  assert.deepEqual(controls.look(), { yaw: 0, pitch: 0 });
+  document.dispatchEvent(new Event("mouseup"));
+  assert.equal(canvas.requests, 0);
+  canvas.click();
+  document.changed();
+  assert.equal(canvas.requests, 1);
+  document.mouse(100, -50);
   near(controls.yaw, 0.22);
   near(controls.pitch, 0.11);
+  assert.equal(state.unlocks, 0);
+});
+test("entering gameplay captures the mouse without a canvas click and mouseup keeps free look active", (t) => {
+  const { document, canvas, controls, state } = fixture(t);
+  controls.lock();
+  document.changed();
+  document.mouse(100, -50);
   document.dispatchEvent(new Event("mouseup"));
   canvas.click();
-  assert.equal(canvas.requests, 0, "the drag's click does not request a lock");
-  document.dispatchEvent(
-    Object.assign(new Event("mousemove"), {
-      clientX: 300,
-      clientY: 30,
-    }),
-  );
-  near(controls.yaw, 0.22);
+  document.mouse(100, -50);
+  assert.equal(canvas.requests, 1);
+  assert.equal(document.exits, 0);
+  assert.equal(controls.isLocked, true);
+  near(controls.yaw, 0.44);
+  near(controls.pitch, 0.22);
   assert.equal(state.unlocks, 0);
 });
 test("text entry and study UI prevent unlocked dragging and keyboard turns", (t) => {
@@ -340,7 +352,7 @@ test("arrow keys turn without a lock and setLook gives deterministic clamped aim
   controls.setLook(0, Infinity);
   assert.deepEqual(controls.look(), { yaw: Math.PI / 2, pitch: MAX_PITCH });
 });
-test("SecurityError refusal prompts a retry and dragging remains available", async (t) => {
+test("SecurityError refusal prompts a retry and the next capture restores free look", async (t) => {
   const { canvas, document, controls, state } = fixture(t);
   canvas.request = () =>
     Promise.reject(new DOMException("recent unlock", "SecurityError"));
@@ -363,7 +375,15 @@ test("SecurityError refusal prompts a retry and dragging remains available", asy
       clientY: 20,
     }),
   );
+  near(controls.yaw, 0);
+  canvas.request = () => {
+    document.pointerLockElement = canvas;
+  };
+  controls.lock();
+  document.changed();
+  document.mouse(50, 0);
   near(controls.yaw, 0.11);
+  assert.equal(canvas.requests, 2);
 });
 test("immediate relock refusal after Escape is transient even without an error name", (t) => {
   const { document, canvas, state } = fixture(t);

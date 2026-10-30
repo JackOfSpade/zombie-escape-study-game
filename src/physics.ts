@@ -24,6 +24,7 @@ import {
   type Zombie,
 } from "./model";
 import { move, solid } from "./spatial";
+import { cityCollisionBoxes, cityWall } from "./city-layout";
 
 export const BODY_RADIUS = 0.26;
 /** Largest force one zombie applies while pressing furniture or a crowd that
@@ -49,7 +50,7 @@ const active = (e: Entity) =>
       (!e.open || !!e.door) &&
       !(e.kind === "gate" && e.turning < 0)
     : actor(e)
-      ? e.alive && !e.escaped
+      ? e.alive && !e.escaped && e.stairTravel?.walked === undefined
       : e.hp > 0;
 interface RecordBody {
   entity: Entity;
@@ -81,6 +82,7 @@ interface FloorPhysics {
   ground: Body;
   walls: Body;
   signature: string;
+  city?: Game["floors"][number]["city"];
 }
 const layers = new WeakMap<Game, PhysicsLayer>();
 export function physicsActive(g: Game) {
@@ -210,19 +212,24 @@ class PhysicsLayer {
       });
     }
     const signature = f.tiles.map((row) => row.join("")).join(";");
-    if (signature !== p.signature) {
+    if (signature !== p.signature || p.city !== f.city) {
       p.world.destroyBody(p.walls);
       p.walls = p.world.createBody();
       p.signature = signature;
+      p.city = f.city;
+      // The city supplies actual urban obstacle footprints. Retain authored
+      // office masonry, while removing the old square grid's outdoor walls.
+      const authoredWall = (x: number, y: number) =>
+        cityWall(f, x + 0.5, y + 0.5) === undefined && f.tiles[y]?.[x] !== 0;
       // Merge horizontal runs: fewer fixtures without changing the authored wall silhouette.
       for (let y = 0; y < H; y++)
         for (let x = 0; x < W;) {
-          if (f.tiles[y]?.[x] === 0) {
+          if (!authoredWall(x, y)) {
             x++;
             continue;
           }
           const start = x;
-          while (x < W && f.tiles[y]?.[x] !== 0) x++;
+          while (x < W && authoredWall(x, y)) x++;
           p.walls.createFixture(
             new Box(
               (x - start) / 2 - 0.01,
@@ -232,12 +239,15 @@ class PhysicsLayer {
             { friction: 0.1 },
           );
         }
-      for (const box of [
-        { x: -0.5, y: H / 2, w: 1, h: H + 2 },
-        { x: W + 0.5, y: H / 2, w: 1, h: H + 2 },
-        { x: W / 2, y: -0.5, w: W + 2, h: 1 },
-        { x: W / 2, y: H + 0.5, w: W + 2, h: 1 },
-      ])
+      const boundaryBoxes = f.city
+        ? cityCollisionBoxes(f.city)
+        : [
+            { x: -0.5, y: H / 2, w: 1, h: H + 2 },
+            { x: W + 0.5, y: H / 2, w: 1, h: H + 2 },
+            { x: W / 2, y: -0.5, w: W + 2, h: 1 },
+            { x: W / 2, y: H + 0.5, w: W + 2, h: 1 },
+          ];
+      for (const box of boundaryBoxes)
         p.walls.createFixture(
           new Box(box.w / 2 - 0.01, box.h / 2 - 0.01, Vec2(box.x, box.y)),
           { friction: 0.1 },
@@ -713,6 +723,13 @@ class PhysicsLayer {
         delta = { x: e.x - r.start.x, y: e.y - r.start.y };
       // Models are controller proposals until contacts are solved. Never teleport a dynamic body to that proposal.
       if (!furniture(e)) {
+        if (!actor(e))
+          // City arrival timing is physical distance / walking speed. Damping
+          // is retained for knockback and pushing, rather than slowing every
+          // free approach by a different amount at each simulation timestep.
+          r.body.setLinearDamping(
+            e.cityApproach && e.stagger <= 0 && !pressing.has(r) ? 0 : 4,
+          );
         let v = r.drive
           ? { x: r.drive.x / dt, y: r.drive.y / dt }
           : { x: delta.x / dt, y: delta.y / dt };

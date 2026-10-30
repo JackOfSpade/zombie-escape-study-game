@@ -165,6 +165,27 @@ export function createHandoffRoutes(
           );
           return true;
         }
+        if (url.pathname === "/api/bridge/result" && req.method === "DELETE") {
+          if (
+            !/^http:\/\/(127\.0\.0\.1|localhost):5173$/.test(
+              req.headers.origin ?? "",
+            )
+          ) {
+            send(res, 403, {
+              error: "Discard temporary voices from the game UI",
+            });
+            return true;
+          }
+          send(
+            res,
+            200,
+            queue.discardChatter(
+              url.searchParams.get("id"),
+              url.searchParams.get("hash"),
+            ),
+          );
+          return true;
+        }
         send(res, 405, { error: "Method not allowed" });
       } catch (error) {
         send(res, error instanceof HttpInputError ? error.status : 409, {

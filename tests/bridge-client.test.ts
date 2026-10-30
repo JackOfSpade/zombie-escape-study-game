@@ -576,3 +576,73 @@ test("a gateway HTML response retries the same handoff submission", async (t) =>
   );
   assert.equal(bodies.length, 2);
 });
+
+test("cancelling an ambient queued request aborts its wait and discards only that exact temporary receipt", async (t) => {
+  const previous = globalThis.fetch;
+  t.after(() => {
+    globalThis.fetch = previous;
+  });
+  for (const operation of ["npc-chatter", "npc-chatter-review"]) {
+    const calls: { url: string; method: string }[] = [];
+    globalThis.fetch = async (url, init) => {
+      if (url === "/api/status") return reply("chatgpt-handoff");
+      calls.push({ url: String(url), method: init?.method ?? "GET" });
+      if (url === "/api/bridge")
+        return Response.json(
+          { handoff: { id: "temporary-job", hash: "temporary-hash" } },
+          { status: 202 },
+        );
+      assert.equal(init?.method, "DELETE");
+      return Response.json({ status: "discarded" });
+    };
+    await checkBridge();
+    const controller = new AbortController();
+    await assert.rejects(
+      bridgeRequest(
+        operation,
+        { requestId: "temporary-request" },
+        () => controller.abort(),
+        { signal: controller.signal, timeoutMs: 3000 },
+      ),
+    );
+    assert.deepEqual(calls, [
+      { url: "/api/bridge", method: "POST" },
+      {
+        url: "/api/bridge/result?id=temporary-job&hash=temporary-hash",
+        method: "DELETE",
+      },
+    ]);
+  }
+});
+
+test("a consumed ambient result is discarded while an ordinary study receipt is retained", async (t) => {
+  const previous = globalThis.fetch;
+  t.after(() => {
+    globalThis.fetch = previous;
+  });
+  for (const operation of ["npc-chatter", "npc-chatter-review", "generate"]) {
+    const methods: string[] = [];
+    globalThis.fetch = async (url, init) => {
+      if (url === "/api/status") return reply("chatgpt-handoff");
+      methods.push(init?.method ?? "GET");
+      if (url === "/api/bridge")
+        return Response.json(
+          { handoff: { id: "bound-job", hash: "bound-hash" } },
+          { status: 202 },
+        );
+      return Response.json(
+        init?.method === "DELETE"
+          ? { status: "discarded" }
+          : { text: "Stay close to the stairs." },
+      );
+    };
+    await checkBridge();
+    assert.deepEqual(await bridgeRequest(operation, { requestId: operation }), {
+      text: "Stay close to the stairs.",
+    });
+    assert.deepEqual(
+      methods,
+      operation === "generate" ? ["POST", "GET"] : ["POST", "GET", "DELETE"],
+    );
+  }
+});

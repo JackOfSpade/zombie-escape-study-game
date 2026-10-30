@@ -1,7 +1,9 @@
 import { soundConnectivity } from "./acoustics";
 import { type SoundSample } from "./sfx";
-import { type Game, type WorldEvent, distance } from "./model";
+import { type Game, type WorldEvent, type Zombie, distance } from "./model";
 import { line } from "./spatial";
+import { listenerPose, soundPose, type SoundOrigin } from "./spatial-audio";
+import { outsideBuilding } from "./view3d/exterior-layout";
 function transmission(
   g: Game,
   a: { x: number; y: number },
@@ -9,6 +11,8 @@ function transmission(
   connected: ReturnType<typeof soundConnectivity>,
 ) {
   const f = g.floors[g.survivors[0].floor];
+  if (outsideBuilding(f, a.x, a.y) && outsideBuilding(f, b.x, b.y))
+    return f.city && !line(f, a, b, true) ? 0.15 : 1;
   return connected(a, b) ? (line(f, a, b, true) ? 1 : 0.55) : 0.025;
 }
 export interface SoundCue {
@@ -19,23 +23,78 @@ export interface SoundCue {
   caption: string;
   sample?: SoundSample;
   cutoff?: number;
+  /** Physical emitter retained for headphone direction and live attenuation. */
+  origin?: SoundOrigin;
+  sourceGain?: number;
 }
-export function hordeSound(g: Game) {
+export interface HordeAcoustics {
+  floor: number;
+  sources: { actor: Zombie; transmission: number }[];
+}
+/** Expensive propagation is captured at the acoustic refresh cadence. Keeping
+ * at most twelve live actors lets the continuous loop track movement cheaply. */
+export function captureHordeAcoustics(g: Game): HordeAcoustics {
   const a = g.survivors[0];
   const connected = soundConnectivity(g.floors[a.floor]);
   // Bound acoustic path work and favor nearby sources, rather than arbitrary
   // spawn-array order. Captions describe sound only, never counts or locations.
   const sources = g.zombies
     .filter((z) => z.hp > 0 && z.floor === a.floor && distance(a, z) < 16)
-    .sort((x, y) => distance(a, x) - distance(a, y))
+    .sort((x, y) => distance(a, x) - distance(a, y) || x.id.localeCompare(y.id))
     .slice(0, 24)
     .map((z) => ({
       transmission: transmission(g, a, z, connected),
       d: distance(a, z),
+      actor: z,
     }))
     .map((s) => ({ ...s, gain: (s.transmission / (1 + s.d)) * 0.3 }))
-    .sort((x, y) => y.gain - x.gain)
+    .sort((x, y) => y.gain - x.gain || x.actor.id.localeCompare(y.actor.id))
     .slice(0, 12);
+  return {
+    floor: a.floor,
+    sources: sources.map(({ actor, transmission }) => ({
+      actor,
+      transmission,
+    })),
+  };
+}
+/** Distance, direction and liveness follow every rendered frame; a cached
+ * snapshot deliberately retains only the bounded propagation calculation. */
+export function hordeSound(g: Game, acoustics = captureHordeAcoustics(g)) {
+  const a = g.survivors[0],
+    listener = listenerPose(g),
+    sources =
+      acoustics.floor !== a.floor
+        ? []
+        : acoustics.sources
+            .filter(
+              ({ actor }) =>
+                actor.hp > 0 &&
+                actor.floor === a.floor &&
+                g.zombies.includes(actor),
+            )
+            .map(({ actor, transmission }) => {
+              const origin = {
+                  x: actor.x,
+                  y: actor.y,
+                  floor: actor.floor,
+                  height: 1.4,
+                },
+                pose = soundPose(origin),
+                d = Math.hypot(
+                  listener.x - pose.x,
+                  listener.y - pose.y,
+                  listener.z - pose.z,
+                );
+              return {
+                transmission,
+                origin,
+                id: actor.id,
+                gain: d < 16 ? (transmission / (1 + d)) * 0.3 : 0,
+              };
+            })
+            .filter((s) => s.gain > 0)
+            .sort((x, y) => y.gain - x.gain || x.id.localeCompare(y.id));
   const gain = Math.min(
     0.45,
     sources.reduce((n, s) => n + s.gain, 0),
@@ -44,6 +103,8 @@ export function hordeSound(g: Game) {
   return {
     gain,
     cutoff: clear > 0.2 ? 4800 : 120,
+    origin: sources[0]?.origin,
+    actorId: sources[0]?.id,
     caption:
       gain < 0.002
         ? ""
@@ -169,6 +230,32 @@ export function soundEvents(g: Game, after: number): SoundCue[] {
         caption: "[Helicopter extraction]",
       };
     if (cue) {
+      const position = e.position
+        ? soundPosition(g, e)
+        : e.type === "completion"
+          ? g.floors[e.floor]?.stations.find((s) => s.encounter === e.encounter)
+          : e.type === "helicopter"
+            ? { x: 21.5, y: 10.5 }
+            : g.survivors[0];
+      if (position)
+        cue.origin = {
+          x: position.x,
+          y: position.y,
+          floor: e.floor,
+          height: e.type === "helicopter" ? 6 : 1.2,
+        };
+      cue.sourceGain =
+        e.type === "breach"
+          ? 0.5
+          : e.type === "entrance-close"
+            ? 0.3
+            : e.type === "completion"
+              ? 0.28
+              : e.type === "helicopter"
+                ? 0.1
+                : e.type === "board"
+                  ? 0.15
+                  : 0.18;
       cue.sample ??=
         e.type === "breach"
           ? "breach"

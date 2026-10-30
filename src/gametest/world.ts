@@ -251,8 +251,13 @@ export function captureLayout(g: Game, s: Scenario): Scenario {
     entities.unshift({ id: "human", kind: "player", x: 3.5, y: 3.5 });
   return {
     ...structuredClone(s),
-    template: "arena",
-    layout: s.layout === "randomized" ? "legacy" : s.layout,
+    template: g.floors[0].city ? "building" : "arena",
+    layout: g.floors[0].city
+      ? "randomized"
+      : s.layout === "randomized"
+        ? "legacy"
+        : s.layout,
+    city: !!g.floors[0].city,
     startTime: g.time,
     entities,
     deleted: [],

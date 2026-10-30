@@ -15,6 +15,7 @@ import { spectating, type SpectatorView } from "./spectator";
 import { type Stairwell, stairwell } from "./stairwell";
 import { playerCanSee, sightRadius, visibilityPolygon } from "./visibility";
 import { stairContactCues } from "./zombie-stairs";
+import { npcSpeechBubble, speechLines } from "./speech-bubbles";
 
 const tileMemory = new WeakMap<
   Game["survivors"][number],
@@ -129,8 +130,34 @@ export function render(
     rememberVisibleTiles(g);
   }
   const theme = g.surge.state === "active" ? "mutation" : "normal";
+  if (f.city) {
+    ctx.fillStyle = "#353e43";
+    for (const road of f.city.roads)
+      ctx.fillRect(road.x - road.w / 2, road.y - road.h / 2, road.w, road.h);
+    for (const block of f.city.obstacles) {
+      ctx.fillStyle = block.kind === "building" ? p.wall : "#61584b";
+      ctx.fillRect(
+        block.x - block.w / 2,
+        block.y - block.h / 2,
+        block.w,
+        block.h,
+      );
+    }
+    // The stored office raster owns only the building and its masonry ring.
+    // Do not paint the retired grid border over the physical city streets.
+    ctx.save();
+    ctx.beginPath();
+    const b = f.boundary!;
+    for (let y = b.top - 1; y <= b.bottom; y++) {
+      const row = b.rows[Math.max(b.top, Math.min(b.bottom - 1, y))];
+      ctx.rect(row.left - 1, y, row.right - row.left + 2, 1);
+    }
+    ctx.rect(20, b.top - 2, 4, 2);
+    ctx.clip();
+  }
   // Carpet, vinyl and wall textures are one cached image; the clip limits it to sight.
   ctx.drawImage(terrainCanvas(f, theme, g.seed), 0, 0, W, H);
+  if (f.city) ctx.restore();
   ctx.globalAlpha = 1;
   drawBlood(ctx, f);
   const healthBars: {
@@ -147,6 +174,7 @@ export function render(
     color: string;
     size: number;
   }[] = [];
+  const spoken: { text: string; x: number; y: number }[] = [];
   const label = (
     text: string,
     x: number,
@@ -399,6 +427,10 @@ export function render(
     ctx.restore();
     if (s.id !== "human" && (spectator || distance(a, s) < 5))
       label(s.name, s.x, s.y - 0.6, p.ink, 0.4);
+    const speech =
+      s.alive && s.id !== "human" ? npcSpeechBubble(g, s.id) : undefined;
+    if (speech && (spectator || g.settings.view === "top-down"))
+      spoken.push({ text: speech.text, x: s.x, y: s.y - 1.0 });
   }
   for (const z of g.zombies) {
     if (z.floor !== floorIndex || z.hp <= 0 || !visible(z)) continue;
@@ -465,6 +497,26 @@ export function render(
     ctx.fillStyle = color;
     ctx.strokeText(text, x, y);
     ctx.fillText(text, x, y);
+  }
+  for (const speech of spoken) {
+    const lines = speechLines(speech.text, 34),
+      width = 6.8,
+      height = lines.length * 0.38 + 0.3;
+    ctx.fillStyle = "rgba(10,23,27,.96)";
+    ctx.strokeStyle = p.terminal;
+    ctx.lineWidth = 0.04;
+    ctx.fillRect(speech.x - width / 2, speech.y - height, width, height);
+    ctx.strokeRect(speech.x - width / 2, speech.y - height, width, height);
+    ctx.fillStyle = p.ink;
+    ctx.font = "500 0.3px ui-monospace,monospace";
+    lines.forEach((line, i) =>
+      ctx.fillText(
+        line,
+        speech.x,
+        speech.y - height + 0.4 + i * 0.38,
+        width - 0.3,
+      ),
+    );
   }
   ctx.restore();
   /** Ray-cast player light stops only at walls; dark floors stay dark during

@@ -6,6 +6,7 @@ import { createHandoffQueue } from "./chatgpt-handoff-queue.mjs";
 import { createHandoffRoutes } from "./chatgpt-handoff-routes.mjs";
 import { createPublicHandoffBridge } from "./chatgpt-public-bridge.mjs";
 import { createTunnelSupervisor } from "./chatgpt-tunnel-supervisor.mjs";
+import { createNpcSpeechService } from "./npc-speech-service.mjs";
 import {
   loadGameTunnelConfig,
   tunnelDirectory,
@@ -67,7 +68,9 @@ export async function startBridgeService(boot, options = {}) {
     instance: boot.instance,
   };
   let closing = false;
+  const speech = createNpcSpeechService();
   const server = createStudyBridgeServer({
+    speech,
     endpoint: process.env.STUDY_MODE_BRIDGE_URL,
     key: process.env.STUDY_MODE_BRIDGE_TOKEN,
     handoff: {
@@ -105,6 +108,9 @@ export async function startBridgeService(boot, options = {}) {
   async function close() {
     if (closing) return;
     closing = true;
+    // Temporary audio must be aborted/deleted even if releasing the durable
+    // study queue or stopping an external connector subsequently fails.
+    await speech.close();
     queue.enable(false);
     await supervisor?.stop();
     await publicBridge?.close();

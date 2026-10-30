@@ -11,7 +11,7 @@ export const LAB_LIMITS = {
   entities: 512,
   actions: 512,
   checks: 128,
-  ticks: 3600,
+  ticks: 10800,
   bytes: 1_000_000,
 };
 export type SpawnKind = "player" | "npc" | "zombie" | FurnitureKind;
@@ -33,7 +33,7 @@ export interface Spawn extends Point {
   freeDirection?: -1 | 1;
 }
 export type Action = { tick: number } & (
-  | { type: "move"; id: string; x: number; y: number }
+  | { type: "move"; id: string; x: number; y: number; stairWalk?: boolean }
   | { type: "door" | "grip" | "vault"; id: string; target: string }
   | { type: "spawn"; entity: Spawn }
   | { type: "pause"; paused: boolean }
@@ -96,6 +96,8 @@ export interface Scenario {
   rules?: "force-fields";
   /** Optional fresh-run study tempo; omitted keeps legacy timing. */
   pacing?: "study";
+  /** Persisted physical exterior streets; omitted retains historical fixtures. */
+  city?: boolean;
   simulation: "game" | "physics";
   maxTicks: number;
   startTime: number;
@@ -125,15 +127,22 @@ function integer(v: unknown, min: number, max: number) {
 function id(v: unknown) {
   return typeof v === "string" && /^[a-zA-Z0-9][\w-]{0,95}$/.test(v);
 }
-function point(v: unknown) {
-  return isRecord(v) && number(v.x, 0, W) && number(v.y, 0, H);
+function point(v: unknown, city = false) {
+  return (
+    isRecord(v) &&
+    number(v.x, city ? -2048 : 0, city ? 2048 : W) &&
+    number(v.y, city ? -2048 : 0, city ? 2048 : H)
+  );
 }
 function floor(v: unknown) {
   return integer(v, 0, CONFIG.floors);
 }
-function spawn(v: unknown): asserts v is Spawn {
+function spawn(v: unknown, city = false): asserts v is Spawn {
   requireThat(
-    isRecord(v) && id(v.id) && kinds.includes(String(v.kind)) && point(v),
+    isRecord(v) &&
+      id(v.id) &&
+      kinds.includes(String(v.kind)) &&
+      point(v, city && (v.floor === undefined || v.floor === 0)),
     "Entity needs a valid ID, kind and in-bounds position.",
   );
   keys(v, [
@@ -248,6 +257,7 @@ export function parseScenario(value: string | unknown): Scenario {
     "layout",
     "rules",
     "pacing",
+    "city",
     "simulation",
     "maxTicks",
     "startTime",
@@ -265,6 +275,17 @@ export function parseScenario(value: string | unknown): Scenario {
   requireThat(
     s.pacing === undefined || s.pacing === "study",
     'Invalid pacing; only "study" may be set.',
+  );
+  requireThat(
+    s.city === undefined || typeof s.city === "boolean",
+    "City must be a boolean.",
+  );
+  requireThat(
+    !s.city ||
+      (s.template === "building" &&
+        s.layout === "randomized" &&
+        s.rules === "force-fields"),
+    "A physical city requires a randomized force-field building.",
   );
   requireThat(
     integer(s.seed, 0, 0xffffffff) &&
@@ -297,7 +318,7 @@ export function parseScenario(value: string | unknown): Scenario {
       `Invalid or oversized ${key} list.`,
     );
   const entities = s.entities as unknown[];
-  entities.forEach(spawn);
+  entities.forEach((e) => spawn(e, s.city === true));
   requireThat(
     new Set(entities.map((e) => (e as Spawn).id)).size === entities.length,
     "Duplicate entity IDs.",
@@ -338,16 +359,17 @@ export function parseScenario(value: string | unknown): Scenario {
       "y",
       "paused",
       "floor",
+      "stairWalk",
     ]);
     if (a.type === "decoy")
       requireThat(
         s.simulation === "game" &&
           floor(a.floor) &&
-          point(a) &&
+          point(a, s.city === true && a.floor === 0) &&
           Object.keys(a).length === 5,
         "Decoy actions require game simulation, a floor and an in-bounds position.",
       );
-    else if (a.type === "spawn") spawn(a.entity);
+    else if (a.type === "spawn") spawn(a.entity, s.city === true);
     else if (a.type === "pause")
       requireThat(
         s.simulation === "game" &&
@@ -360,6 +382,10 @@ export function parseScenario(value: string | unknown): Scenario {
         id(a.id) &&
           number(a.x, -1, 1) &&
           number(a.y, -1, 1) &&
+          (a.stairWalk === undefined ||
+            (typeof a.stairWalk === "boolean" &&
+              s.simulation === "game" &&
+              a.id === "human")) &&
           (s.simulation === "physics" || a.id === "human"),
         "Move actions control the player in game mode, or character motors in physics mode.",
       );
@@ -448,10 +474,10 @@ export function parseScenario(value: string | unknown): Scenario {
       if (q.type === "region")
         requireThat(
           floor(q.floor) &&
-            number(q.x1, 0, W) &&
-            number(q.x2, 0, W) &&
-            number(q.y1, 0, H) &&
-            number(q.y2, 0, H) &&
+            number(q.x1, s.city ? -2048 : 0, s.city ? 2048 : W) &&
+            number(q.x2, s.city ? -2048 : 0, s.city ? 2048 : W) &&
+            number(q.y1, s.city ? -2048 : 0, s.city ? 2048 : H) &&
+            number(q.y2, s.city ? -2048 : 0, s.city ? 2048 : H) &&
             (q.x1 as number) <= (q.x2 as number) &&
             (q.y1 as number) <= (q.y2 as number),
           "Invalid check region.",
@@ -476,8 +502,8 @@ export function parseScenario(value: string | unknown): Scenario {
       requireThat(
         q.type === "soundConnected" &&
           floor(q.floor) &&
-          point(q.a) &&
-          point(q.b),
+          point(q.a, s.city === true && q.floor === 0) &&
+          point(q.b, s.city === true && q.floor === 0),
         "Unknown or invalid check query.",
       );
   }

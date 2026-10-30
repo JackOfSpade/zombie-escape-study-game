@@ -1,10 +1,24 @@
 import { localPoint } from "./furniture-geometry";
-import { type Floor, type Furniture, type Point, distance } from "./model";
+import {
+  type Floor,
+  type Furniture,
+  type Point,
+  H,
+  W,
+  distance,
+} from "./model";
 import { inFurniture, wall } from "./spatial";
+import { cityRayDistance, cityWall } from "./city-layout";
 
 export const VISION = { lit: 11, dim: 8, dark: 5.4, max: 11 };
 export function sightRadius(f: Floor) {
   return f.dark > 0.8 ? VISION.dark : f.dark > 0.3 ? VISION.dim : VISION.lit;
+}
+/** Streets have real long sight lines; indoor room visibility remains local. */
+export function playerSightRadius(f: Floor, origin: Point) {
+  if (!f.city || cityWall(f, origin.x, origin.y) !== false)
+    return sightRadius(f);
+  return Math.max(64, ...f.city.approaches.map((route) => route.length + 24));
 }
 const OPAQUE = new Set<Furniture["kind"]>(["gate", "door", "fridge", "shelf"]);
 /** Objects of an opaque kind on a floor; kinds never change, so the list stays
@@ -97,7 +111,7 @@ export function wallRayDistance(
     dy = Math.sin(angle);
   let x = Math.floor(origin.x),
     y = Math.floor(origin.y),
-    hit = Math.max(0, range);
+    hit = cityRayDistance(f, origin, dx, dy, Math.max(0, range));
   if (wall(f, origin.x, origin.y)) return 0;
   const sx = dx < 0 ? -1 : 1,
     sy = dy < 0 ? -1 : 1;
@@ -122,6 +136,17 @@ export function wallRayDistance(
       y += sy;
       nextY += stepY;
     }
+    // City facades use their exact slab hit above. Only the authored office
+    // raster participates here, preserving its real doors and stair mouths.
+    if (
+      f.city &&
+      (x < 0 ||
+        y < 0 ||
+        x >= W ||
+        y >= H ||
+        cityWall(f, x + 0.5, y + 0.5) !== undefined)
+    )
+      continue;
     if (wall(f, x + 0.5, y + 0.5)) {
       hit = d;
       break;
@@ -175,7 +200,7 @@ export function playerCanSee(
   f: Floor,
   origin: Point,
   target: Point,
-  range = sightRadius(f),
+  range = playerSightRadius(f, origin),
 ) {
   const d = distance(origin, target);
   if (d > range + 1e-7) return false;

@@ -1,0 +1,70 @@
+{
+  "version": 1,
+  "id": "city-stair-base",
+  "name": "A licensed survivor walks from the actual city stair base onto the raised gallery and next floor",
+  "seed": 42,
+  "template": "building",
+  "layout": "randomized",
+  "rules": "force-fields",
+  "city": true,
+  "pacing": "study",
+  "simulation": "game",
+  "maxTicks": 600,
+  "startTime": 0,
+  "naturalSpawns": false,
+  "entities": [
+    { "id": "human", "kind": "player", "x": 43, "y": -1.5, "credential": true }
+  ],
+  "deleted": [],
+  "maps": [],
+  "actions": [
+    {
+      "tick": 1,
+      "type": "move",
+      "id": "human",
+      "x": 0,
+      "y": 1,
+      "stairWalk": true
+    },
+    { "tick": 90, "type": "checkpoint" },
+    {
+      "tick": 330,
+      "type": "move",
+      "id": "human",
+      "x": -1,
+      "y": 0,
+      "stairWalk": true
+    },
+    {
+      "tick": 540,
+      "type": "move",
+      "id": "human",
+      "x": 0,
+      "y": -1,
+      "stairWalk": true
+    }
+  ],
+  "checks": [
+    {
+      "name": "The player physically reaches the next floor",
+      "mode": "eventually",
+      "query": { "type": "property", "id": "human", "field": "floor" },
+      "op": "gte",
+      "expected": 1
+    },
+    {
+      "name": "No actor is hurt by a stair transition",
+      "mode": "always",
+      "query": { "type": "property", "id": "human", "field": "hp" },
+      "op": "gte",
+      "expected": 100
+    },
+    {
+      "name": "The building's actual rooms and stair portals stay intact",
+      "mode": "always",
+      "query": { "type": "buildingLayoutErrors" },
+      "op": "eq",
+      "expected": 0
+    }
+  ]
+}

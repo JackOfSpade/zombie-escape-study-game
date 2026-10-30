@@ -1,4 +1,5 @@
 import { createStudyWorkspaceView } from "./study-workspace-view";
+import { NpcVoiceDirector } from "./npc-voice";
 import { studyTrackSummary } from "./study-progress";
 import {
   beginDirectStudy,
@@ -173,6 +174,8 @@ let game: Game,
   lastQuestion: string | undefined,
   finalQuestion = false;
 const audio = new AudioDirector();
+const npcVoices = new NpcVoiceDirector(audio);
+window.addEventListener("pagehide", () => npcVoices.dispose());
 try {
   game = recover(
     (await load()) ??
@@ -266,14 +269,13 @@ const firstPersonControls = new FirstPersonControls(canvas3d, {
     if (firstPersonPlaying() && !game.paused && !quitMenu) setPaused(true);
   },
   onRetry: () => {
-    game.notice = "Click again to look around, or drag to look.";
+    game.notice = "Click to capture the mouse and look around. Esc pauses.";
   },
   onLook: () => {
     savedLook = { id: game.id, ...firstPersonControls.look() };
   },
   onError: () => {
-    game.notice =
-      "Pointer lock is unavailable. Drag to look around, or use the arrow keys.";
+    game.notice = "Mouse capture is unavailable. Use ←/→ to look around.";
   },
 });
 // Initialize from the recovered survivor before any input or agent hook can
@@ -354,9 +356,10 @@ function syncGameView() {
     ? "<kbd>←/→</kbd> turn · <kbd>↑/↓</kbd> walk"
     : "<kbd>↑↓←→</kbd> move";
 }
-function focusWorld() {
+function focusWorld(captureMouse = false) {
   syncGameView();
   (firstPersonPlaying() ? canvas3d : canvas).focus();
+  if (captureMouse) firstPersonControls.lock();
 }
 const nativeStudyHome = document.createComment("study connection home");
 $("#native-study").before(nativeStudyHome);
@@ -525,21 +528,12 @@ async function launchNativeQuestion(e: Encounter) {
 function renderNativeStudy() {
   const e = displayedNativeQuestion();
   const panel = $("#native-study");
-  const wasHidden = panel.hidden;
   panel.hidden =
     !e || (!e.directStudy && !e.error && !e.pendingGeneration && !e.generation);
   if (panel.hidden || !e) {
     hideNativeRequest();
     return;
   }
-  if (
-    wasHidden &&
-    (e.generation ||
-      e.pendingGeneration ||
-      e.directStudy?.state === "pending" ||
-      e.directStudy?.state === "interrupted")
-  )
-    firstPersonControls.release();
   const session = e.directStudy;
   const stopped = session?.state === "paused";
   if (
@@ -777,7 +771,7 @@ function setPaused(paused: boolean) {
       audio.start();
       audio.update(game);
     }
-    if (firstPersonPlaying() && !lookUiVisible()) focusWorld();
+    if (firstPersonPlaying() && !lookUiVisible()) focusWorld(true);
     else if (
       pauseFocus?.isConnected &&
       !pauseFocus.closest("[hidden], #pause-menu")
@@ -847,7 +841,7 @@ function setStudyMode(enabled: boolean) {
       audio.start();
       audio.update(game);
     }
-    focusWorld();
+    focusWorld(true);
   }
   void persist();
 }
@@ -951,8 +945,8 @@ function begin() {
   leaveSpectator();
   audio.start();
   audio.update(game);
-  focusWorld();
   $("#start-card").hidden = true;
+  focusWorld(true);
   persist();
 }
 function preserveRunLearning(g: Game, archive = false) {
@@ -1406,7 +1400,6 @@ async function interact() {
   }
   active = e.id;
   keys.clear();
-  firstPersonControls.release();
   lastQuestion = e.id;
   game.lastStudyEncounter = e.id;
   if (e.mode === "solo") e.owner = "human";
@@ -2619,6 +2612,8 @@ $("#settings-toggle").onclick = () => {
   else closePanel("settings");
   $<HTMLInputElement>("#volume").value = String(game.settings.volume);
   $<HTMLInputElement>("#captions").checked = game.settings.captions;
+  $<HTMLInputElement>("#npc-voices").checked =
+    game.settings.npcVoices !== false;
   $<HTMLInputElement>("#reduced").checked = game.settings.reducedFlash;
   $<HTMLSelectElement>("#game-view").value =
     game.settings.view ?? "first-person";
@@ -2637,6 +2632,11 @@ $("#volume").oninput = () => {
 };
 $("#captions").onchange = () => {
   game.settings.captions = $<HTMLInputElement>("#captions").checked;
+};
+$("#npc-voices").onchange = () => {
+  game.settings.npcVoices = $<HTMLInputElement>("#npc-voices").checked;
+  npcVoices.update(game);
+  void persist();
 };
 $("#reduced").onchange = () => {
   game.settings.reducedFlash = $<HTMLInputElement>("#reduced").checked;
@@ -2779,6 +2779,11 @@ window.addEventListener("keydown", (ev) => {
   }
   if (game.status !== "playing" || game.paused || ownsKeyboard(ev.target))
     return;
+  if (ev.code === "Tab" && firstPersonControls.isLocked && !lookUiVisible()) {
+    // Esc opens the pause menu before keyboard focus can leave captured play.
+    ev.preventDefault();
+    return;
+  }
   if (
     [
       "Space",
@@ -2903,6 +2908,7 @@ function watchReward(a: ReturnType<typeof human>) {
   rewardWatch.keys = keys;
 }
 function ui() {
+  setText("#npc-voice-status", npcVoices.message);
   $("#log-status").textContent =
     runLogs.error ||
     "Logs stay on this browser: newest 3 games, at most 256 KB each. Older diagnostics are deleted automatically; learning is retained.";
@@ -3127,7 +3133,11 @@ function frame(time: number) {
           : firstPersonPlaying()
             ? { x: 0, y: 0 }
             : { x, y };
-      step(game, 1 / 30, { ...input, grab: false });
+      step(game, 1 / 30, {
+        ...input,
+        grab: false,
+        stairWalk: firstPersonPlaying(),
+      });
       simulationMs += performance.now() - stepStarted;
       steps++;
       acc -= 1 / 30;
@@ -3142,7 +3152,6 @@ function frame(time: number) {
       )
         closeTerminal();
     }
-    audio.update(game);
     if (game.time - lastSave > 3) {
       // Times only the synchronous part (diagnostic capture and save kickoff).
       const persistStarted = performance.now();
@@ -3150,6 +3159,13 @@ function frame(time: number) {
       persistMs += performance.now() - persistStarted;
     }
   }
+  // Spatial listener pose follows looking as well as walking. This also stops
+  // pending speech immediately when pause/study mode disables gameplay.
+  audio.update(
+    game,
+    firstPersonPlaying() ? firstPersonControls.look() : undefined,
+  );
+  npcVoices.update(game);
   if (view && spectating(game) && !game.paused) {
     // Held keys pan the free camera over the live floor.
     const pan = (16 * elapsed) / view.zoom,

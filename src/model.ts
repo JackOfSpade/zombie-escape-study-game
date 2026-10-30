@@ -258,6 +258,8 @@ export interface Actor extends Point {
   seen: string[];
 }
 export interface Zombie extends Point {
+  /** Physical city route retained across saves until the zombie reaches the door. */
+  cityApproach?: import("./city-invasion").CityApproachState;
   bloodStep?: Point & { floor: number; right?: boolean };
   physics?: PhysicsMotion;
   id: string;
@@ -359,6 +361,8 @@ export interface BuildingFootprint {
   rows: { left: number; right: number }[];
 }
 export interface Floor {
+  /** Persisted physical ground-level streets and urban obstacles for fresh runs. */
+  city?: import("./city-layout").CityPlan;
   boundary?: BuildingFootprint;
   /** Room functions chosen when the floor was furnished (generation only). */
   office?: { zone: string; type: OfficeRoomType }[];
@@ -583,6 +587,8 @@ export interface Settings {
   displayScale?: number;
   /** Local preference only; server release and capability are also required. */
   handoffAutonomous?: boolean;
+  /** Temporary contextual computer speech; no clips are included in saves. */
+  npcVoices?: boolean;
   volume: number;
   captions: boolean;
   reducedFlash: boolean;

@@ -27,7 +27,7 @@
         </div>
         <canvas
           id="view3d"
-          aria-label="First-person survival game. Click or drag to look. Use WASD to move, left/right arrows to turn, up/down arrows to walk, E to interact, and Escape to pause."
+          aria-label="First-person survival game. Move the mouse to look around. Use WASD to move, left/right arrows to turn, up/down arrows to walk, E to interact, and Escape to pause and release the mouse."
           tabindex="0"
           hidden
         ></canvas>
@@ -41,7 +41,7 @@
           <span class="crosshair" aria-hidden="true"></span>
           <span id="interaction-prompt"></span>
           <span id="pointer-hint"
-            >Click or drag to look · ←/→ turn · ↑/↓ or WASD move · Esc
+            >Click to capture mouse · Move mouse to look · WASD move · Esc
             pauses</span
           >
         </div>
@@ -434,7 +434,18 @@
       ><label
         ><input id="captions" type="checkbox" /> Surge visual cues & sound
         captions</label
-      ><label><input id="reduced" type="checkbox" /> Reduced motion</label>
+      ><label
+        ><input id="npc-voices" type="checkbox" /> NPC voices
+        (computer-generated)</label
+      >
+      <p id="npc-voice-status" class="muted">
+        Brief contextual speech. Voice clips are discarded after use.
+      </p>
+      <p class="muted">
+        NPC voices use the background worker under ChatGPT handoff connection
+        below. Clips stay temporary on this computer.
+      </p>
+      <label><input id="reduced" type="checkbox" /> Reduced motion</label>
       <details>
         <summary>ChatGPT handoff connection</summary>
         <p>
@@ -443,11 +454,13 @@
           tutoring. Requested survivor-solution inspections share public context
           only. Legacy shared saves retain public group requests. Requested
           practical reviews share your saved observation, attached output and
-          relevant assistance. Native Study Mode is unverified.
+          relevant assistance. Native Study Mode is unverified. Enabled NPC
+          voices share the nearby speaker's public task and perceived
+          surroundings with a background worker.
         </p>
         <label
           ><input id="handoff-enable" type="checkbox" /> Release live study
-          requests to ChatGPT</label
+          requests and enabled NPC voice requests to ChatGPT</label
         ><label
           ><input id="handoff-autonomous" type="checkbox" disabled /> Allow
           unattended NPC drafts, code runs and submissions</label

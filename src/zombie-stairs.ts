@@ -11,6 +11,7 @@ import {
 import { inFurniture, line, solid, wall } from "./spatial";
 import { walkSegment } from "./navigation";
 import { STAIRWELL_RADIUS } from "./stairwell";
+import { actorOnFloor } from "./stair-route";
 import { canSee, playerCanSee, sightRadius } from "./visibility";
 import type { ZombieIndex } from "./zombie-index";
 export type StairArrival =
@@ -71,7 +72,7 @@ export function zombieStairArrival(
           (a) =>
             a.alive &&
             !a.escaped &&
-            a.floor === floor &&
+            actorOnFloor(g, a, floor) &&
             distance(a, point) < 0.55,
         ),
     );
@@ -121,7 +122,11 @@ export function zombieStairArrival(
     return { kind: "wait" };
   // A survivor cannot become an invulnerable plug in the arrival point.
   const actor = g.survivors.find(
-    (a) => a.alive && !a.escaped && a.floor === floor && distance(a, p) < 0.55,
+    (a) =>
+      a.alive &&
+      !a.escaped &&
+      actorOnFloor(g, a, floor) &&
+      distance(a, p) < 0.55,
   );
   if (actor)
     return canSee(next, p, actor, 0.78, actor.vault?.obstacle) &&

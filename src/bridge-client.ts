@@ -151,6 +151,8 @@ async function gatewayOutage(r: Response) {
   }
 }
 export interface BridgeRequestOptions {
+  /** Cancel optional presentation work when its owner is no longer active. */
+  signal?: AbortSignal;
   /** Handoff wait budget; bounded to DIRECT_STUDY_TIMEOUT_MS. */
   timeoutMs?: number;
   nativeScope?: NativeStudyScope;
@@ -188,7 +190,12 @@ export async function bridgeRequest<T extends object = Record<string, unknown>>(
     typeof requested === "number" && Number.isFinite(requested) && requested > 0
       ? Math.min(requested, DIRECT_STUDY_TIMEOUT_MS)
       : HANDOFF_TIMEOUT_MS;
-  const signal = AbortSignal.timeout(handoff ? budget : 45000);
+  const timeout = AbortSignal.timeout(
+    handoff ? budget : Math.min(budget, 45000),
+  );
+  const signal = options?.signal
+    ? AbortSignal.any([timeout, options.signal])
+    : timeout;
   // Capture transport identity once too: a retry after a lost acknowledgement
   // must address the same released job and chat, even if another chat opens.
   const body = JSON.stringify({
@@ -206,107 +213,124 @@ export async function bridgeRequest<T extends object = Record<string, unknown>>(
     isRecord(payload) &&
     typeof payload.requestId === "string" &&
     !!payload.requestId.trim();
-  let r: Response, submissionOutageAt: number | undefined;
-  for (;;) {
-    if (options?.isActive?.() === false)
-      throw Error("Study session closed; saved work retained");
-    try {
-      const response = await fetch("/api/bridge", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body,
-        signal: handoff
-          ? AbortSignal.any([signal, AbortSignal.timeout(5000)])
-          : signal,
-      });
-      if (retrySubmission && (await gatewayOutage(response)))
-        throw Error("unavailable");
-      r = response;
-      break;
-    } catch (error) {
-      if (!retrySubmission || signal.aborted) throw error;
-      submissionOutageAt ??= Date.now();
-      if (Date.now() - submissionOutageAt > BRIDGE_OUTAGE_GRACE_MS)
-        throw Error(
-          "The study bridge stopped answering; your exact request is saved. Retry it when the bridge is back.",
-        );
-      listening = null;
-      onProgress?.("unknown");
-      await waitForHandoff(signal);
-    }
-  }
-  let data = await readJson(r);
-  if (r.status === 202) {
-    if (
-      !handoff ||
-      !isRecord(data.handoff) ||
-      typeof data.handoff.id !== "string" ||
-      !data.handoff.id.trim() ||
-      typeof data.handoff.hash !== "string" ||
-      !data.handoff.hash.trim()
-    )
-      throw Error("Invalid queued bridge receipt");
-    const receipt = { id: data.handoff.id, hash: data.handoff.hash };
-    onProgress?.("queued");
-    let nextProgressCheck = 0,
-      unreachableSince = 0;
-    while (r.status === 202) {
-      if (options?.isActive?.() === false)
-        throw Error("Study session closed; saved work retained");
-      await waitForHandoff(signal);
+  let chatterReceipt: { id: string; hash: string } | undefined;
+  try {
+    let r: Response, submissionOutageAt: number | undefined;
+    for (;;) {
       if (options?.isActive?.() === false)
         throw Error("Study session closed; saved work retained");
       try {
-        const next = await fetch(
-          `/api/bridge/result?id=${encodeURIComponent(receipt.id)}&hash=${encodeURIComponent(receipt.hash)}`,
-          { signal: AbortSignal.any([signal, AbortSignal.timeout(5000)]) },
-        );
-        // A restarting relay or a dropped dev-server proxy answers 502-504.
-        if (await gatewayOutage(next)) throw Error("unavailable");
-        const nextData = await readJson(next);
-        r = next;
-        data = nextData;
-        unreachableSince = 0;
+        const response = await fetch("/api/bridge", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body,
+          signal: handoff
+            ? AbortSignal.any([signal, AbortSignal.timeout(5000)])
+            : signal,
+        });
+        if (retrySubmission && (await gatewayOutage(response)))
+          throw Error("unavailable");
+        r = response;
+        break;
       } catch (error) {
-        if (signal.aborted) throw error;
-        // The relay keeps queued jobs on disk across restarts, so a short
-        // outage must not interrupt the turn: keep waiting on the same job.
-        unreachableSince ||= Date.now();
-        if (Date.now() - unreachableSince > BRIDGE_OUTAGE_GRACE_MS)
+        if (!retrySubmission || signal.aborted) throw error;
+        submissionOutageAt ??= Date.now();
+        if (Date.now() - submissionOutageAt > BRIDGE_OUTAGE_GRACE_MS)
           throw Error(
             "The study bridge stopped answering; your exact request is saved. Retry it when the bridge is back.",
           );
         listening = null;
         onProgress?.("unknown");
-        continue;
+        await waitForHandoff(signal);
       }
-      if (r.status === 202 && onProgress && Date.now() >= nextProgressCheck) {
-        nextProgressCheck = Date.now() + 2000;
+    }
+    let data = await readJson(r);
+    if (r.status === 202) {
+      if (
+        !handoff ||
+        !isRecord(data.handoff) ||
+        typeof data.handoff.id !== "string" ||
+        !data.handoff.id.trim() ||
+        typeof data.handoff.hash !== "string" ||
+        !data.handoff.hash.trim()
+      )
+        throw Error("Invalid queued bridge receipt");
+      const receipt = { id: data.handoff.id, hash: data.handoff.hash };
+      if (operation === "npc-chatter" || operation === "npc-chatter-review")
+        chatterReceipt = receipt;
+      onProgress?.("queued");
+      let nextProgressCheck = 0,
+        unreachableSince = 0;
+      while (r.status === 202) {
+        if (options?.isActive?.() === false)
+          throw Error("Study session closed; saved work retained");
+        await waitForHandoff(signal);
+        if (options?.isActive?.() === false)
+          throw Error("Study session closed; saved work retained");
         try {
-          // Metadata only: this also works with a persistent older relay that
-          // does not include a phase in its result receipt. No payload is read.
-          const health = await fetch("/api/handoff/status", {
-            signal: AbortSignal.timeout(1500),
-          });
-          if (!health.ok) throw Error("Status unavailable");
-          const info = await health.json();
-          listening = relayServes(info);
-          const phase = info.recent?.find(
-            (job: { id: string }) => job.id === receipt.id,
-          )?.status;
-          onProgress(
-            phase === "queued" || phase === "working" ? phase : "unknown",
+          const next = await fetch(
+            `/api/bridge/result?id=${encodeURIComponent(receipt.id)}&hash=${encodeURIComponent(receipt.hash)}`,
+            { signal: AbortSignal.any([signal, AbortSignal.timeout(5000)]) },
           );
-        } catch {
+          // A restarting relay or a dropped dev-server proxy answers 502-504.
+          if (await gatewayOutage(next)) throw Error("unavailable");
+          const nextData = await readJson(next);
+          r = next;
+          data = nextData;
+          unreachableSince = 0;
+        } catch (error) {
+          if (signal.aborted) throw error;
+          // The relay keeps queued jobs on disk across restarts, so a short
+          // outage must not interrupt the turn: keep waiting on the same job.
+          unreachableSince ||= Date.now();
+          if (Date.now() - unreachableSince > BRIDGE_OUTAGE_GRACE_MS)
+            throw Error(
+              "The study bridge stopped answering; your exact request is saved. Retry it when the bridge is back.",
+            );
           listening = null;
-          onProgress("unknown");
+          onProgress?.("unknown");
+          continue;
+        }
+        if (r.status === 202 && onProgress && Date.now() >= nextProgressCheck) {
+          nextProgressCheck = Date.now() + 2000;
+          try {
+            // Metadata only: this also works with a persistent older relay that
+            // does not include a phase in its result receipt. No payload is read.
+            const health = await fetch("/api/handoff/status", {
+              signal: AbortSignal.timeout(1500),
+            });
+            if (!health.ok) throw Error("Status unavailable");
+            const info = await health.json();
+            listening = relayServes(info);
+            const phase = info.recent?.find(
+              (job: { id: string }) => job.id === receipt.id,
+            )?.status;
+            onProgress(
+              phase === "queued" || phase === "working" ? phase : "unknown",
+            );
+          } catch {
+            listening = null;
+            onProgress("unknown");
+          }
         }
       }
     }
+    if (!r.ok)
+      throw Error(
+        typeof data.error === "string" ? data.error : "Bridge request failed",
+      );
+    return data as T;
+  } finally {
+    if (chatterReceipt) {
+      // Consumed/cancelled ambient lines have no durable role. This endpoint
+      // cannot discard a study request, even if its receipt is supplied.
+      await fetch(
+        `/api/bridge/result?id=${encodeURIComponent(chatterReceipt.id)}&hash=${encodeURIComponent(chatterReceipt.hash)}`,
+        {
+          method: "DELETE",
+          signal: AbortSignal.timeout(1500),
+        },
+      ).catch(() => {});
+    }
   }
-  if (!r.ok)
-    throw Error(
-      typeof data.error === "string" ? data.error : "Bridge request failed",
-    );
-  return data as T;
 }

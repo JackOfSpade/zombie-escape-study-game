@@ -13,8 +13,8 @@ export interface StreetLayout {
   props: StreetProp[];
 }
 
-/** The footprint is authoritative; an arena or an upstairs stairwell is not a
- * street. The extra tile is the solid shell immediately outside the mask. */
+/** The footprint is authoritative; exterior scenery never edits the physics
+ * grid. The extra tile is the solid shell immediately outside the mask. */
 export function outsideBuilding(floor: Floor, x: number, y: number) {
   const b = floor.boundary;
   if (!b) return false;
@@ -116,14 +116,21 @@ export function streetLayout(floor: Floor): StreetLayout | undefined {
  * Keep the actual one-cell shell and internal walls. The street edge receives
  * visible guardrails in the dressing, where those solid cells still block play. */
 export function exteriorWallTiles(floor: Floor) {
-  if (!streetLayout(floor)) return floor.tiles;
+  if (!floor.boundary) return floor.tiles;
   const b = floor.boundary!;
   return floor.tiles.map((row, y) =>
     row.map((tile, x) => {
       if (!tile || !outsideBuilding(floor, x + 0.5, y + 0.5)) return tile;
-      // Preserve the collision surround of the carved ascending stairwell too.
-      // Its two open rows extend farther north than the ordinary shell.
-      if (y < b.top && y >= b.top - 3 && x >= 20 && x <= 23) return tile;
+      // Keep jambs beside the two carved well rows, but do not extend them
+      // across the gallery outside either doorway. The walking motor owns
+      // those outer landings; an extra cap would cut through its route.
+      if (
+        x >= 20 &&
+        x <= 23 &&
+        ((y < b.top && y >= b.top - 2) ||
+          (floor.index > 0 && y >= b.bottom && y < b.bottom + 2))
+      )
+        return tile;
       for (let yy = y - 1; yy <= y + 1; yy++) {
         const edge = b.rows[yy];
         if (
@@ -138,4 +145,198 @@ export function exteriorWallTiles(floor: Floor) {
       return 0;
     }),
   );
+}
+
+export interface CityBlock extends Point {
+  w: number;
+  d: number;
+  stories: number;
+  color: string;
+  damaged: boolean;
+  distant: boolean;
+}
+export interface CityLayout {
+  left: number;
+  right: number;
+  north: number;
+  south: number;
+  blocks: CityBlock[];
+}
+
+/** Unreachable outer districts sit wholly beyond the solid playable city.
+ * A fixed silhouette budget closes rooftop sightlines without inventing
+ * decorative blocks on the real invasion streets. */
+export function cityBackdrop(floor: Floor): CityBlock[] {
+  const city = floor.city;
+  if (!city) return [];
+  const b = city.bounds,
+    blocks: CityBlock[] = [];
+  let state = (city.seed ^ 0x736b796c) >>> 0;
+  const random = () => {
+    state = (Math.imul(state, 1664525) + 1013904223) >>> 0;
+    return state / 0x100000000;
+  };
+  for (let side = 0; side < 4; side++)
+    for (let i = 0; i < 16; i++) {
+      const horizontal = side < 2,
+        from = (horizontal ? b.left : b.top) - 80,
+        to = (horizontal ? b.right : b.bottom) + 80,
+        step = (to - from) / 16,
+        along = from + step * (i + 0.5) + (random() - 0.5) * step * 0.2,
+        frontage = step * (0.82 + random() * 0.22),
+        depth = 18 + random() * 16,
+        distance = 80 + random() * 24;
+      blocks.push({
+        x: horizontal
+          ? along
+          : side === 2
+            ? b.left - distance - depth / 2
+            : b.right + distance + depth / 2,
+        y: horizontal
+          ? side === 0
+            ? b.top - distance - depth / 2
+            : b.bottom + distance + depth / 2
+          : along,
+        w: horizontal ? frontage : depth,
+        d: horizontal ? depth : frontage,
+        stories: 9 + Math.floor(random() * 20),
+        color: ["#354653", "#3f4d55", "#39444c"][i % 3],
+        damaged: random() < 0.3,
+        distant: true,
+      });
+    }
+  return blocks;
+}
+
+/** One stable city shared by every storey. Layout is derived only from the
+ * building footprint, never actor state or the simulation random stream. */
+export function cityLayout(floor: Floor): CityLayout | undefined {
+  const b = floor.boundary;
+  if (!b) return undefined;
+  if (floor.city) {
+    const rows = b.rows.slice(b.top, b.bottom);
+    return {
+      left: Math.min(...rows.map((r) => r.left)) - 1,
+      right: Math.max(...rows.map((r) => r.right)) + 1,
+      north: b.top - 3,
+      south: b.bottom + 3,
+      blocks: floor.city.obstacles
+        .filter((o) => o.kind === "building")
+        .map((o) => ({
+          x: o.x,
+          y: o.y,
+          w: o.w,
+          d: o.h,
+          stories: Math.max(3, Math.round(o.height / 3.15)),
+          color: o.color,
+          damaged: o.damaged,
+          distant: Math.hypot(o.x - 22, o.y - 16) > 100,
+        })),
+    };
+  }
+  const rows = b.rows.slice(b.top, b.bottom),
+    left = Math.min(...rows.map((r) => r.left)) - 1,
+    right = Math.max(...rows.map((r) => r.right)) + 1,
+    north = b.top - 3,
+    south = b.bottom + 3,
+    blocks: CityBlock[] = [],
+    colors = ["#52616a", "#5e6260", "#514e48", "#687078", "#615754"];
+  const add = (
+    x: number,
+    y: number,
+    w: number,
+    d: number,
+    index: number,
+    distant = false,
+  ) => {
+    blocks.push({
+      x,
+      y,
+      w,
+      d,
+      stories: distant ? 8 + ((index * 7) % 16) : 3 + ((index * 5) % 8),
+      color: colors[index % colors.length],
+      damaged: index % 5 === 1,
+      distant,
+    });
+  };
+  // The near blocks face a continuous road and sidewalk around the entire
+  // building. All are beyond the simulation grid, including the arrival lane.
+  for (let i = 0; i < 4; i++) {
+    const x = left - 8 + i * 18;
+    add(x, north - 20, 12 + (i % 2) * 2, 11, i);
+    add(x + 3, south + 21, 13, 12, i + 4);
+  }
+  for (let i = 0; i < 3; i++) {
+    const z = north - 3 + i * 19;
+    add(left - 20, z, 11, 13, i + 8);
+    add(right + 20, z + 3, 12, 14, i + 11);
+  }
+  // A second skyline layer closes diagonal sight lines above and between the
+  // near blocks; its detail budget is silhouettes and rooftop plant only.
+  for (let i = 0; i < 24; i++) {
+    const angle = (i / 24) * Math.PI * 2,
+      radius = 82 + (i % 3) * 9;
+    add(
+      22 + Math.cos(angle) * radius,
+      16 + Math.sin(angle) * radius,
+      10 + (i % 4) * 2,
+      10 + (i % 3) * 3,
+      i + 17,
+      true,
+    );
+  }
+  return { left, right, north, south, blocks };
+}
+
+export interface CityGroundRectangle {
+  x: number;
+  z: number;
+  w: number;
+  d: number;
+}
+
+/** The city owns the ground outside the real footprint. Cutting out the whole
+ * footprint avoids a second nearly coplanar asphalt layer under room floors.
+ * Consecutive identical edges share a rectangle; there are no overlapping tops.
+ */
+export function cityGroundRectangles(floor: Floor): CityGroundRectangle[] {
+  const b = floor.boundary;
+  if (!b) return [];
+  const minX = floor.city ? floor.city.bounds.left - 700 : -118,
+    maxX = floor.city ? floor.city.bounds.right + 700 : 162,
+    minZ = floor.city ? floor.city.bounds.top - 700 : -124,
+    maxZ = floor.city ? floor.city.bounds.bottom + 700 : 156,
+    rectangles: CityGroundRectangle[] = [
+      {
+        x: (minX + maxX) / 2,
+        z: (minZ + b.top) / 2,
+        w: maxX - minX,
+        d: b.top - minZ,
+      },
+      {
+        x: (minX + maxX) / 2,
+        z: (b.bottom + maxZ) / 2,
+        w: maxX - minX,
+        d: maxZ - b.bottom,
+      },
+    ];
+  for (const side of ["left", "right"] as const) {
+    let start = b.top;
+    while (start < b.bottom) {
+      const edge = b.rows[start][side];
+      let end = start + 1;
+      while (end < b.bottom && b.rows[end][side] === edge) end++;
+      const from = side === "left" ? minX : edge,
+        to = side === "left" ? edge : maxX;
+      rectangles.push({
+        x: (from + to) / 2,
+        z: (start + end) / 2,
+        w: to - from,
+        d: end - start,
+      });
+      start = end;
+    }
+  }
+  return rectangles;
 }

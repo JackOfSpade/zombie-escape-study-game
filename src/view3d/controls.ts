@@ -20,8 +20,8 @@ interface ControlHooks {
   onRetry?(): void;
 }
 
-/** Pointer lock belongs to the play canvas; intentional UI releases never pause.
- * An unlocked canvas also supports dragging, including hosts without pointer lock. */
+/** Pointer lock provides continuous mouse look until pause or interactive UI.
+ * Intentional UI releases never trigger an additional pause. */
 export class FirstPersonControls {
   yaw = 0;
   pitch = 0;
@@ -30,10 +30,6 @@ export class FirstPersonControls {
   private requesting = false;
   private disposed = false;
   private unlockedAt = -Infinity;
-  private dragging = false;
-  private dragged = false;
-  private dragX = 0;
-  private dragY = 0;
   private events = new AbortController();
 
   constructor(
@@ -41,29 +37,7 @@ export class FirstPersonControls {
     private hooks: ControlHooks,
   ) {
     const options = { signal: this.events.signal };
-    canvas.addEventListener(
-      "click",
-      () => {
-        if (this.dragged) {
-          this.dragged = false;
-          return;
-        }
-        this.lock();
-      },
-      options,
-    );
-    canvas.addEventListener(
-      "mousedown",
-      (event) => this.startDrag(event),
-      options,
-    );
-    document.addEventListener(
-      "mouseup",
-      () => {
-        this.dragging = false;
-      },
-      options,
-    );
+    canvas.addEventListener("click", () => this.lock(), options);
     document.addEventListener(
       "pointerlockchange",
       () => this.changed(),
@@ -73,13 +47,6 @@ export class FirstPersonControls {
     document.addEventListener(
       "mousemove",
       (event) => this.mouseLook(event),
-      options,
-    );
-    globalThis.addEventListener?.(
-      "blur",
-      () => {
-        this.dragging = false;
-      },
       options,
     );
   }
@@ -119,7 +86,6 @@ export class FirstPersonControls {
   }
 
   release() {
-    this.dragging = false;
     if (this.isLocked || this.locked || this.requesting) this.releasing = true;
     if (this.isLocked) document.exitPointerLock();
   }
@@ -128,7 +94,7 @@ export class FirstPersonControls {
    * pointer lock. UI actions use release() to avoid an unwanted pause. */
   unlock() {
     const intentional = this.releasing;
-    this.locked = this.requesting = this.releasing = this.dragging = false;
+    this.locked = this.requesting = this.releasing = false;
     this.unlockedAt = performance.now();
     if (this.isLocked) document.exitPointerLock();
     if (!intentional && !this.disposed) this.hooks.onUnlock();
@@ -142,7 +108,8 @@ export class FirstPersonControls {
     );
   }
 
-  private lock() {
+  /** Call during the user gesture that enters or resumes gameplay. */
+  lock() {
     if (this.isLocked || this.requesting || this.releasing || !this.canLook())
       return;
     this.requesting = true;
@@ -177,7 +144,6 @@ export class FirstPersonControls {
     this.locked = this.isLocked;
     if (this.locked) {
       this.requesting = false;
-      this.dragging = false;
       if (this.releasing || !this.canLook()) this.release();
     } else if (wasLocked || this.requesting) {
       // Acquisition and Escape can both precede queued change callbacks.
@@ -185,33 +151,12 @@ export class FirstPersonControls {
     }
   }
 
-  private startDrag(event: MouseEvent) {
-    if (event.button !== 0 || this.isLocked || !this.canLook()) return;
-    this.dragging = true;
-    this.dragged = false;
-    this.dragX = event.clientX;
-    this.dragY = event.clientY;
-    this.canvas.focus?.({ preventScroll: true });
-    event.preventDefault();
-  }
-
   private mouseLook(event: MouseEvent) {
-    if (!this.canLook()) {
-      this.dragging = false;
-      return;
-    }
-    let x: number, y: number;
-    if (this.isLocked) {
-      x = event.movementX;
-      y = event.movementY;
-    } else if (this.dragging) {
-      x = event.clientX - this.dragX;
-      y = event.clientY - this.dragY;
-      this.dragX = event.clientX;
-      this.dragY = event.clientY;
-      if (x || y) this.dragged = true;
-    } else return;
-    this.setLook(this.yaw + x * 0.0022, this.pitch - y * 0.0022);
+    if (!this.isLocked || !this.canLook()) return;
+    this.setLook(
+      this.yaw + event.movementX * 0.0022,
+      this.pitch - event.movementY * 0.0022,
+    );
   }
 
   dispose() {

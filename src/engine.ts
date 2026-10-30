@@ -96,10 +96,13 @@ import {
 import {
   advanceStairs,
   beginStairs,
+  enterCityStairBase,
   enterStairs,
   stairwellAt,
+  walkStairs,
 } from "./stair-travel";
 import { STAIRWELL_RADIUS, stairwell } from "./stairwell";
+import { actorOnFloor } from "./stair-route";
 import {
   chooseRetreat,
   routeContacts,
@@ -110,10 +113,13 @@ import { canSee, rayBodyDistance, sightRadius } from "./visibility";
 import { ZombieIndex } from "./zombie-index";
 import { zombieStairArrival } from "./zombie-stairs";
 import { sectorAt } from "./floor-plan";
+import { cityApproachTarget, spawnCityReinforcements } from "./city-invasion";
 export interface Input {
   x: number;
   y: number;
   grab: boolean;
+  /** First-person walking follows the physical stair/gallery instead of a timer. */
+  stairWalk?: boolean;
 }
 export const human = (g: Game) => g.survivors[0];
 export function nearestFurniture(g: Game, a: Actor, grip = false) {
@@ -2128,6 +2134,33 @@ function strikeFurniture(
     ).position = { x: position.x, y: position.y };
   }
 }
+/** Keep city and indoor queues on the same physical face/slot attack budget. */
+function contactFurniture(
+  g: Game,
+  z: Zombie,
+  ob: Furniture,
+  contacts: Map<string, number>,
+) {
+  const surface = surfacePoint(z, ob),
+    horizontal =
+      Math.abs(z.x - ob.x) / (ob.w / 2) > Math.abs(z.y - ob.y) / (ob.h / 2),
+    face = horizontal
+      ? z.x < ob.x
+        ? "west"
+        : "east"
+      : z.y < ob.y
+        ? "north"
+        : "south",
+    slots = Math.max(1, Math.floor(horizontal ? ob.h : ob.w)),
+    key = `${ob.id}/${face}`,
+    n = contacts.get(key) ?? 0,
+    positionKey = `${key}/${Math.floor(horizontal ? surface.y : surface.x)}`;
+  if (n >= slots || contacts.has(positionKey)) return;
+  contacts.set(key, n + 1);
+  contacts.set(positionKey, 1);
+  if (z.cooldown <= 0) strikeFurniture(g, z, ob, z.floor, z);
+}
+
 function zombie(
   g: Game,
   z: Zombie,
@@ -2189,7 +2222,7 @@ function zombie(
   let prey = g.survivors
     .filter(
       (a) =>
-        a.floor === z.floor &&
+        actorOnFloor(g, a, z.floor) &&
         a.alive &&
         !a.escaped &&
         canSee(f, z, a, 12, a.vault?.obstacle),
@@ -2213,7 +2246,7 @@ function zombie(
         ? g.survivors
             .filter(
               (a) =>
-                a.floor === z.floor &&
+                actorOnFloor(g, a, z.floor) &&
                 a.alive &&
                 !a.escaped &&
                 (a.noiseUntil ?? 0) > g.time &&
@@ -2263,6 +2296,59 @@ function zombie(
     z.cooldown <= 0
   ) {
     strikeSurvivor(g, z, prey, z.floor, z);
+    return;
+  }
+  const approach = cityApproachTarget(g, z);
+  const cityDoor = approach
+    ? f.furniture.find((object) => object.id === "main-gate")
+    : undefined;
+  const preyRow = prey && f.boundary?.rows[Math.floor(prey.y)];
+  const shelteredPrey =
+    prey &&
+    cityDoor &&
+    !cityDoor.destroyed &&
+    preyRow &&
+    f.boundary &&
+    prey.y >= f.boundary.top &&
+    prey.y < f.boundary.bottom &&
+    prey.x >= preyRow.left &&
+    prey.x < preyRow.right;
+  if (approach && (!prey || shelteredPrey) && !decoy) {
+    const door = cityDoor;
+    if (
+      approach.finalDoor &&
+      door &&
+      !door.destroyed &&
+      distance(z, surfacePoint(z, door)) <= 0.42 + 1e-6
+    ) {
+      contactFurniture(g, z, door, contacts);
+      return;
+    }
+    const d = distance(z, approach.point);
+    if (d > 1e-7) {
+      const probe = {
+          x: z.x + ((approach.point.x - z.x) / d) * 0.55,
+          y: z.y + ((approach.point.y - z.y) / d) * 0.55,
+        },
+        obstacle = (furnitureNear(f, probe, 0.23) ?? f.furniture).find((o) =>
+          inFurniture(probe, o, 0.23),
+        );
+      if (obstacle && !(obstacle.door && !obstacle.door.latched)) {
+        const close = distance(z, surfacePoint(z, obstacle)) <= 0.42,
+          shove =
+            obstacle.speed > 0 &&
+            !obstacle.field &&
+            FURNITURE[obstacle.kind].resist < ZOMBIE_PUSH;
+        if (close && !shove) {
+          contactFurniture(g, z, obstacle, contacts);
+          return;
+        }
+        if (close && z.cooldown <= 0)
+          strikeFurniture(g, z, obstacle, z.floor, z);
+      }
+    }
+    if (d > 1e-7)
+      moveZombie(g, z, approach.point, Math.min(approach.speed * dt, d), crowd);
     return;
   }
   z.repath -= dt;
@@ -2347,27 +2433,9 @@ function zombie(
         );
         return;
       }
-      const horizontal =
-        Math.abs(z.x - ob.x) / (ob.w / 2) > Math.abs(z.y - ob.y) / (ob.h / 2);
-      const face = horizontal
-        ? z.x < ob.x
-          ? "west"
-          : "east"
-        : z.y < ob.y
-          ? "north"
-          : "south";
-      const slots = Math.max(1, Math.floor(horizontal ? ob.h : ob.w)),
-        key = `${ob.id}/${face}`,
-        n = contacts.get(key) ?? 0;
-      const positionKey = `${key}/${Math.floor(horizontal ? surface.y : surface.x)}`;
-      if (n >= slots || contacts.has(positionKey)) return;
       // A contacting attacker occupies its face slot throughout its cooldown.
       // Otherwise alternating queued attackers multiply DPS between frames.
-      contacts.set(key, n + 1);
-      contacts.set(positionKey, 1);
-      if (z.cooldown <= 0) {
-        strikeFurniture(g, z, ob, z.floor, z);
-      }
+      contactFurniture(g, z, ob, contacts);
       return;
     }
     const step =
@@ -2553,10 +2621,17 @@ function advanceStep(
   // Human input ends with the human's run; the world keeps advancing.
   if (humanActive(g) && a.alive && !a.escaped) {
     a.cooldown = Math.max(0, a.cooldown - dt);
-    enterStairs(g, a);
+    if (input.stairWalk) enterCityStairBase(g, a, input);
+    enterStairs(g, a, !!input.stairWalk);
+    // An older saved timed flight can be resumed as a walkable flight without
+    // regenerating the world or changing the player's earned stair access.
+    if (input.stairWalk && a.stairTravel && a.stairTravel.walked === undefined)
+      a.stairTravel.walked = 0;
+    const walking = a.stairTravel?.walked !== undefined;
     // Walking out of the staircase cancels a flight; walking inside it does not.
-    const landed = advanceStairs(g, a) && !a.stairTravel;
-    if (landed) {
+    const landed = !walking && advanceStairs(g, a) && !a.stairTravel;
+    if (walking) walkStairs(g, a, input, dt);
+    else if (landed) {
       /* Settle on the new floor's landing before taking input again. */
     } else if (a.vault) advanceVault(a, dt);
     else if (input.x || input.y) {
@@ -2611,7 +2686,7 @@ function advanceStep(
     } else npc(g, b, dt);
     recordNpcActivity(g, b, previous);
   }
-  if (g.time >= spawnGrace(g) && g.time >= g.nextSpawn) {
+  if ((g.floors[0].city || g.time >= spawnGrace(g)) && g.time >= g.nextSpawn) {
     const swarm = swarmPacing(g);
     g.nextSpawn =
       g.time +
@@ -2624,36 +2699,38 @@ function advanceStep(
         : g.spawned < CONFIG.openingHorde
           ? Math.min(CONFIG.openingBatch, CONFIG.openingHorde - g.spawned)
           : CONFIG.reinforcementBatch;
-    for (let n = 0; n < batch; n++) {
-      const positions = Array.from({ length: 12 }, (_, i) => ({
-        x: 18.6 + ((i + g.spawned) % 12) * 0.6,
-        y: 33.4,
-      }));
-      const position = positions.find(
-        (p) =>
-          !solid(g.floors[0], p) &&
-          !g.zombies.some(
-            (z) => z.floor === 0 && z.hp > 0 && distance(z, p) < 0.55,
-          ) &&
-          !g.survivors.some(
-            (a) =>
-              a.floor === 0 && a.alive && !a.escaped && distance(a, p) < 0.55,
-          ),
-      );
-      if (!position) break;
-      g.zombies.push({
-        id: `z${g.spawned++}`,
-        floor: 0,
-        ...position,
-        hp: 60,
-        path: [],
-        repath: 0,
-        cooldown: 0,
-        memory: 0,
-        stagger: 0,
-        origin: "outside",
-      });
-    }
+    if (g.floors[0].city) spawnCityReinforcements(g, batch);
+    else
+      for (let n = 0; n < batch; n++) {
+        const positions = Array.from({ length: 12 }, (_, i) => ({
+          x: 18.6 + ((i + g.spawned) % 12) * 0.6,
+          y: 33.4,
+        }));
+        const position = positions.find(
+          (p) =>
+            !solid(g.floors[0], p) &&
+            !g.zombies.some(
+              (z) => z.floor === 0 && z.hp > 0 && distance(z, p) < 0.55,
+            ) &&
+            !g.survivors.some(
+              (a) =>
+                a.floor === 0 && a.alive && !a.escaped && distance(a, p) < 0.55,
+            ),
+        );
+        if (!position) break;
+        g.zombies.push({
+          id: `z${g.spawned++}`,
+          floor: 0,
+          ...position,
+          hp: 60,
+          path: [],
+          repath: 0,
+          cooldown: 0,
+          memory: 0,
+          stagger: 0,
+          origin: "outside",
+        });
+      }
   }
   const contacts = new Map<string, number>();
   const crowd = new ZombieIndex(g.zombies);

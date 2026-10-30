@@ -3,7 +3,13 @@ import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import { board, complete, step, vault } from "../src/engine";
 import { emptyScenario, parseScenario } from "../src/gametest/schema";
-import { CONFIG, type Game, type Roadmap, type Zombie } from "../src/model";
+import {
+  CONFIG,
+  type Game,
+  type Roadmap,
+  type Zombie,
+  distance,
+} from "../src/model";
 import { simulationActive } from "../src/simulation-state";
 import { STUDY_PACING, pacingProfile } from "../src/study-pacing";
 import { createGame, createPlayableGame } from "../src/world";
@@ -43,7 +49,11 @@ test("simulationActive gates only not-yet-started runs", () => {
 test("fresh playable runs use study pacing; legacy createGame keeps historical timing", () => {
   const fresh = createPlayableGame(21, roadmap());
   assert.equal(fresh.pacing, "study");
-  assert.equal(fresh.nextSpawn, 180);
+  assert.equal(fresh.nextSpawn, STUDY_PACING.swarmInterval);
+  assert.ok(
+    fresh.zombies.length > 0,
+    "fresh city fronts already exist in the distance",
+  );
   assert.equal(fresh.helicopter.next, 480);
   const legacy = createGame(21, roadmap());
   assert.equal(legacy.pacing, undefined);
@@ -55,20 +65,35 @@ test("fresh playable runs use study pacing; legacy createGame keeps historical t
   assert.equal(fresh.survivors[0].speed, CONFIG.playerSpeed);
 });
 
-test("no zombies spawn before the study grace window and the opening swarm is bounded", () => {
+test("the study grace window is physical travel time while distant replenishment stays gradual and bounded", () => {
   const g = createPlayableGame(5, roadmap());
   g.status = "playing";
   g.survivors = g.survivors.slice(0, 1);
-  // Jump close to the end of grace; a legacy run would already have
-  // spawned many waves by now (10s grace, 4 every 1s).
-  g.time = 170;
+  const initial = g.spawned,
+    gate = g.floors[0].furniture.find((o) => o.id === "main-gate")!;
+  assert.ok(
+    initial >= 60 && initial <= 90,
+    `initial street fronts: ${initial}`,
+  );
   run(g, 9.5);
   assert.ok(g.time < STUDY_PACING.zombieGraceSeconds);
-  assert.equal(g.spawned, 0);
-  assert.equal(g.zombies.length, 0);
-  run(g, 10.6); // through t≈190.1: waves at 180,183,186,189
-  assert.ok(g.spawned >= 1, `spawned ${g.spawned}`);
-  assert.ok(g.spawned <= 4, `spawned ${g.spawned}`);
+  assert.ok(g.spawned > initial && g.spawned <= initial + 3);
+  assert.ok(
+    g.zombies.every((z) => distance(z, gate) > 200),
+    "new arrivals walk from the distant city instead of materializing at the building",
+  );
+  assert.equal(g.events.filter((e) => e.type === "barricade-hit").length, 0);
+  run(g, 10.6);
+  assert.ok(
+    g.spawned >= initial + 5,
+    `spawned ${g.spawned - initial} reinforcements`,
+  );
+  assert.ok(
+    g.spawned <= initial + 7,
+    `spawned ${g.spawned - initial} reinforcements`,
+  );
+  assert.ok(g.zombies.length <= STUDY_PACING.swarmCap);
+  assert.equal(g.events.filter((e) => e.type === "barricade-hit").length, 0);
 
   const legacy = createGame(5, roadmap());
   legacy.status = "playing";
@@ -82,6 +107,7 @@ test("recurring helicopter follows the study schedule", () => {
   g.status = "playing";
   g.survivors = g.survivors.slice(0, 1);
   g.nextSpawn = 1e9;
+  g.zombies = [];
   g.time = 479.95;
   run(g, 0.2);
   assert.equal(g.helicopter.trip, 1);
@@ -96,6 +122,7 @@ test("study pacing slows NPC reasoning progress relative to legacy timing", () =
   const fresh = createPlayableGame(13, roadmap());
   fresh.status = "playing";
   fresh.nextSpawn = 1e9;
+  fresh.zombies = [];
   const legacy = structuredClone(fresh);
   delete legacy.pacing;
   run(fresh, 30);
