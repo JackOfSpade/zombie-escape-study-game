@@ -42,6 +42,7 @@ test("walking into the personal staircase starts a saved flight; leaving the wel
       root = "/src/",
       { complete } = await import(root + "engine.ts");
     g.survivors = [a];
+    g.settings.view = "top-down";
     g.zombies = [];
     g.nextSpawn = 999999;
     g.surge.anchor = 999999;

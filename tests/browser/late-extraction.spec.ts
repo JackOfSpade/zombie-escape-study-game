@@ -30,6 +30,7 @@ test("earned shields and real keyboard controls extract from a crowded rooftop a
     // must not leak into it through the save.
     delete current.rules;
     Object.assign(current, captured);
+    current.settings.view = "top-down";
     await save(current);
   }, captured);
   await page.reload();

@@ -1,4 +1,5 @@
 import { openGameMenu } from "./helpers/game-menu";
+import { selectTopDown } from "./helpers/view-mode";
 import { expect, test, type Page } from "@playwright/test";
 import { readFile, writeFile } from "node:fs/promises";
 import { tier4RoadmapFixture } from "../fixtures/tier4-roadmap";
@@ -58,6 +59,7 @@ test("real browser: launch, movement, native study capture, running survival and
   page.on("pageerror", (e) => errors.push(e.message));
   const relay = await mockNativeStudy(page);
   await enterNativeGame(page);
+  await selectTopDown(page);
   await expectHumanDrawn(page);
   const start = await page.evaluate(
     () => (window as any).__deadAir.game.survivors[0].y,
@@ -120,6 +122,7 @@ test("physical station access respects occlusion while an issued native question
 }) => {
   const relay = await mockNativeStudy(page);
   await enterNativeGame(page);
+  await selectTopDown(page);
   await page.evaluate(() => {
     const g = (window as any).__deadAir.game,
       a = g.survivors[0],
@@ -253,6 +256,7 @@ test("finite 360 vision: see through closed doors in both palettes, walls and di
   const errors: string[] = [];
   page.on("pageerror", (error) => errors.push(error.message));
   await page.goto("/");
+  await selectTopDown(page);
   await page.waitForFunction(() => !!(window as any).__deadAir);
   await page.evaluate(() => {
     const g = (window as any).__deadAir.game,
@@ -1158,6 +1162,7 @@ test("audio and accessibility: real sound output, mute, stable reduced-motion ca
 }) => {
   await mockNativeStudy(page);
   await page.goto("/");
+  await selectTopDown(page);
   await page.getByRole("button", { name: "Enter the building" }).click();
   const audio = await page.evaluate(async () => {
     const modulePath = "/src/audio.ts",

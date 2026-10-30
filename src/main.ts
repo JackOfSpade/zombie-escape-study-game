@@ -106,7 +106,17 @@ import {
   save,
 } from "./persistence";
 import { camera } from "./camera";
-import { render } from "./render";
+import { rememberVisibleTiles, render } from "./render";
+import { canLookInGame, FirstPersonControls } from "./view3d/controls";
+import { FirstPersonHud } from "./view3d/hud";
+import {
+  readSavedLook,
+  writeSavedLook,
+  type SavedLook,
+} from "./view3d/look-memory";
+import { firstPersonInput } from "./view3d/math";
+import { FirstPersonView } from "./view3d/scene";
+import { lookTarget } from "./view3d/targeting";
 import {
   type SpectatorView,
   SPECTATOR_ZOOM,
@@ -124,6 +134,7 @@ import { retainRunLearning } from "./run-learning";
 import { LOG_KEY, RunLogs } from "./run-logs";
 import { readDurable, writeDurable } from "./storage";
 import "./style.css";
+import "./view3d/style.css";
 import "./study-workspace.css";
 import { presentSharedWorkspace } from "./workspace-exposure";
 import {
@@ -231,7 +242,122 @@ void (async () => {
 })();
 app.innerHTML = gameShell;
 const canvas = $<HTMLCanvasElement>("#world"),
+  canvas3d = $<HTMLCanvasElement>("#view3d"),
   editor = $<HTMLTextAreaElement>("#workspace");
+let firstPersonView: FirstPersonView | undefined,
+  firstPersonRun: Game | undefined,
+  viewFailedRun = "",
+  displayedFirstPerson: boolean | undefined,
+  savedLook: SavedLook | undefined = readSavedLook(game.id),
+  pointerUnlockAt = -Infinity,
+  lastMinimap = -Infinity;
+const firstPersonControls = new FirstPersonControls(canvas3d, {
+  canLook: () =>
+    canLookInGame({
+      playing: firstPersonPlaying(),
+      paused: !!game.paused,
+      quitMenu,
+      uiVisible: lookUiVisible(),
+    }),
+  ownsKeyboard,
+  onUnlock: () => {
+    pointerUnlockAt = performance.now();
+    keys.clear();
+    if (firstPersonPlaying() && !game.paused && !quitMenu) setPaused(true);
+  },
+  onRetry: () => {
+    game.notice = "Click again to look around, or drag to look.";
+  },
+  onLook: () => {
+    savedLook = { id: game.id, ...firstPersonControls.look() };
+  },
+  onError: () => {
+    game.notice =
+      "Pointer lock is unavailable. Drag to look around, or use the arrow keys.";
+  },
+});
+// Initialize from the recovered survivor before any input or agent hook can
+// observe the controls; syncGameView also resets when a new run is activated.
+if (savedLook) firstPersonControls.setLook(savedLook.yaw, savedLook.pitch);
+else firstPersonControls.reset(human(game).heading);
+function persistLook() {
+  if (savedLook) writeSavedLook(savedLook);
+}
+window.addEventListener("pagehide", persistLook);
+canvas3d.addEventListener("webglcontextlost", (event) => {
+  event.preventDefault();
+  if (firstPersonView) useClassicFallback();
+});
+const firstPersonHud = new FirstPersonHud(
+  $("#first-person-hud"),
+  $("#interaction-prompt"),
+  $("#pointer-hint"),
+  $("#damage-vignette"),
+);
+function firstPersonPlaying() {
+  const a = human(game);
+  return (
+    game.settings.view !== "top-down" &&
+    game.status === "playing" &&
+    a.alive &&
+    !a.escaped &&
+    !game.studyWorkspace?.enabled &&
+    game.id !== viewFailedRun
+  );
+}
+function lookUiVisible() {
+  return !$("#terminal").hidden || !!document.querySelector("dialog[open]");
+}
+function useClassicFallback() {
+  viewFailedRun = game.id;
+  firstPersonControls.release();
+  game.notice =
+    "3D rendering is unavailable. Classic view is active; choose Game view in Settings to retry.";
+  syncGameView();
+}
+function syncGameView() {
+  const firstPerson = firstPersonPlaying();
+  if (firstPerson && firstPersonRun !== game) {
+    firstPersonControls.release();
+    const look = savedLook?.id === game.id ? savedLook : readSavedLook(game.id);
+    if (look) firstPersonControls.setLook(look.yaw, look.pitch);
+    else firstPersonControls.reset(human(game).heading);
+    firstPersonRun = game;
+    lastMinimap = -Infinity;
+  }
+  if (firstPerson && !firstPersonView) {
+    try {
+      firstPersonView = new FirstPersonView(canvas3d);
+    } catch {
+      useClassicFallback();
+      return;
+    }
+  } else if (!firstPerson) {
+    firstPersonControls.release();
+    firstPersonView?.dispose();
+    firstPersonView = undefined;
+    firstPersonRun = undefined;
+  }
+  if (displayedFirstPerson === firstPerson) return;
+  displayedFirstPerson = firstPerson;
+  canvas3d.hidden = !firstPerson;
+  canvas.classList.toggle("minimap", firstPerson);
+  canvas.tabIndex = firstPerson ? -1 : 0;
+  canvas.setAttribute(
+    "aria-label",
+    firstPerson
+      ? "Minimap of nearby visible rooms and survivors"
+      : "Top-down survival game. Use WASD or arrow keys to move.",
+  );
+  document.body.classList.toggle("first-person", firstPerson);
+  $("#arrow-hint").innerHTML = firstPerson
+    ? "<kbd>←/→</kbd> turn · <kbd>↑/↓</kbd> walk"
+    : "<kbd>↑↓←→</kbd> move";
+}
+function focusWorld() {
+  syncGameView();
+  (firstPersonPlaying() ? canvas3d : canvas).focus();
+}
 const nativeStudyHome = document.createComment("study connection home");
 $("#native-study").before(nativeStudyHome);
 let nativeRequestIdentity: string | undefined;
@@ -242,6 +368,7 @@ let studySaveGeneration = 0;
 syncDisplayScale();
 let saveToken = 0;
 async function persist() {
+  persistLook();
   // A placeholder world must never overwrite a checkpoint that failed to load
   // or recover. Only a validated, explicitly imported backup releases this guard.
   if (saveRecoveryError) return false;
@@ -398,12 +525,21 @@ async function launchNativeQuestion(e: Encounter) {
 function renderNativeStudy() {
   const e = displayedNativeQuestion();
   const panel = $("#native-study");
+  const wasHidden = panel.hidden;
   panel.hidden =
     !e || (!e.directStudy && !e.error && !e.pendingGeneration && !e.generation);
   if (panel.hidden || !e) {
     hideNativeRequest();
     return;
   }
+  if (
+    wasHidden &&
+    (e.generation ||
+      e.pendingGeneration ||
+      e.directStudy?.state === "pending" ||
+      e.directStudy?.state === "interrupted")
+  )
+    firstPersonControls.release();
   const session = e.directStudy;
   const stopped = session?.state === "paused";
   if (
@@ -606,7 +742,10 @@ function ownsKeyboard(target: EventTarget | null) {
   );
 }
 document.addEventListener("focusin", (ev) => {
-  if (ownsKeyboard(ev.target)) keys.clear();
+  if (ownsKeyboard(ev.target)) {
+    keys.clear();
+    firstPersonControls.release();
+  }
 });
 let pauseFocus: HTMLElement | undefined;
 function setPaused(paused: boolean) {
@@ -615,6 +754,7 @@ function setPaused(paused: boolean) {
   keys.clear();
   acc = 0;
   if (paused) {
+    firstPersonControls.release();
     if (!menu.open)
       pauseFocus =
         document.activeElement instanceof HTMLElement
@@ -637,9 +777,13 @@ function setPaused(paused: boolean) {
       audio.start();
       audio.update(game);
     }
-    if (pauseFocus?.isConnected && !pauseFocus.closest("[hidden], #pause-menu"))
+    if (firstPersonPlaying() && !lookUiVisible()) focusWorld();
+    else if (
+      pauseFocus?.isConnected &&
+      !pauseFocus.closest("[hidden], #pause-menu")
+    )
       pauseFocus.focus();
-    else canvas.focus();
+    else focusWorld();
   }
   if (playing) runLogs.record(game, paused ? "pause" : "resume");
   runLogs.capture(game, true);
@@ -662,6 +806,7 @@ $("#pause-menu").addEventListener("cancel", (event) => {
 });
 function setStudyMode(enabled: boolean) {
   if (saveRecoveryError) return;
+  firstPersonControls.release();
   keys.clear();
   acc = 0;
   closeTerminal();
@@ -702,7 +847,7 @@ function setStudyMode(enabled: boolean) {
       audio.start();
       audio.update(game);
     }
-    canvas.focus();
+    focusWorld();
   }
   void persist();
 }
@@ -806,7 +951,7 @@ function begin() {
   leaveSpectator();
   audio.start();
   audio.update(game);
-  canvas.focus();
+  focusWorld();
   $("#start-card").hidden = true;
   persist();
 }
@@ -963,7 +1108,7 @@ function startCard() {
   document.getElementById("spectate")?.addEventListener("click", () => {
     card.hidden = true;
     syncSpectatorBar();
-    canvas.focus();
+    focusWorld();
   });
   syncSpectatorBar();
   document
@@ -1044,7 +1189,7 @@ function renderSpectatorBar() {
         floor: Number(b.dataset.floor),
         focus: { x: W / 2, y: H / 2 },
       });
-      canvas.focus();
+      focusWorld();
     };
   }
 }
@@ -1109,7 +1254,7 @@ function closeTerminal() {
   document.body.classList.remove("terminal-open");
   editor.blur();
   keys.clear();
-  canvas.focus();
+  focusWorld();
   persist();
 }
 /** After death the last tutor question stays answerable; no station is
@@ -1123,7 +1268,7 @@ function openFinalQuestion(e: Encounter) {
     void retryDirectStudy(game, e, roadmap, nativeStudyChanged);
   else void prepareNativeQuestion(e);
   syncSpectatorBar();
-  canvas.focus();
+  focusWorld();
 }
 /** Leaving a post-death terminal re-assesses its evidence, then shows the end card. */
 function leaveTerminal() {
@@ -1137,6 +1282,7 @@ function leaveTerminal() {
 async function interact() {
   if (game.status !== "playing" || game.paused) return;
   const a = human(game);
+  if (firstPersonPlaying()) a.heading = firstPersonControls.facing;
   if (a.grip) {
     toggleGrip(game, a);
     runLogs.record(game, "release");
@@ -1147,9 +1293,32 @@ async function interact() {
     return;
   }
   if (a.floor === CONFIG.floors && board(game, a)) return;
-  const object = nearestGrip(game, a),
-    station = nearestStation(game, a),
-    door = nearbyDoor(game, a);
+  const target = firstPersonPlaying()
+    ? lookTarget(game, firstPersonControls.yaw)
+    : undefined;
+  if (target?.kind === "item") {
+    if (takeLoot(game, a, target.encounter, target.item.id)) void persist();
+    else game.notice = "Pack full or cache access not earned.";
+    return;
+  }
+  const object =
+      target?.kind === "grip"
+        ? target.object
+        : target
+          ? undefined
+          : nearestGrip(game, a),
+    station =
+      target?.kind === "station"
+        ? target.station
+        : target
+          ? undefined
+          : nearestStation(game, a),
+    door =
+      target?.kind === "door"
+        ? target.object
+        : target
+          ? undefined
+          : nearbyDoor(game, a);
   // Staircases are entered by walking in; E never starts a flight.
   if (
     object &&
@@ -1159,7 +1328,7 @@ async function interact() {
         door ? distance(a, doorFrame(door)) : Infinity,
       )
   ) {
-    if (toggleGrip(game, a)) {
+    if (toggleGrip(game, a, object.id)) {
       game.notice = `Gripping ${object.kind}. Move to drag and pivot; E releases.`;
       runLogs.record(game, "grip", { object: object.id });
     }
@@ -1236,6 +1405,8 @@ async function interact() {
     return;
   }
   active = e.id;
+  keys.clear();
+  firstPersonControls.release();
   lastQuestion = e.id;
   game.lastStudyEncounter = e.id;
   if (e.mode === "solo") e.owner = "human";
@@ -2449,6 +2620,8 @@ $("#settings-toggle").onclick = () => {
   $<HTMLInputElement>("#volume").value = String(game.settings.volume);
   $<HTMLInputElement>("#captions").checked = game.settings.captions;
   $<HTMLInputElement>("#reduced").checked = game.settings.reducedFlash;
+  $<HTMLSelectElement>("#game-view").value =
+    game.settings.view ?? "first-person";
   $("#bridge-detail").textContent = status().detail;
   $("#audio-status").textContent = audio.error;
 };
@@ -2467,6 +2640,16 @@ $("#captions").onchange = () => {
 };
 $("#reduced").onchange = () => {
   game.settings.reducedFlash = $<HTMLInputElement>("#reduced").checked;
+};
+$("#game-view").onchange = () => {
+  game.settings.view =
+    $<HTMLSelectElement>("#game-view").value === "top-down"
+      ? "top-down"
+      : "first-person";
+  viewFailedRun = "";
+  keys.clear();
+  syncGameView();
+  void persist();
 };
 $("#reconnect").onclick = () => {
   void checkBridge().then(() => {
@@ -2559,6 +2742,8 @@ window.addEventListener("keydown", (ev) => {
   if (game.studyWorkspace?.enabled) return;
   if (ev.code === "Escape") {
     ev.preventDefault();
+    // Some browsers deliver Escape after the pointer-lock loss already paused us.
+    if (performance.now() - pointerUnlockAt < 150) return;
     if (ev.repeat || restarting) return;
     if ($<HTMLDialogElement>("#pause-menu").open) {
       if (pausePanel) closePanel(pausePanel);
@@ -2580,7 +2765,7 @@ window.addEventListener("keydown", (ev) => {
       else {
         card.hidden = true;
         syncSpectatorBar();
-        canvas.focus();
+        focusWorld();
       }
     } else setPaused(true);
     return;
@@ -2617,7 +2802,8 @@ window.addEventListener("keydown", (ev) => {
         Number(keys.has("KeyS") || keys.has("ArrowDown")) -
         Number(keys.has("KeyW") || keys.has("ArrowUp")),
       n = Math.hypot(x, y);
-    if (n) a.heading = { x: x / n, y: y / n };
+    if (firstPersonPlaying()) a.heading = firstPersonControls.facing;
+    else if (n) a.heading = { x: x / n, y: y / n };
     const jumped = vault(game, a);
     runLogs.record(game, "vault-attempt", {
       ok: jumped,
@@ -2901,6 +3087,11 @@ function ui() {
   }
 }
 const framePerformance = new FramePerformance();
+let latestFramePerformance: ReturnType<FramePerformance["sample"]>;
+let performanceWindow = 0;
+let benchmarkDrawCalls = 0;
+let benchmarkMinActors = Infinity;
+let latestMinActors = Infinity;
 function frame(time: number) {
   const frameStarted = performance.now();
   const measuring = simulationActive(game) && !game.paused;
@@ -2910,6 +3101,11 @@ function frame(time: number) {
     steps = 0;
   const elapsed = Math.min((time - last) / 1000, 0.2);
   last = time;
+  syncGameView();
+  if (firstPersonPlaying()) {
+    if (lookUiVisible()) firstPersonControls.release();
+    firstPersonControls.turn(keys, elapsed);
+  }
   if (simulationActive(game) && !game.paused && !quitMenu) {
     acc += elapsed;
     let count = 0;
@@ -2925,7 +3121,13 @@ function frame(time: number) {
           : Number(keys.has("KeyS") || keys.has("ArrowDown")) -
             Number(keys.has("KeyW") || keys.has("ArrowUp"));
       const stepStarted = performance.now();
-      step(game, 1 / 30, { x, y, grab: false });
+      const input =
+        firstPersonPlaying() && !focused
+          ? firstPersonInput(firstPersonControls.yaw, keys)
+          : firstPersonPlaying()
+            ? { x: 0, y: 0 }
+            : { x, y };
+      step(game, 1 / 30, { ...input, grab: false });
       simulationMs += performance.now() - stepStarted;
       steps++;
       acc -= 1 / 30;
@@ -2964,8 +3166,36 @@ function frame(time: number) {
       });
   }
   const renderStarted = performance.now();
-  if (!game.studyWorkspace?.enabled)
-    render(canvas, game, spectating(game) ? view : undefined);
+  syncGameView();
+  if (!game.studyWorkspace?.enabled) {
+    if (firstPersonView) {
+      try {
+        firstPersonView.render(
+          game,
+          firstPersonControls.yaw,
+          firstPersonControls.pitch,
+          elapsed,
+          steps > 0 || game.paused || lookUiVisible(),
+        );
+      } catch {
+        useClassicFallback();
+      }
+      // The cached minimap shares exact player sight, labels and fog with Classic.
+      rememberVisibleTiles(game);
+      if (!firstPersonView || time - lastMinimap >= 100) {
+        render(canvas, game);
+        lastMinimap = time;
+      }
+    } else render(canvas, game, spectating(game) ? view : undefined);
+  }
+  firstPersonHud.update(
+    game,
+    firstPersonPlaying(),
+    firstPersonControls.isLocked,
+    lookUiVisible() || ownsKeyboard(document.activeElement),
+    time,
+    firstPersonControls.yaw,
+  );
   const renderMs = performance.now() - renderStarted;
   if (time - lastUI > 200) {
     const uiStarted = performance.now();
@@ -2974,6 +3204,14 @@ function frame(time: number) {
     lastUI = time;
   }
   if (measuring) {
+    benchmarkDrawCalls = Math.max(
+      benchmarkDrawCalls,
+      firstPersonView?.drawCalls ?? 0,
+    );
+    benchmarkMinActors = Math.min(
+      benchmarkMinActors,
+      firstPersonView?.visibleActors ?? 0,
+    );
     const report = framePerformance.sample(game.id, time, {
       simulationMs,
       renderMs,
@@ -2982,13 +3220,21 @@ function frame(time: number) {
       persistMs,
       uiMs,
     });
-    if (report)
+    if (report) {
+      latestMinActors = benchmarkMinActors;
+      benchmarkMinActors = Infinity;
+      latestFramePerformance = report;
+      performanceWindow++;
       runLogs.record(game, "performance", {
         ...report,
         zombies: game.zombies.filter((z) => z.hp > 0).length,
         actors: game.survivors.filter((a) => a.alive && !a.escaped).length,
       });
-  } else framePerformance.reset();
+    }
+  } else {
+    framePerformance.reset();
+    benchmarkMinActors = latestMinActors = Infinity;
+  }
   requestAnimationFrame(frame);
 }
 // Agent diagnostics stay out of the player menu. Browser acceptance fixtures
@@ -3003,6 +3249,36 @@ Object.assign(window, {
     },
     roadmap,
     interact,
+    setLook(yaw: number, pitch: number) {
+      firstPersonControls.setLook(yaw, pitch);
+    },
+    look() {
+      return firstPersonControls.look();
+    },
+    /** Read/reset only presentation diagnostics in synthetic agent pages. */
+    renderPerformance(reset = false) {
+      if (reset) {
+        framePerformance.reset();
+        latestFramePerformance = undefined;
+        benchmarkDrawCalls = 0;
+        benchmarkMinActors = latestMinActors = Infinity;
+        performanceWindow = 0;
+      }
+      return {
+        window: performanceWindow,
+        report: latestFramePerformance,
+        drawCalls: firstPersonView?.drawCalls ?? 0,
+        maxDrawCalls: benchmarkDrawCalls,
+        visibleActors: firstPersonView?.visibleActors ?? 0,
+        minVisibleActors: latestMinActors,
+        firstPerson: !!firstPersonView,
+      };
+    },
+    /** Exercise the same unexpected-lock-loss path even in browsers that
+     * refuse pointer lock. Intentional UI releases use release() instead. */
+    unlockLook() {
+      firstPersonControls.unlock();
+    },
     /** Agent-only entry: diagnostics have no control in the player interface. */
     openAgentMenu() {
       document.body.classList.add("agent-tools");

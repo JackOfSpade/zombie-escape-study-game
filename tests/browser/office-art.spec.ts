@@ -27,6 +27,7 @@ test("office art: every furniture kind, textured floors and bounded render cost"
     ];
     const runner = new TestRunner(s, roadmap),
       g = runner.game;
+    g.settings.view = "top-down";
     g.floors[0].dark = 0;
     const c = document.createElement("canvas");
     c.id = "art";
@@ -92,6 +93,7 @@ test("office art: a fresh floor is furnished as an office with typed rooms", asy
       { createPlayableGame } = await import("/src/world.ts" as string);
     const roadmap = await (await fetch("/curriculum.json")).json();
     const g = createPlayableGame(42, roadmap);
+    g.settings.view = "top-down";
     g.status = "playing";
     const f = g.floors[1];
     f.dark = 0;

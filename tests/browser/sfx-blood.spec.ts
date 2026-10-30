@@ -39,6 +39,7 @@ test("downloaded SFX decode and play through real low-pass filters; permanent bl
     const g = (window as any).__deadAir.game,
       a = g.survivors[0],
       f = g.floors[0];
+    g.settings.view = "top-down";
     g.survivors = [a];
     g.zombies = [];
     g.nextSpawn = 1e9;

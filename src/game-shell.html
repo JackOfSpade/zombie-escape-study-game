@@ -26,10 +26,25 @@
           </div>
         </div>
         <canvas
+          id="view3d"
+          aria-label="First-person survival game. Click or drag to look. Use WASD to move, left/right arrows to turn, up/down arrows to walk, E to interact, and Escape to pause."
+          tabindex="0"
+          hidden
+        ></canvas>
+        <canvas
           id="world"
           aria-label="Top-down survival game. Use WASD or arrow keys to move."
           tabindex="0"
         ></canvas>
+        <div id="first-person-hud" hidden>
+          <div id="damage-vignette" hidden></div>
+          <span class="crosshair" aria-hidden="true"></span>
+          <span id="interaction-prompt"></span>
+          <span id="pointer-hint"
+            >Click or drag to look · ←/→ turn · ↑/↓ or WASD move · Esc
+            pauses</span
+          >
+        </div>
         <div id="start-card" class="overlay"></div>
         <aside
           id="native-study"
@@ -99,7 +114,9 @@
         </div>
         <div id="inventory" class="inventory" aria-label="Equipment"></div>
         <div class="controls">
-          <span><kbd>WASD</kbd> move</span><span><kbd>E</kbd> interact</span
+          <span><kbd>WASD</kbd> move</span
+          ><span id="arrow-hint"><kbd>←/→</kbd> turn · <kbd>↑/↓</kbd> walk</span
+          ><span><kbd>E</kbd> interact</span
           ><span><kbd>Space</kbd> jump barricade</span
           ><span><kbd>Esc</kbd> pause / restart</span>
         </div>
@@ -389,6 +406,11 @@
         <option value="full">Full original curriculum</option>
       </select>
       <p id="settings-career-summary" class="muted"></p>
+      <label for="game-view">Game view</label>
+      <select id="game-view">
+        <option value="first-person">First person · mouse look</option>
+        <option value="top-down">Classic · top down</option>
+      </select>
       <label class="display-size" for="display-scale">
         <span
           >Game and text size

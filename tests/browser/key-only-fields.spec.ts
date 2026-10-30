@@ -21,6 +21,7 @@ test("E at a red field with zero keys denies entry without a timed unlock", asyn
       (window as any).__deadAir.game,
       new TestRunner(s, roadmap).game,
     );
+    (window as any).__deadAir.game.settings.view = "top-down";
     (window as any).__fieldLabels = [];
     const fill = CanvasRenderingContext2D.prototype.fillText;
     CanvasRenderingContext2D.prototype.fillText = function (
@@ -82,6 +83,7 @@ test("E at a red field spends a key even beside another survivor's solo terminal
       Object.values(live.encounters).find((e: any) => e.mode === "solo"),
     ) as any;
     Object.assign(live, new TestRunner(s, roadmap).game);
+    live.settings.view = "top-down";
     // A neighbour's terminal in reach and nearer than the field's frame used
     // to take E, so a player holding a key could never open the field.
     solo.owner = "npc-1";

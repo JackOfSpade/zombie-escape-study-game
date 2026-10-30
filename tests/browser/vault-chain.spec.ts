@@ -15,6 +15,7 @@ test("Space continues past five mixed barricades when each blocks the previous l
     Object.assign(g, scenario);
     // A fresh run's force-field rules disable vaulting; use the scenario's.
     g.rules = scenario.rules;
+    g.settings.view = "top-down";
   }, fixture);
   await page.locator("#world").focus();
   await page.keyboard.press("Space");

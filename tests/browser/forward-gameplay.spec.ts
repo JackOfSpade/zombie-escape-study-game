@@ -94,6 +94,7 @@ test("the actual Space key climbs a two-object barricade and records its attempt
     // The legacy barricade scenario has no rules field; a fresh run's
     // force-field rules must not survive the swap, since they disable vaulting.
     g.rules = scenario.rules;
+    g.settings.view = "top-down";
   }, stacked);
   await page.locator("#world").focus();
   await page.keyboard.press("Space");

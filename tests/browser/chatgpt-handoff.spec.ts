@@ -3,6 +3,7 @@
 import { expect, test } from "@playwright/test";
 import type { Server } from "node:http";
 import { openGameMenu } from "./helpers/game-menu";
+import { selectTopDown } from "./helpers/view-mode";
 // @ts-expect-error Local .mjs relay integration.
 import { createHandoffQueue } from "../../scripts/chatgpt-handoff-queue.mjs";
 // @ts-expect-error Local .mjs relay integration.
@@ -131,6 +132,8 @@ test("native ChatGPT transport preserves generation and question through reload;
   try {
     await page.goto("/");
     await page.getByRole("button", { name: "Enter the building" }).click();
+    // Keep this transport flow fast in headless Chromium's software WebGL.
+    await selectTopDown(page);
     await openGameMenu(page);
     await page.getByRole("button", { name: "Settings", exact: true }).click();
     await page.getByText("ChatGPT handoff connection", { exact: true }).click();
@@ -144,9 +147,18 @@ test("native ChatGPT transport preserves generation and question through reload;
     await expect.poll(() => q.snapshot().autonomousWork).toBe(true);
     await page.locator("#handoff-autonomous").uncheck();
     await expect.poll(() => q.snapshot().autonomousWork).toBe(false);
+    const previousRun = await page.evaluate(
+      () => (window as any).__deadAir.game.id,
+    );
     await page
       .getByRole("button", { name: "Start a live study run", exact: true })
       .click();
+    // Restart has always awaited the durable learning save. Position only the
+    // replacement live world, after the existing asynchronous restart finishes.
+    await page.waitForFunction((previous) => {
+      const g = (window as any).__deadAir.game;
+      return g.id !== previous && g.study.profile === "live";
+    }, previousRun);
     const id = await position();
     await page.locator("#world").focus();
     await page.keyboard.press("e");

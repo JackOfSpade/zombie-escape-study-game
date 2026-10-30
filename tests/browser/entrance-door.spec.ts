@@ -9,6 +9,7 @@ test("last-run seed: E releases the physical first entrance and keyboard input p
       { step } = await import("/src/engine.ts" as string);
     const g = (window as any).__deadAir.game,
       fresh = createGame(1137190675, (window as any).__deadAir.roadmap);
+    fresh.settings.view = "top-down";
     Object.assign(g, fresh);
     g.status = "playing";
     g.survivors = [g.survivors[0]];

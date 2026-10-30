@@ -21,6 +21,7 @@ test("visible field captions and names stay complete above fog without revealing
       { id: "secret", kind: "npc", x: 13, y: 9 },
     );
     const g = new TestRunner(s, roadmap).game;
+    g.settings.view = "top-down";
     g.survivors[1].name = "Sora";
     g.survivors[2].name = "Secret";
     // Red for a keyless player: the one caption a field may carry.

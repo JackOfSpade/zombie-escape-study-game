@@ -11,15 +11,45 @@ import {
   drawWorkstation,
   terrainCanvas,
 } from "./office-art";
-import type { SpectatorView } from "./spectator";
+import { spectating, type SpectatorView } from "./spectator";
 import { type Stairwell, stairwell } from "./stairwell";
 import { playerCanSee, sightRadius, visibilityPolygon } from "./visibility";
 import { stairContactCues } from "./zombie-stairs";
+
+const tileMemory = new WeakMap<
+  Game["survivors"][number],
+  { source: string[]; ids: Set<string>; length: number }
+>();
+/** Sample sight independently of canvas drawing, including between minimap draws. */
+export function rememberVisibleTiles(g: Game) {
+  if (spectating(g)) return;
+  const a = human(g),
+    floor = g.floors[a.floor],
+    radius = sightRadius(floor);
+  let memory = tileMemory.get(a);
+  if (!memory || memory.source !== a.seen || memory.length !== a.seen.length) {
+    memory = { source: a.seen, ids: new Set(a.seen), length: a.seen.length };
+    tileMemory.set(a, memory);
+  }
+  const pt = { x: 0, y: 0 };
+  for (let y = 0; y < H; y++)
+    for (let x = 0; x < W; x++) {
+      const id = `tile-${a.floor}-${x}-${y}`;
+      if (memory.ids.has(id)) continue;
+      pt.x = x + 0.5;
+      pt.y = y + 0.5;
+      if (playerCanSee(floor, a, pt, radius)) {
+        a.seen.push(id);
+        memory.ids.add(id);
+      }
+    }
+  memory.length = a.seen.length;
+}
 /** In-world object names: the furniture kind, spaced and upper-cased. */
 export function objectName(kind: string) {
   return kind.replace(/([a-z])([A-Z])/g, "$1 $2").toUpperCase();
 }
-const normal = {
+export const normal = {
   wall: "#354547",
   edge: "#536361",
   ink: "#d6e4d8",
@@ -30,7 +60,7 @@ const normal = {
   sky: "#0b1418",
   dim: "#121e22",
 };
-const mutation = {
+export const mutation = {
   wall: "#53405a",
   edge: "#887068",
   ink: "#f9e6bc",
@@ -96,17 +126,7 @@ export function render(
     );
     ctx.closePath();
     ctx.clip();
-    const seen = new Set(a.seen);
-    // Terrain memory does not expose live occupants. Perception is identical in both palettes.
-    for (let y = 0; y < H; y++)
-      for (let x = 0; x < W; x++) {
-        const pt = { x: x + 0.5, y: y + 0.5 },
-          id = `tile-${a.floor}-${x}-${y}`;
-        if (!seen.has(id) && visible(pt)) {
-          a.seen.push(id);
-          seen.add(id);
-        }
-      }
+    rememberVisibleTiles(g);
   }
   const theme = g.surge.state === "active" ? "mutation" : "normal";
   // Carpet, vinyl and wall textures are one cached image; the clip limits it to sight.

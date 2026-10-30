@@ -150,44 +150,66 @@ test("opening panels clears held movement and close restores the invoking contro
   await expect(page.locator("#pause-home")).toBeVisible();
 });
 
-test("pause submenus return home before Esc resumes the world", async ({
-  page,
-}) => {
-  await safeRun(page);
-  const inspect = page.locator("#curriculum-button"),
-    settings = page.locator("#settings-toggle");
-  await openGameMenu(page);
-  await inspect.click();
-  await expect(inspect).toHaveAttribute("aria-expanded", "true");
-  await expect(page.locator("#pause-home")).toBeHidden();
-  await expect(page.locator("#settings")).toBeHidden();
-  await expect(page.locator("#pause-back")).toBeVisible();
-  const before = await survivor(page);
-  await page.keyboard.press("Escape");
-  await expect(page.locator("#inspector")).toBeHidden();
-  await expect(page.locator("#pause-home")).toBeVisible();
-  await expect(inspect).toBeFocused();
-  await expect(inspect).toHaveAttribute("aria-expanded", "false");
+for (const view of ["top-down", "first-person"] as const) {
+  test(`pause submenus return home before Esc resumes the world (${view})`, async ({
+    page,
+  }) => {
+    await safeRun(page);
+    await page.evaluate((v) => {
+      (window as any).__deadAir.game.settings.view = v;
+    }, view);
+    const canvas = page.locator(view === "first-person" ? "#view3d" : "#world");
+    await expect(canvas).toBeVisible();
+    await canvas.focus();
+    const inspect = page.locator("#curriculum-button"),
+      settings = page.locator("#settings-toggle");
+    await openGameMenu(page);
+    await inspect.click();
+    await expect(inspect).toHaveAttribute("aria-expanded", "true");
+    await expect(page.locator("#pause-home")).toBeHidden();
+    await expect(page.locator("#settings")).toBeHidden();
+    await expect(page.locator("#pause-back")).toBeVisible();
+    const before = await survivor(page);
+    await page.keyboard.press("Escape");
+    await expect(page.locator("#inspector")).toBeHidden();
+    await expect(page.locator("#pause-home")).toBeVisible();
+    await expect(inspect).toBeFocused();
+    await expect(inspect).toHaveAttribute("aria-expanded", "false");
 
-  await settings.click();
-  await expect(settings).toHaveAttribute("aria-expanded", "true");
-  await expect(page.locator("#pause-home")).toBeHidden();
-  await expect(page.locator("#inspector")).toBeHidden();
-  await page.getByRole("button", { name: "Back to pause menu" }).click();
-  await expect(page.locator("#settings")).toBeHidden();
-  await expect(settings).toBeFocused();
-  await expect(settings).toHaveAttribute("aria-expanded", "false");
-  await expect(page.locator("#pause-home")).toBeVisible();
-  expect((await survivor(page)).time).toBe(before.time);
-  expect(await page.evaluate(() => (window as any).__deadAir.game.paused)).toBe(
-    true,
-  );
+    await settings.click();
+    await expect(settings).toHaveAttribute("aria-expanded", "true");
+    await expect(page.locator("#pause-home")).toBeHidden();
+    await expect(page.locator("#inspector")).toBeHidden();
+    await page.getByRole("button", { name: "Back to pause menu" }).click();
+    await expect(page.locator("#settings")).toBeHidden();
+    await expect(settings).toBeFocused();
+    await expect(settings).toHaveAttribute("aria-expanded", "false");
+    await expect(page.locator("#pause-home")).toBeVisible();
+    expect((await survivor(page)).time).toBe(before.time);
+    expect(
+      await page.evaluate(() => (window as any).__deadAir.game.paused),
+    ).toBe(true);
 
-  await page.keyboard.press("Escape");
-  await expect(page.locator("#pause-menu")).toBeHidden();
-  await expect(page.locator("#world")).toBeFocused();
-  await page.keyboard.down("w");
-  await page.waitForTimeout(200);
-  await page.keyboard.up("w");
-  expect((await survivor(page)).y).toBeLessThan(before.y);
-});
+    await page.keyboard.press("Escape");
+    await expect(page.locator("#pause-menu")).toBeHidden();
+    await expect(canvas).toBeFocused();
+    const yaw =
+      view === "first-person"
+        ? await page.evaluate(
+            () => (window as any).__deadAir.look().yaw as number,
+          )
+        : -Math.PI / 2;
+    const facing = { x: Math.cos(yaw), y: Math.sin(yaw) };
+    await page.keyboard.down("w");
+    await page.waitForTimeout(200);
+    await page.keyboard.up("w");
+    const after = await survivor(page);
+    const forward =
+      (after.x - before.x) * facing.x + (after.y - before.y) * facing.y;
+    const lateral =
+      (after.x - before.x) * -facing.y + (after.y - before.y) * facing.x;
+    expect(forward).toBeGreaterThan(0.3);
+    expect(Math.abs(lateral)).toBeLessThan(0.05);
+    if (view === "top-down") expect(after.y).toBeLessThan(before.y);
+  });
+}

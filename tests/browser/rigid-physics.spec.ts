@@ -7,6 +7,7 @@ async function scene(page: Page) {
       a = g.survivors[0],
       f = g.floors[0];
     g.survivors = [a];
+    g.settings.view = "top-down";
     g.zombies = [];
     g.nextSpawn = 1e9;
     g.surge.anchor = 1e9;

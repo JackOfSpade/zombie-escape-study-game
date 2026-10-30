@@ -25,6 +25,7 @@ for (const color of ["green", "red"])
       s.entities[2].forceField = color;
       const g = new TestRunner(s, roadmap).game,
         o = g.floors[0].furniture[0];
+      g.settings.view = "top-down";
       const c = document.createElement("canvas");
       c.id = "field-damage";
       c.style.width = "1200px";

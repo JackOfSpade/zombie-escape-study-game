@@ -56,6 +56,7 @@ test("reused light surfaces stay pixel-stable across frames, flares and resize",
     const roadmap = await (await fetch("/curriculum.json")).json();
     const runner = new TestRunner(emptyScenario(), roadmap),
       g = runner.game;
+    g.settings.view = "top-down";
     g.effects.push({
       kind: "flare",
       floor: 0,

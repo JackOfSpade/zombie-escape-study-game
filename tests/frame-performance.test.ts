@@ -106,3 +106,25 @@ test("invalid optional persist/UI inputs are rejected without polluting the wind
   assert.equal(r.avgPersistMs, 2);
   assert.equal(r.avgUiMs, 1);
 });
+
+test("render p95 uses a bounded conservative histogram and resets between windows", () => {
+  const meter = new FramePerformance();
+  for (let i = 0; i < 99; i++)
+    meter.sample("run", i * 20, {
+      ...work,
+      renderMs: i < 94 ? 2.011 : 9.021,
+    });
+  const report = meter.sample("run", 2000, { ...work, renderMs: 90 })!;
+  assert.equal(report.frames, 100);
+  assert.equal(report.p95RenderMs, 9.05);
+  assert.equal(report.maxRenderMs, 90);
+  meter.sample("run", 2010, { ...work, renderMs: 0 });
+  const next = meter.sample("run", 4010, { ...work, renderMs: 0 })!;
+  assert.equal(next.p95RenderMs, 0);
+  meter.sample("run", 4020, { ...work, renderMs: 100 });
+  assert.equal(
+    meter.sample("run", 6020, { ...work, renderMs: 80 })!.p95RenderMs,
+    100,
+    "overflow uses the real maximum, never an artificially low bin limit",
+  );
+});

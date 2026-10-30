@@ -87,7 +87,7 @@ export function rayBodyDistance(
     }
   return hit;
 }
-function wallRayDistance(
+export function wallRayDistance(
   f: Floor,
   origin: Point,
   angle: number,

@@ -12,6 +12,7 @@ export interface FrameWork {
 const valid = (v: unknown) =>
   typeof v === "number" && Number.isFinite(v) && v >= 0;
 const validOptional = (v: unknown) => v === undefined || valid(v);
+const RENDER_BIN_MS = 0.05;
 /** Bounded local timing summaries. No per-frame history or gameplay state retained. */
 export class FramePerformance {
   private run = "";
@@ -31,8 +32,12 @@ export class FramePerformance {
   private maxPersist = 0;
   private maxUi = 0;
   private steps = 0;
+  // Fixed histogram: no growing per-frame history or sort allocation. The
+  // last bin overflows and uses maxRender for a conservative tail estimate.
+  private renderBins = new Uint32Array(1024);
   reset() {
     this.run = "";
+    this.renderBins.fill(0);
     this.frames =
       this.slow =
       this.maxFrame =
@@ -74,6 +79,12 @@ export class FramePerformance {
     this.maxFrame = Math.max(this.maxFrame, interval);
     this.simulation += work.simulationMs;
     this.render += work.renderMs;
+    this.renderBins[
+      Math.min(
+        this.renderBins.length - 1,
+        Math.ceil(work.renderMs / RENDER_BIN_MS),
+      )
+    ]++;
     this.total += work.totalMs;
     this.persist += persistMs;
     this.ui += uiMs;
@@ -86,6 +97,16 @@ export class FramePerformance {
     const wallMs = time - this.start;
     if (wallMs < 2000) return;
     const round = (n: number) => Math.round(n * 100) / 100;
+    const rank = Math.ceil(this.frames * 0.95);
+    let cumulative = 0,
+      p95Render = this.maxRender;
+    for (let i = 0; i < this.renderBins.length - 1; i++) {
+      cumulative += this.renderBins[i];
+      if (cumulative >= rank) {
+        p95Render = Math.min(this.maxRender, i * RENDER_BIN_MS);
+        break;
+      }
+    }
     const report = {
       frames: this.frames,
       wallMs: round(wallMs),
@@ -95,6 +116,7 @@ export class FramePerformance {
       avgSimulationMs: round(this.simulation / this.frames),
       maxSimulationMs: round(this.maxSimulation),
       avgRenderMs: round(this.render / this.frames),
+      p95RenderMs: round(p95Render),
       maxRenderMs: round(this.maxRender),
       avgWorkMs: round(this.total / this.frames),
       maxWorkMs: round(this.maxWork),

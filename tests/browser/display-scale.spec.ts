@@ -50,6 +50,7 @@ async function displayedSizes(page: Page) {
     );
     scenario.entities.push({ id: "probe", kind: "npc", x: 11, y: 11.8 });
     const g = new TestRunner(scenario, (window as any).__deadAir.roadmap).game;
+    g.settings.view = "top-down";
     g.settings.displayScale = (
       window as any
     ).__deadAir.game.settings.displayScale;

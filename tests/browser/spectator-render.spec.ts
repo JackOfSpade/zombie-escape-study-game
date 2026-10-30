@@ -27,6 +27,7 @@ test("spectator rendering shows every occupant of the chosen floor unclipped and
       { id: "upstairs", kind: "npc", x: 12, y: 12, floor: 1 },
     );
     const g = new TestRunner(s, roadmap).game;
+    g.settings.view = "top-down";
     g.survivors[1].name = "Sora";
     g.survivors[2].name = "Secret";
     g.survivors[3].name = "Upstairs";

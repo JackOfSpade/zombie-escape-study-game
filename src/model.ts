@@ -577,6 +577,8 @@ export interface Surge {
   lastEnd: number;
 }
 export interface Settings {
+  /** Older saves use the first-person view when this preference is omitted. */
+  view?: "first-person" | "top-down";
   /** Interface and world magnification; omitted by older saves (100%). */
   displayScale?: number;
   /** Local preference only; server release and capability are also required. */
