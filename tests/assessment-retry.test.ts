@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 import { assess, checkBridge, edit } from "../src/ai";
-import { eligible, initialStudy } from "../src/curriculum";
+import { eligible, evidencePacket, initialStudy } from "../src/curriculum";
 import type { Roadmap } from "../src/model";
 import { decode, encode, recover } from "../src/persistence";
 import { createGame } from "../src/world";
@@ -50,6 +50,10 @@ async function connection(handler: typeof fetch) {
       : handler(url, init);
   await checkBridge();
   return {
+    async reconnect() {
+      mode = "study-mode";
+      await checkBridge();
+    },
     async disconnect() {
       mode = "development";
       await checkBridge();
@@ -63,6 +67,111 @@ async function connection(handler: typeof fetch) {
 }
 const unresolved = () =>
   Response.json({ findings: [], visitOutcome: "unresolved" });
+
+test("an offline assessment freezes the original partial work before reconnect and reload", async () => {
+  const { g, e, r } = fixture(),
+    bodies: string[] = [];
+  const bridge = await connection(async (_url, init) => {
+    bodies.push(String(init?.body));
+    return unresolved();
+  });
+  try {
+    await bridge.disconnect();
+    await assess(g, e, r);
+    const assessment = g.study.assessments[0],
+      captured = assessment.request;
+    assert.equal(assessment.status, "review-required");
+    assert.equal(captured?.provider, "study-mode");
+    assert.ok(captured, "An offline attempt lost its frozen assessment packet");
+    assert.equal(bodies.length, 0);
+    const ledger = JSON.stringify(g.study.learner),
+      restored = recover(decode(encode(g))),
+      saved = restored.encounters[e.id];
+    r.tracks[e.problem!.contract.track].progress += "\nLater source context";
+    edit(
+      restored,
+      saved,
+      "Later human answer outside this review",
+      saved.revision,
+      r,
+    );
+    await bridge.reconnect();
+    await assess(restored, saved, r, assessment.evidenceCutoffSequence, true);
+    assert.equal(bodies.length, 1);
+    assert.equal(
+      JSON.stringify(JSON.parse(bodies[0]).payload),
+      captured.payloadJson,
+    );
+    assert.ok(!bodies[0].includes("Later human answer outside this review"));
+    assert.ok(!bodies[0].includes("Later source context"));
+    assert.equal(restored.study.assessments[0].status, "applied");
+    assert.deepEqual(restored.study.learner!.evidence, []);
+    assert.equal(g.study.learner && JSON.stringify(g.study.learner), ledger);
+  } finally {
+    await bridge.restore();
+  }
+});
+
+test("a partial assessment packet cannot expose a later accepted answer beyond its cutoff", () => {
+  const { e, g, r } = fixture(),
+    cutoff = g.seq;
+  edit(
+    g,
+    e,
+    "Later answer that was not yet written at the cutoff",
+    e.revision,
+    r,
+  );
+  e.submissions.push({
+    id: "synthetic-later-accepted",
+    author: "human",
+    revision: e.revision,
+    content: e.workspace,
+    seq: ++g.seq,
+    status: "complete",
+    feedback: "Synthetic completion only",
+  });
+  e.accepted = "synthetic-later-accepted";
+  const packet = evidencePacket(e, r, cutoff, g.study.learner);
+  assert.equal(packet.accepted, undefined);
+  assert.ok(
+    !JSON.stringify(packet).includes("Later answer that was not yet written"),
+  );
+  assert.equal(evidencePacket(e, r).accepted?.id, e.accepted);
+});
+
+test("an ordinary completed assessment retains the accepted submission event after its last artifact", async () => {
+  const { e, g, r } = fixture(),
+    artifactCutoff = g.seq,
+    packets: ReturnType<typeof evidencePacket>[] = [];
+  e.submissions.push({
+    id: "synthetic-ordinary-accepted",
+    author: "human",
+    revision: e.revision,
+    content: e.workspace,
+    seq: ++g.seq,
+    status: "complete",
+    feedback: "Synthetic completion only",
+  });
+  e.accepted = "synthetic-ordinary-accepted";
+  const bridge = await connection(async (_url, init) => {
+    packets.push(JSON.parse(String(init?.body)).payload.packet);
+    return unresolved();
+  });
+  try {
+    await assess(g, e, r);
+    assert.equal(packets.length, 1);
+    assert.equal(packets[0].accepted?.id, e.accepted);
+    assert.equal(packets[0].evidenceCutoffSequence, artifactCutoff);
+    assert.equal(
+      g.study.assessments[0].id,
+      `assessment-${g.id}/${e.id}-${artifactCutoff}`,
+      "Existing artifact-based assessment IDs must remain stable",
+    );
+  } finally {
+    await bridge.restore();
+  }
+});
 
 test("assessment retries after reload reuse their exact captured packet despite later source context", async () => {
   const { g, e, r } = fixture(),

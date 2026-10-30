@@ -242,6 +242,64 @@ test("study-only native results are assessed and persist while the world stays f
     assert.equal(saved.study.visits.length, 1);
   }));
 
+test("live formal completion advances the track before assessment, and the delayed assessment cannot advance it twice", async () =>
+  fixture(async ({ g, e, calls, answer, waitCalls }) => {
+    liveQuestion(g, e);
+    await beginDirectStudy(g, e, r);
+    await waitCalls(1);
+    answer(0, solved(e, e.directStudy.questionFingerprint));
+    await retryDirectStudy(g, e, r);
+    await waitCalls(2);
+    const l = g.study.learner;
+    assert.equal(e.state, "consumed");
+    assert.equal(l.cycle, 0, "academic visit still awaits assessment");
+    assert.equal(l.studyTurnPosition, 1);
+    assert.equal(eligibleLearning(r, l).track, "PE");
+    answer(1, judgment(calls[1].payload.packet));
+    await waitFor(() => g.study.assessments[0].status !== "pending");
+    assert.equal(g.study.assessments[0].status, "applied");
+    assert.equal(l.cycle, 1);
+    assert.equal(l.studyTurnPosition, 1);
+    assert.equal(eligibleLearning(r, l).track, "PE");
+    await retryDirectStudy(g, e, r);
+    assert.equal(l.studyTurnPosition, 1);
+  }));
+
+test("a delayed assessment of an older bound live question cannot consume an owed turn on the other track", async () =>
+  fixture(async ({ g, e, calls, answer, waitCalls }) => {
+    liveQuestion(g, e);
+    await beginDirectStudy(g, e, r);
+    await waitCalls(1);
+    // A saved resume position can change while the original issued task stays bound.
+    g.study.learner.cycleOffset = 1;
+    answer(0, solved(e, e.directStudy.questionFingerprint));
+    await retryDirectStudy(g, e, r);
+    await waitCalls(2);
+    assert.equal(g.study.learner.studyTurnPosition, 1);
+    answer(1, judgment(calls[1].payload.packet));
+    await waitFor(() => g.study.assessments[0].status !== "pending");
+    assert.equal(g.study.assessments[0].status, "applied");
+    assert.equal(g.study.learner.cycle, 1);
+    assert.equal(g.study.learner.studyTurnPosition, 1);
+    assert.equal(eligibleLearning(r, g.study.learner).track, "PE");
+  }));
+
+test("a previously issued off-track development question stays answerable without consuming the owed track", async () =>
+  fixture(async ({ g, e, answer, waitCalls }) => {
+    assert.equal(e.problem.contract.track, "PY");
+    g.study.cycle = 1;
+    e.problemPresentedSequence = 7;
+    const original = structuredClone(e.problem);
+    await beginDirectStudy(g, e, r);
+    await waitCalls(1);
+    answer(0, solved(e, e.directStudy.questionFingerprint));
+    await retryDirectStudy(g, e, r);
+    assert.equal(e.state, "consumed");
+    assert.deepEqual(e.problem, original);
+    assert.equal(g.study.cycle, 1);
+    assert.equal(g.study.visits.length, 0);
+  }));
+
 test("a native question opens without learner evidence and completes once with attributed transcript", async () =>
   fixture(async ({ g, e, calls, answer, waitCalls }) => {
     const keys = humanKeys(g);
@@ -1015,7 +1073,10 @@ test("stopped questions survive reload without polling and resume with a fresh d
     await beginDirectStudy(g, e, r);
     await retryDirectStudy(g, e, r);
     assert.equal(calls.length, 1);
-    const resumed = resumeDirectStudyInNewChat(g, e, r);
+    const resumed = Promise.all([
+      resumeDirectStudyInNewChat(g, e, r),
+      resumeDirectStudyInNewChat(g, e, r),
+    ]);
     await waitCalls(2);
     assert.notEqual(e.directStudy.id, old.id);
     assert.equal(e.directStudy.questionFingerprint, old.questionFingerprint);
@@ -1039,3 +1100,50 @@ test("stopped questions survive reload without polling and resume with a fresh d
     assert.equal(pauseDirectStudy(e), false);
   });
 });
+
+test("concurrent native openings share one immutable session and one delivery", async () =>
+  fixture(async ({ g, e, calls, answer, waitCalls }) => {
+    const sessions = new Set();
+    const options = { onChange: () => sessions.add(e.directStudy) };
+    await Promise.all([
+      beginDirectStudy(g, e, r, options),
+      beginDirectStudy(g, e, r, options),
+      beginDirectStudy(g, e, r, options),
+    ]);
+    await waitCalls(1);
+    assert.equal(sessions.size, 1);
+    const session = e.directStudy;
+    answer(0, solved(e, session.questionFingerprint));
+    await retryDirectStudy(g, e, r);
+    assert.equal(calls.length, 1);
+    assert.equal(session.state, "applied", session.error);
+    assert.equal(e.submissions.length, 1);
+  }));
+
+test("resuming a malformed paused session keeps its saved task and reports the error", async () =>
+  fixture(async ({ g, e, calls, waitCalls }) => {
+    await beginDirectStudy(g, e, r);
+    await waitCalls(1);
+    pauseDirectStudy(e);
+    const session = e.directStudy;
+    session.payloadJson = "{invalid";
+    let changes = 0;
+    await assert.doesNotReject(async () =>
+      resumeDirectStudyInNewChat(g, e, r, () => changes++),
+    );
+    assert.equal(e.directStudy, session);
+    assert.equal(session.state, "paused");
+    assert.match(session.error, /SyntaxError|malformed|invalid/);
+    assert.equal(calls.length, 1);
+    assert.equal(changes, 1);
+  }));
+
+test("a task changed while its identity is hashing is never issued with a stale fingerprint", async () =>
+  fixture(async ({ g, e, calls }) => {
+    const opening = beginDirectStudy(g, e, r);
+    e.workspace += "\n# changed during opening";
+    e.revision++;
+    await assert.rejects(opening, /changed while opening/);
+    assert.equal(e.directStudy, undefined);
+    assert.equal(calls.length, 0);
+  }));

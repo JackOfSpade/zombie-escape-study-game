@@ -32,7 +32,10 @@ import {
   status,
 } from "./bridge-client";
 import { completionVerdict } from "./completion-verdict";
-import { beginVisit } from "./curriculum";
+import { beginVisit, countStudyTurn, eligible } from "./curriculum";
+import { encounterKey } from "./learner";
+import { sha256 } from "./digest";
+import { isRecord } from "./records";
 import {
   concessionFeedback,
   encounterProbeContract,
@@ -56,8 +59,7 @@ import {
 } from "./model";
 
 export type DirectStudySessionRecord = DirectStudySession;
-type WithSession = Encounter & { directStudy?: DirectStudySessionRecord };
-const sessionOf = (e: Encounter) => (e as WithSession).directStudy;
+const sessionOf = (e: Encounter) => e.directStudy;
 
 export const DIRECT_STUDY_CAPABILITY = "direct-study";
 export const DIRECT_STUDY_MODE = "terminal-direct";
@@ -99,12 +101,13 @@ export const DIRECT_STUDY_FORMAT = {
 } as const;
 
 export const DIRECT_STUDY_INSTRUCTION =
-  "@study: Present the issued task in this regular ChatGPT conversation and talk normally until it is finished. Preserve what is assessed, with freedom to improve how it is explained. Your own explanations are assistance, never learner evidence. When finished call finish_study_question once with outcome solved (only when the learner's own answers establish the named facets as demonstrated) or gap (naming each missing facet with status gap; never mark unasked facets as gaps), the exact questionFingerprint, the exact transcript of the native turns in order, and knowledge.facets naming the observed findings. A solved outcome must establish every original base facet; a gap outcome records only explicit missing facets and may leave unasked siblings unassessed. The tool supplies the completion flag; do not pass a complete argument. Follow any bound continuation in the tool receipt to complete the separate source-bound assessment in this same chat; completion alone never certifies independent mastery. " +
+  "@study: Present the issued task in this regular ChatGPT conversation and talk normally until it is finished. Preserve what is assessed, with freedom to improve how it is explained. Your own explanations are assistance, never learner evidence. When finished submit one logical completion through finish_study_question with outcome solved (only when the learner's own answers establish the named facets as demonstrated) or gap (naming each missing facet with status gap; never mark unasked facets as gaps), the exact questionFingerprint, the exact transcript of the native turns in order, and knowledge.facets naming the observed findings. A solved outcome must establish every original base facet; a gap outcome records only explicit missing facets and may leave unasked siblings unassessed. The tool supplies the completion flag; do not pass a complete argument. Treat this as one logical completion: if a call returns retryable or fails with a temporary connection error or timeout, retry the identical finish_study_question arguments at most once in this turn. An identical retry is safe if the first response was lost. Do not retry a permission or safety denial, authentication failure, disconnected chat or stale question; explain the returned error and leave the question pending for recovery in this same chat. Never report a submission as accepted without an accepted tool receipt. Follow any bound continuation in the tool receipt to complete the separate source-bound assessment in this same chat; completion alone never certifies independent mastery. " +
   QUESTION_ADAPTATION_GUIDANCE +
   " " +
   TOPIC_ASSESSMENT_INSTRUCTION;
 
 const inFlight = new WeakMap<object, Promise<void>>();
+const opening = new WeakMap<Encounter, Promise<void>>();
 
 /** Unfinished question, including one explicitly stopped by the learner. */
 export function unfinishedDirectStudy(e: Encounter): boolean {
@@ -124,15 +127,24 @@ export function pauseDirectStudy(e: Encounter): boolean {
 }
 
 /** A fresh delivery identity prevents an old chat's completion being reused. */
-export function resumeDirectStudyInNewChat(
+export async function resumeDirectStudyInNewChat(
   g: Game,
   e: Encounter,
   r: Roadmap,
   onChange?: () => void,
 ): Promise<void> {
   const previous = sessionOf(e);
-  if (previous?.state !== "paused") return Promise.resolve();
-  const payload = JSON.parse(previous.payloadJson);
+  if (previous?.state !== "paused") return;
+  let payload: ReturnType<typeof buildPayload>;
+  try {
+    payload = await savedPayload(previous, e);
+  } catch (error) {
+    previous.error = String(error);
+    onChange?.();
+    return;
+  }
+  // Another click can have resumed this same paused session while hashing.
+  if (sessionOf(e) !== previous || previous.state !== "paused") return;
   const id = `direct-${crypto.randomUUID()}`;
   payload.requestId = id;
   previous.state = "superseded";
@@ -146,16 +158,6 @@ export function resumeDirectStudyInNewChat(
   };
   newStudyChat();
   return retryDirectStudy(g, e, r, onChange);
-}
-
-const hex = (buffer: ArrayBuffer) =>
-  [...new Uint8Array(buffer)]
-    .map((b) => b.toString(16).padStart(2, "0"))
-    .join("");
-async function sha256(text: string) {
-  return hex(
-    await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text)),
-  );
 }
 
 interface Snapshot {
@@ -271,7 +273,22 @@ function buildPayload(
 }
 
 /** Create (or reuse) the immutable session and launch it without waiting. */
-export async function beginDirectStudy(
+export function beginDirectStudy(
+  g: Game,
+  e: Encounter,
+  r: Roadmap,
+  options?: { guidance?: string; onChange?: () => void },
+): Promise<void> {
+  const pending = opening.get(e);
+  if (pending) return pending;
+  const operation = openDirectStudy(g, e, r, options);
+  opening.set(e, operation);
+  const finish = () => opening.delete(e);
+  void operation.then(finish, finish);
+  return operation;
+}
+
+async function openDirectStudy(
   g: Game,
   e: Encounter,
   r: Roadmap,
@@ -294,7 +311,15 @@ export async function beginDirectStudy(
     onChange?.();
     return;
   }
-  const fingerprint = await directStudyFingerprint(g, e);
+  const snapshot = JSON.stringify(snapshotOf(g, e));
+  const fingerprint = await sha256(snapshot);
+  if (
+    g.encounters[e.id] !== e ||
+    sessionOf(e) !== current ||
+    JSON.stringify(snapshotOf(g, e)) !== snapshot
+  )
+    throw Error("The question or saved work changed while opening; try again.");
+  if (!connected(g) || ownedElsewhere(e)) return;
   if (
     current &&
     (current.state === "pending" || current.state === "interrupted")
@@ -309,10 +334,20 @@ export async function beginDirectStudy(
       "The question or saved work changed; this captured question is retained but cannot award.";
   } else if (current?.state === "applied") return;
   if (e.state === "consumed") return;
-  // Standalone practice follows the same rotation without granting curriculum
-  // credit. Live issuance remains source-bound through presentProblem.
-  if (e.studyOnly && g.study.profile === "development")
-    beginVisit(r, g.study, e);
+  // Bind matching development visits in both views. An older issued survival
+  // question stays answerable without taking over a different scheduled visit.
+  // Live issuance remains source-bound through presentProblem.
+  if (g.study.profile === "development") {
+    const next = eligible(r, g.study),
+      c = e.problem!.contract;
+    if (
+      e.studyOnly ||
+      (c.track === next.track &&
+        JSON.stringify(c.objectiveIds) === JSON.stringify(next.objectiveIds) &&
+        (!g.study.pending || g.study.pending.encounter === encounterKey(e)))
+    )
+      beginVisit(r, g.study, e);
+  }
   presentProblem(g, e, r);
   const runId = e.runId ?? g.id;
   const id = `direct-${runId}-${e.id}-${fingerprint.slice(0, 16)}`;
@@ -325,7 +360,7 @@ export async function beginDirectStudy(
     state: "interrupted",
     createdAt: Date.now(),
   };
-  (e as WithSession).directStudy = session;
+  e.directStudy = session;
   // A native session takes over this same question. A delayed legacy reply
   // must not finish it a second time; retain its captured packet for audit.
   for (const job of e.tutorRequests ?? [])
@@ -349,9 +384,6 @@ interface ValidResponse {
   probe: ProbeReply;
   topicAssessments: { topicId: string; text: string }[];
 }
-
-const isRecord = (x: unknown): x is Record<string, unknown> =>
-  !!x && typeof x === "object" && !Array.isArray(x);
 
 /** Strict, side-effect-free validation of a completion response. */
 export function validateDirectResponse(
@@ -563,6 +595,45 @@ function digestOf(v: ValidResponse) {
   );
 }
 
+/** Parse and authenticate persisted task bytes before delivery or replacement. */
+async function savedPayload(s: DirectStudySession, e: Encounter) {
+  if (s.createdAt !== undefined && !Number.isFinite(s.createdAt))
+    throw Error("Saved direct question has an invalid creation time");
+  const rawPayload = JSON.parse(s.payloadJson);
+  if (
+    !isRecord(rawPayload) ||
+    rawPayload.requestId !== s.id ||
+    rawPayload.questionFingerprint !== s.questionFingerprint ||
+    rawPayload.mode !== DIRECT_STUDY_MODE ||
+    typeof rawPayload.workspace !== "string" ||
+    !Number.isSafeInteger(rawPayload.draftRevision) ||
+    !isRecord(rawPayload.problem)
+  )
+    throw Error("Saved direct question does not match its session");
+  const payload = rawPayload as unknown as ReturnType<typeof buildPayload>;
+  if (
+    payload.sessionId !== `${payload.runId}/${e.id}/private` ||
+    (payload.profile !== "live" && payload.profile !== "development") ||
+    payload.encounterId !== e.id ||
+    !payload.runId ||
+    payload.draftRevision < 0 ||
+    s.provider !== DIRECT_PROVIDER ||
+    (await sha256(
+      JSON.stringify({
+        runId: payload.runId,
+        encounterId: payload.encounterId,
+        problem: payload.problem,
+        workspace: payload.workspace,
+        revision: payload.draftRevision,
+        profile: payload.profile,
+        provider: s.provider,
+      }),
+    )) !== s.questionFingerprint
+  )
+    throw Error("Saved direct question has an invalid immutable identity");
+  return payload;
+}
+
 /** Retry the exact saved session; resolves after completion or interruption. */
 export function retryDirectStudy(
   g: Game,
@@ -585,41 +656,8 @@ export function retryDirectStudy(
         throw Error(
           "Reconnect ChatGPT with direct study support to resume this exact question",
         );
-      if (s.createdAt !== undefined && !Number.isFinite(s.createdAt))
-        throw Error("Saved direct question has an invalid creation time");
-      const rawPayload = JSON.parse(s.payloadJson);
-      if (
-        !isRecord(rawPayload) ||
-        rawPayload.requestId !== s.id ||
-        rawPayload.questionFingerprint !== s.questionFingerprint ||
-        rawPayload.mode !== DIRECT_STUDY_MODE ||
-        typeof rawPayload.workspace !== "string" ||
-        !Number.isSafeInteger(rawPayload.draftRevision) ||
-        !isRecord(rawPayload.problem)
-      )
-        throw Error("Saved direct question does not match its session");
-      const payload = rawPayload as unknown as ReturnType<typeof buildPayload>;
+      const payload = await savedPayload(s, e);
       const archived = () => g.study.archives.includes(e);
-      if (
-        payload.sessionId !== `${payload.runId}/${e.id}/private` ||
-        (payload.profile !== "live" && payload.profile !== "development") ||
-        payload.encounterId !== e.id ||
-        !payload.runId ||
-        payload.draftRevision < 0 ||
-        s.provider !== DIRECT_PROVIDER ||
-        (await sha256(
-          JSON.stringify({
-            runId: payload.runId,
-            encounterId: payload.encounterId,
-            problem: payload.problem,
-            workspace: payload.workspace,
-            revision: payload.draftRevision,
-            profile: payload.profile,
-            provider: s.provider,
-          }),
-        )) !== s.questionFingerprint
-      )
-        throw Error("Saved direct question has an invalid immutable identity");
       const check = async () => {
         if (s.createdAt !== undefined && !Number.isFinite(s.createdAt))
           throw Error("Saved direct question has an invalid creation time");
@@ -763,6 +801,10 @@ export function retryDirectStudy(
         provider: s.provider,
         statement,
       });
+      // A human can finish the captured question after an NPC unlocks its
+      // world station. Count the study once without repeating the world reward.
+      if (!archived() && g.encounters[e.id] === e && (e.runId ?? g.id) === g.id)
+        countStudyTurn(g.study, e);
       if (live && !e.submissions.some((x) => x.id === submissionId)) {
         const ev = event(
           g,

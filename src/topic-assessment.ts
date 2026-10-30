@@ -3,6 +3,7 @@ import {
   TOPIC_ASSESSMENT_TEXT_LIMIT,
   validateTopicAssessments as validateTopicAssessmentValues,
 } from "../scripts/lib/topic-assessment.mjs";
+import type { ScopeDefinition } from "./learning-model";
 import type {
   Contract,
   Encounter,
@@ -11,6 +12,7 @@ import type {
   StudyState,
   Track,
 } from "./model";
+import { inspectMergedDocument } from "./roadmap-structure";
 import { studyTrackProgress } from "./study-progress";
 
 /** AI-written knowledge commentary. This is never a curriculum proof. */
@@ -82,9 +84,19 @@ export function latestTopicAssessment(
   topicId: string,
   sourceHash?: string,
 ): TopicAssessmentRecord | undefined {
-  let records = savedTopicAssessmentRecords(s).filter(
-    (record) => record.topicId === topicId,
-  );
+  const cache = s.topicAssessments;
+  if (!cache || typeof cache !== "object" || Array.isArray(cache))
+    return undefined;
+  // Each topic has four possible depths. Reading those keys directly avoids
+  // rescanning every topic's prose whenever an expanded panel is refreshed.
+  let records = [1, 2, 3, 4].flatMap((depth) => {
+    const record = cache[`${topicId}/D${depth}`];
+    return validTopicAssessmentRecord(record) &&
+      record.topicId === topicId &&
+      record.depth === depth
+      ? [record]
+      : [];
+  });
   if (sourceHash && records.some((record) => record.sourceHash === sourceHash))
     records = records.filter((record) => record.sourceHash === sourceHash);
   return records.sort(
@@ -231,6 +243,12 @@ export function topicAssessmentContext(
 ) {
   const topicIds = topicAssessmentTopics(contract);
   const learner = g.study.learner;
+  const adoption = learner?.roadmapAdoptions?.at(-1);
+  // Reconciliation can correct an earlier attempt or gap without changing the
+  // protected curriculum. Commentary must see that accepted source revision.
+  const adopted = adoption
+    ? inspectMergedDocument(adoption.proposal.canonical)
+    : undefined;
   const prioritize = <T extends { objectiveIds: string[]; at?: string }>(
     rows: T[],
   ) =>
@@ -240,10 +258,25 @@ export function topicAssessmentContext(
           Number(onTopics(a.objectiveIds, topicIds)) ||
         (b.at ?? "").localeCompare(a.at ?? ""),
     );
+  const progressByTrack = new Map<
+    Track,
+    ReturnType<typeof studyTrackProgress>
+  >();
+  const definitionsByObjective = new Map<string, ScopeDefinition[]>();
+  for (const definition of Object.values(learner?.scopes ?? {})) {
+    const definitions =
+      definitionsByObjective.get(definition.objectiveId) ?? [];
+    definitions.push(definition);
+    definitionsByObjective.set(definition.objectiveId, definitions);
+  }
   const topics = topicIds.map((topicId) => {
     const track = topicId.slice(0, 2) as Track;
     const shortId = topicId.slice(3);
-    const progress = studyTrackProgress(r, g.study, track, contract.depth);
+    let progress = progressByTrack.get(track);
+    if (!progress) {
+      progress = studyTrackProgress(r, g.study, track, contract.depth);
+      progressByTrack.set(track, progress);
+    }
     const topic = progress.topics.find((entry) => entry.id === shortId);
     return {
       topicId,
@@ -261,9 +294,7 @@ export function topicAssessmentContext(
           importedStates: objective.cells,
           sourceRefs: objective.refs,
           currentCell: learner?.cells[objective.id],
-          scopeDefinitions: Object.values(learner?.scopes ?? {}).filter(
-            (definition) => definition.objectiveId === objective.id,
-          ),
+          scopeDefinitions: definitionsByObjective.get(objective.id) ?? [],
         })),
     };
   });
@@ -283,7 +314,9 @@ export function topicAssessmentContext(
   // Source rows carry the hash and track; bare matching topic numbers are never proof.
   const importedRows = (["PY", "PE"] as const).flatMap((track) => {
     const seen = new Set<string>();
-    return r.tracks[track].progress.split("\n").flatMap((row) => {
+    const progress =
+      adopted?.blocks[`${track}_PROGRESS`] ?? r.tracks[track].progress;
+    return progress.split("\n").flatMap((row) => {
       if (!/^\| (?:S\d{4}-(?:EV\d+|A\d+)|G\d+) \|/.test(row) || seen.has(row))
         return [];
       seen.add(row);
@@ -298,6 +331,7 @@ export function topicAssessmentContext(
         {
           track,
           sourceHash: r.sourceHash,
+          ...(adoption ? { canonicalHash: adoption.canonicalHash } : {}),
           kind: gap
             ? "imported-gap"
             : attempt
@@ -408,9 +442,18 @@ export function topicAssessmentContext(
     },
     importedContext: {
       documentId: r.documentId,
-      revision: r.revision,
+      revision: adopted?.revision ?? r.revision,
       sourceHash: r.sourceHash,
-      sharedProgress: boundedText(r.sharedProgress, 16_000),
+      ...(adoption
+        ? {
+            canonicalHash: adoption.canonicalHash,
+            adoptedAt: adoption.adoptedAt,
+          }
+        : {}),
+      sharedProgress: boundedText(
+        adopted?.blocks.SHARED_PROGRESS ?? r.sharedProgress,
+        16_000,
+      ),
       evidenceAndGapRows: boundedRows(prioritize(importedRows), 24_000),
       contractHistoricalScope: contract.historicalScope,
       note: "Imported source text is attributed historical context, never fresh learner evidence. Retained source dispositions can qualify earlier observations.",

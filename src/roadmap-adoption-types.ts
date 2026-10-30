@@ -33,6 +33,7 @@ export interface RoadmapReconciliationPayload {
     LearnerLedger,
     | "cycle"
     | "cycleOffset"
+    | "studyTurnPosition"
     | "tracks"
     | "reviews"
     | "scopes"

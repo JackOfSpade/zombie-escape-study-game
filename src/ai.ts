@@ -28,7 +28,12 @@ import {
   unseenWork,
   workKinds,
 } from "./chat-catchup";
-import { beginVisit, eligible, finishVisit } from "./curriculum";
+import {
+  beginVisit,
+  countStudyTurn,
+  eligible,
+  finishVisit,
+} from "./curriculum";
 import { complete } from "./engine";
 import { recordSpawn, spawnContract } from "./topic-spawn";
 import { reviewEnvironment } from "./environment-review";
@@ -226,6 +231,7 @@ const generationCurrent = (g: Game, e: Encounter, id: string) =>
   !e.problem;
 const roomGenerations = new WeakMap<Game, Map<string, Promise<void>>>();
 export async function ensureProblem(g: Game, e: Encounter, r: Roadmap) {
+  refreshUnissuedPractice(g, e, r);
   if (!e.questionRoom) return ensureIndividualProblem(g, e, r);
   if (e.state === "consumed" || g.encounters[e.id] !== e) return;
   const peers = roomEncounters(g, e);
@@ -256,6 +262,60 @@ export async function ensureProblem(g: Game, e: Encounter, r: Roadmap) {
     if (pending.get(e.questionRoom) === operation)
       pending.delete(e.questionRoom);
   }
+}
+
+/** Development rooms preload one track for the whole world. Refresh only an
+ * untouched private prompt at opening time; issued tasks and NPC work stay frozen.
+ * Use a separate deterministic stream so opening a terminal cannot change physics RNG.
+ */
+function refreshUnissuedPractice(g: Game, e: Encounter, r: Roadmap) {
+  const p = e.problem;
+  if (
+    g.encounters[e.id] !== e ||
+    g.study.profile !== "development" ||
+    p?.provenance !== "development" ||
+    e.mode !== "solo" ||
+    e.state === "consumed" ||
+    (e.owner && e.owner !== "human") ||
+    e.problemPresentedSequence !== undefined ||
+    e.directStudy ||
+    e.pendingGeneration ||
+    e.generation ||
+    e.revision !== 0 ||
+    e.workspace !== p.starter ||
+    e.history.length ||
+    e.tutor.length ||
+    e.group.length ||
+    e.submissions.length ||
+    e.npcProgress > 0 ||
+    e.npcWork?.length ||
+    e.executions?.length
+  )
+    return;
+  let formal: Contract;
+  try {
+    formal = eligible(r, g.study);
+  } catch {
+    // Preserve existing tasks when the curriculum has no eligible replacement.
+    return;
+  }
+  if (
+    p.contract.track === formal.track &&
+    (p.contract.practice ||
+      JSON.stringify(p.contract.objectiveIds) ===
+        JSON.stringify(formal.objectiveIds))
+  )
+    return;
+  const contract = e.studyOnly ? formal : spawnContract(r, g.study, formal);
+  const rng =
+    Array.from(e.id).reduce(
+      (hash, char) => Math.imul(hash ^ char.charCodeAt(0), 16777619),
+      g.seed,
+    ) >>> 0;
+  e.problem = devProblem({ ...g, rng }, r, contract);
+  e.workspace = e.problem.starter;
+  delete e.error;
+  recordSpawn(g.study, contract, e.id, g.time);
 }
 async function ensureIndividualProblem(g: Game, e: Encounter, r: Roadmap) {
   if (e.problem || e.state === "consumed") return;
@@ -1503,6 +1563,7 @@ function applyCompletion(
       ]),
     ];
     e.contributors = qualified;
+    if (author === "human") countStudyTurn(g.study, e);
     complete(g, e.id, s.id, qualified, result.feedback);
     e.workspace = s.content;
     e.revision = s.revision;

@@ -24,6 +24,7 @@ export async function assess(
     latestHumanSequence(e),
   retry = false,
 ) {
+  const acceptedCutoff = cutoff;
   cutoff = e.history.reduce(
     (latest, h) => (h.seq <= cutoff ? Math.max(latest, h.seq) : latest),
     0,
@@ -86,26 +87,31 @@ export async function assess(
     a.provenance = "Development simulation cannot award academic credit.";
     return;
   }
-  if (!connected(g)) {
-    a.status = "review-required";
-    a.provenance =
-      "Live assessment connection unavailable; work and request identity retained for retry.";
-    return;
-  }
   try {
     const learner = study.learner;
     if (!learner)
       throw Error("Live learner ledger is missing; refusing to reset progress");
     a.request ??= {
       provider:
-        status().mode === "chatgpt-handoff" ? "chatgpt-handoff" : "study-mode",
+        (connected(g) ? status().mode : e.problem.provenance) ===
+        "chatgpt-handoff"
+          ? "chatgpt-handoff"
+          : "study-mode",
       payloadJson: JSON.stringify({
         requestId: id,
-        packet: evidencePacket(e, r, cutoff, learner),
+        packet: evidencePacket(e, r, cutoff, learner, acceptedCutoff),
       }),
     };
     const saved = a.request,
       payload = JSON.parse(saved.payloadJson);
+    // Capture the original evidence even when no provider is reachable. A
+    // later retry must not replace a partial answer with work done afterward.
+    if (!connected(g)) {
+      a.status = "review-required";
+      a.provenance =
+        "Live assessment connection unavailable; work and request identity retained for retry.";
+      return;
+    }
     const checkSnapshot = () => {
       if (
         g.study !== study ||

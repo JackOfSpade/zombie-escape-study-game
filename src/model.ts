@@ -103,6 +103,8 @@ export interface StudyState {
   version: number;
   cycle: number;
   cycleOffset?: number;
+  /** Completed human questions drive track balance separately from academic visits. */
+  studyTurnPosition?: number;
   queues: Record<Track, string[]>;
   phases: Record<Track, string>;
   reviewsServed: string[];
@@ -489,6 +491,8 @@ export interface DirectStudySession {
 export interface Encounter {
   /** Standalone learning task: no physical station or survival reward. */
   studyOnly?: boolean;
+  /** Once-only human completion receipt for track balance, independent of rewards. */
+  studyTurnRecorded?: boolean;
   directStudy?: DirectStudySession;
   chatDraft?: string;
   /** One question per room; answers, ownership and rewards remain per station. */

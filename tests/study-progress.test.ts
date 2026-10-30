@@ -173,6 +173,12 @@ test("partial work is not a declared gap and saved assessment evidence is depth 
     checkpoint(s).evidence.map((entry) => entry.rationale),
     [evidence.rationale],
   );
+  s.learner!.evidence.push({ ...evidence, facet: "unrelated-facet" });
+  assert.equal(
+    checkpoint(s).evidence.length,
+    1,
+    "an evidence reference cannot attribute a different facet's finding",
+  );
   cell.facets["D1:boundaries"].outcome = "contradicted";
   assert.equal(checkpoint(s).status, "gap");
   assert.deepEqual(

@@ -32,6 +32,31 @@ const same = (a, b) =>
 const object = (value) =>
   value !== null && typeof value === "object" && !Array.isArray(value);
 
+// Fixed classifications only: no response text, question bindings or evidence.
+function relayOutcome(reply) {
+  const value = reply.structuredContent;
+  const outcome = value?.completion?.status ?? value?.status;
+  if (
+    ![
+      "sent",
+      "question",
+      "prepare",
+      "assess",
+      "waiting",
+      "disconnected",
+      "chat_required",
+      "complete",
+    ].includes(outcome)
+  )
+    return {};
+  return {
+    outcome,
+    ...(outcome === "sent"
+      ? { duplicate: value.completion?.duplicate === true }
+      : {}),
+  };
+}
+
 /** Separate OAuth-protected public surface. It never exposes the local game API. */
 export function createPublicHandoffBridge({
   hostname,
@@ -193,15 +218,27 @@ export function createPublicHandoffBridge({
         };
       return result(content);
     };
-    if (inFlight >= 4)
-      return body({
-        status: "retryable",
-        note: "Worker calls are currently busy. Retry this exact call.",
-      });
-    inFlight++;
     const tool = knownTools.has(request.params?.name)
       ? request.params.name
       : "unknown";
+    if (inFlight >= 4) {
+      record("tool-result", {
+        tool,
+        status: "retryable",
+        reason: "bridge_busy",
+      });
+      const value = {
+        status: "retryable",
+        reason: "bridge_busy",
+        note: "Worker calls are currently busy. Retry this exact call.",
+      };
+      return result({
+        isError: true,
+        content: [{ type: "text", text: JSON.stringify(value) }],
+        structuredContent: value,
+      });
+    }
+    inFlight++;
     record("tool-call", { tool });
     try {
       const args = request.params?.arguments,
@@ -215,6 +252,7 @@ export function createPublicHandoffBridge({
         record("tool-result", {
           tool,
           status: reply.isError ? "rejected" : "returned",
+          ...relayOutcome(reply),
         });
         return result(reply);
       }

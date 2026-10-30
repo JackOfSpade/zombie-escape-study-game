@@ -1,8 +1,7 @@
 import { studyMapHtml } from "./study-map";
-import { eligible } from "./curriculum";
+import { eligible, syncLearningView } from "./curriculum";
 import { unfinishedDirectStudy } from "./direct-study";
-import { escapeHtml } from "./html";
-import { encounterKey } from "./learner";
+import { encounterKey, interruptLearningAttempt } from "./learner";
 import type { Encounter, Game, Roadmap } from "./model";
 
 export const STUDY_VIEW_KEY = "learning-workspace-view-v1";
@@ -26,12 +25,30 @@ export function exitStudyWorkspace(g: Game) {
 /** Prefer the actual unfinished task over creating another visit or chat. */
 export function workspaceQuestion(g: Game): Encounter | undefined {
   const current = Object.values(g.encounters);
-  const direct = [...current, ...g.study.archives].find(unfinishedDirectStudy);
+  const selected = workspaceSelectedQuestion(g);
+  const available = (e: Encounter) =>
+    e.state !== "consumed" &&
+    !(e.mode === "solo" && e.owner && e.owner !== "human");
+  const preferSelected = (
+    candidates: Encounter[],
+    matches: (e: Encounter) => boolean,
+  ) =>
+    selected && candidates.includes(selected) && matches(selected)
+      ? selected
+      : candidates.find(matches);
+  // A human can still answer a consumed NPC lock for separate learning
+  // assessment. The native session owns that work even without a world reward.
+  const direct = preferSelected(
+    [...current, ...g.study.archives],
+    unfinishedDirectStudy,
+  );
   if (direct) return direct;
-  const pending = current.find(
+  const pending = preferSelected(
+    current,
     (e) =>
+      available(e) &&
       (e.studyOnly || e.owner === "human" || e.id === g.lastStudyEncounter) &&
-      (e.pendingGeneration || e.generation),
+      !!(e.pendingGeneration || e.generation),
   );
   if (pending) return pending;
   const bound =
@@ -39,15 +56,17 @@ export function workspaceQuestion(g: Game): Encounter | undefined {
     g.study.learner?.attempts.find((a) => a.status === "in-progress")
       ?.encounter;
   if (bound) {
-    const e = current.find(
-      (e) => encounterKey(e) === bound && e.state !== "consumed",
-    );
+    const e = current.find((e) => encounterKey(e) === bound && available(e));
     if (e) return e;
   }
-  return current.find(
+  return preferSelected(
+    current,
     (e) =>
-      e.state !== "consumed" &&
-      (e.studyOnly || (e.problem && e.problemPresentedSequence !== undefined)),
+      available(e) &&
+      !!(
+        e.studyOnly ||
+        (e.problem && e.problemPresentedSequence !== undefined)
+      ),
   );
 }
 
@@ -55,9 +74,35 @@ export function workspaceQuestion(g: Game): Encounter | undefined {
 export function nextWorkspaceQuestion(g: Game, roadmap: Roadmap): Encounter {
   if (!g.studyWorkspace?.enabled)
     throw Error("Open the study workspace first.");
-  const current = workspaceQuestion(g);
-  if (current) return current;
   const assessment = workspaceAssessment(g);
+  const learner = g.study.profile === "live" ? g.study.learner : undefined;
+  if (learner) {
+    // A finished conversation cannot accept more answers. An unresolved
+    // assessment keeps its formal visit open, so retain it as a continuation
+    // before issuing fresh work. The normal scheduler still owns track order.
+    const unfinished = new Set(
+      learner.attempts
+        .filter((a) => ["in-progress", "suspended"].includes(a.status))
+        .map((a) => a.encounter),
+    );
+    let interrupted = false;
+    for (const e of [...Object.values(g.encounters), ...g.study.archives])
+      if (
+        unfinished.has(encounterKey(e)) &&
+        e.state === "consumed" &&
+        !unfinishedDirectStudy(e) &&
+        assessmentForQuestion(g, e)?.status === "applied"
+      ) {
+        interruptLearningAttempt(learner, e);
+        interrupted = true;
+      }
+    if (interrupted) syncLearningView(g.study);
+  }
+  const current = workspaceQuestion(g);
+  if (current) {
+    g.studyWorkspace.encounter = encounterKey(current);
+    return current;
+  }
   if (assessment && assessment.status !== "applied")
     throw Error(
       "Finish reviewing your previous learning result before starting another question.",
@@ -97,9 +142,29 @@ export function nextWorkspaceQuestion(g: Game, roadmap: Roadmap): Encounter {
 export function workspaceAssessment(g: Game) {
   if (g.study.profile !== "live") return undefined;
   const e = workspaceSelectedQuestion(g);
-  return e
-    ? [...g.study.assessments].reverse().find((a) => a.encounter === e.id)
-    : undefined;
+  return e ? assessmentForQuestion(g, e) : undefined;
+}
+
+function assessmentForQuestion(g: Game, e: Encounter) {
+  const prefix = `assessment-${encounterKey(e)}-`;
+  // Legacy assessment IDs are safe only when their unscoped encounter ID is
+  // unambiguous. Physical station IDs are reused by later building runs.
+  const unambiguous = [
+    ...Object.values(g.encounters),
+    ...g.study.archives,
+  ].every(
+    (other) => other.id !== e.id || encounterKey(other) === encounterKey(e),
+  );
+  for (let i = g.study.assessments.length - 1; i >= 0; i--) {
+    const a = g.study.assessments[i];
+    if (
+      a.encounter === e.id &&
+      (a.id.startsWith(prefix) ||
+        (unambiguous && !a.id.startsWith("assessment-")))
+    )
+      return a;
+  }
+  return undefined;
 }
 
 export function workspaceSelectedQuestion(g: Game) {
@@ -110,16 +175,6 @@ export function workspaceSelectedQuestion(g: Game) {
 
 /** Counts come from the same ledger as the game; observations are separate. */
 export function workspaceProgressHtml(g: Game, roadmap: Roadmap): string {
-  const esc = escapeHtml;
   const issued = workspaceQuestion(g)?.problem?.contract;
-  const map = studyMapHtml(g, roadmap, issued);
-  const gaps = (g.study.knowledgeGaps ?? []).filter((gap) => !gap.resolved);
-  return `${map}<article class="study-plan study-review-notes"><span class="study-label">REVIEW NOTES</span><p>${gaps.length ? `${gaps.length} areas to practise` : "No areas to practise recorded yet"}</p>${
-    gaps.length
-      ? `<ul>${gaps
-          .slice(-3)
-          .map((gap) => `<li>${esc(gap.facet.description)}</li>`)
-          .join("")}</ul>`
-      : ""
-  }<small>${g.study.profile === "live" ? "Progress updates after each validated assessment." : "Practice profile · question results are saved; practice does not add verified curriculum credit."}</small></article>`;
+  return studyMapHtml(g, roadmap, issued);
 }

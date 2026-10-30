@@ -831,6 +831,8 @@ export async function compileRoadmapAdoption(
       );
   }
   work.cycleOffset = (parsed.resume!.ratioPosition! - (work.cycle % 3) + 3) % 3;
+  if (work.studyTurnPosition !== undefined)
+    work.studyTurnPosition = parsed.resume!.ratioPosition!;
   const sessionRows = sourcePart(p.canonical, "SHARED_PROGRESS")
     .split("### S0.4")[1]
     .split("### S0.5")[0];
@@ -1009,6 +1011,7 @@ export function reconcileRoadmap(
             context: {
               cycle: l.cycle,
               cycleOffset: l.cycleOffset,
+              studyTurnPosition: l.studyTurnPosition,
               // The complete file and its gate review use the original
               // curriculum; active role-profile ceilings are not full gates.
               tracks: sourceLedgerProjection(r, l).tracks,

@@ -47,13 +47,17 @@ test("a failed older durable write cannot overwrite a newer successful local che
     configurable: true,
     value: {
       getItem: (key: string) => values.get(key) ?? null,
-      setItem: (key: string, value: string) => values.set(key, value),
+      setItem: (key: string, value: string) => {
+        if (value.length >= 1_000_000)
+          throw new DOMException("Synthetic local quota", "QuotaExceededError");
+        values.set(key, value);
+      },
     },
   });
   const g = createGame(728, r),
     e = g.encounters["f0-room0"];
-  // Large checkpoints use durable storage first; a later compact checkpoint
-  // can still be written synchronously while the first transaction is held.
+  // This browser's local quota rejects the large checkpoint. A later compact
+  // checkpoint can still be written while the first durable transaction is held.
   e.workspace = "Synthetic older content ".repeat(60_000);
   const older = save(g);
   await settle();

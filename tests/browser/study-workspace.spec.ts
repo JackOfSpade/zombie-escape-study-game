@@ -29,7 +29,6 @@ test("study-only view starts from the home screen, saves native results and keep
   await page.locator("#study-next").click();
   await expect.poll(() => relay.calls.length).toBe(1);
   const payload = relay.calls[0].payload;
-  await page.locator("[data-study-locate]").click();
   const currentTopicKey =
     payload.problem.contract.objectiveIds[0].split(".")[0];
   const currentTopic = page.locator(
@@ -234,13 +233,11 @@ test("study dashboard fits a narrow screen and offers clipboard fallback without
   expect(productBox!.y).toBeGreaterThanOrEqual(
     pythonBox!.y + pythonBox!.height,
   );
-  await page.locator("[data-study-locate]").click();
-  const currentTopicKey = await page
-    .locator(".study-current-topic")
-    .getAttribute("data-topic-key");
-  await expect(
-    map.locator(`.study-map-topic[data-topic-key="${currentTopicKey}"]`),
-  ).toHaveAttribute("aria-current", "step");
+  await expect(map.locator(".study-map-topic.is-current")).toHaveCount(1);
+  await expect(map.locator(".study-map-topic.is-current")).toHaveAttribute(
+    "aria-current",
+    "step",
+  );
   const overflow = await page.evaluate(
     () => document.documentElement.scrollWidth > innerWidth,
   );
@@ -251,7 +248,90 @@ test("study dashboard fits a narrow screen and offers clipboard fallback without
   });
 });
 
-test("tier skill map shows connected topic nodes vertically and locates the current topic in a split pane", async ({
+test("missing clipboard support exposes both study prompts without an unhandled error", async ({
+  page,
+}) => {
+  const relay = await mockNativeStudy(page);
+  const errors: string[] = [];
+  page.on("pageerror", (error) => errors.push(error.message));
+  await page.goto("/");
+  await page.locator("#study-only-toggle").click();
+  await page.locator("#study-next").click();
+  await expect.poll(() => relay.calls.length).toBe(1);
+  await page.evaluate(() =>
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: undefined,
+    }),
+  );
+  await page.locator("#native-study-copy").click();
+  const request = page.locator("#native-study-request");
+  await expect(request).toBeVisible();
+  await expect(request).toHaveValue(/get_current_study_question/);
+  await expect(request).toBeFocused();
+  await expect(page.locator("#native-study-finish")).toBeVisible();
+  await page.locator("#native-study-finish").click();
+  await expect(request).toBeVisible();
+  await expect(request).toHaveValue(
+    new RegExp(relay.calls[0].payload.questionFingerprint),
+  );
+  await expect(request).toHaveValue(/finish_study_question/);
+  await expect(request).toBeFocused();
+  expect(errors).toEqual([]);
+  expect(relay.calls).toHaveLength(1);
+  relay.finish(relay.calls[0].payload.requestId);
+  await expect(page.locator("#study-save-status")).toContainText(
+    "Learning result received and saved",
+  );
+  await expect(request).toBeHidden();
+  await expect(request).toHaveValue("");
+  await page.locator("#study-next").click();
+  await expect.poll(() => relay.calls.length).toBe(2);
+  await expect(request).toBeHidden();
+  await page.locator("#native-study-copy").click();
+  await expect(request).toHaveValue(
+    new RegExp(`chat: "${relay.calls[1].chatCode}"`),
+  );
+  await expect(request).not.toHaveValue(
+    new RegExp(`chat: "${relay.calls[0].chatCode}"`),
+  );
+});
+
+test("a late clipboard failure cannot replace the newer completion recovery prompt", async ({
+  page,
+}) => {
+  await mockNativeStudy(page);
+  await page.goto("/");
+  await page.locator("#study-only-toggle").click();
+  await page.locator("#study-next").click();
+  await expect(page.locator("#native-study-finish")).toBeVisible();
+  await page.evaluate(() => {
+    const pending: Array<() => void> = [];
+    (window as any).__rejectClipboard = (index: number) => pending[index]();
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: {
+        writeText: () =>
+          new Promise((_resolve, reject) => {
+            pending.push(() => reject(Error("Synthetic delayed denial")));
+          }),
+      },
+    });
+  });
+  await page.locator("#native-study-copy").click();
+  await page.locator("#native-study-finish").click();
+  await page.evaluate(() => (window as any).__rejectClipboard(1));
+  const request = page.locator("#native-study-request");
+  await expect(request).toHaveValue(/finish_study_question/);
+  const newer = await request.inputValue();
+  await page.evaluate(() => (window as any).__rejectClipboard(0));
+  await expect(request).toHaveValue(newer);
+  await expect(page.locator("#study-message")).toContainText(
+    "existing ChatGPT chat",
+  );
+});
+
+test("tier skill map shows connected topic nodes vertically and marks the current topic in a split pane", async ({
   page,
 }) => {
   await mockNativeStudy(page);
@@ -414,26 +494,18 @@ test("tier skill map shows connected topic nodes vertically and locates the curr
   await expect(root).toContainText("8 of 131");
   await expect.poll(() => scroll.evaluate((el) => el.scrollTop)).toBe(120);
 
-  const currentKey = await page
-    .locator(".study-current-topic")
+  const currentKey = await map
+    .locator(".study-map-topic.is-current")
     .getAttribute("data-topic-key");
   expect(currentKey).toMatch(/^(PY|PE):/);
   const current = map.locator(
     `.study-map-topic[data-topic-key="${currentKey}"]`,
   );
-  await page.locator("[data-study-locate]").click();
   await expect(current).toHaveAttribute("aria-current", "step");
   await expect(map.locator(".study-map-topic.is-current")).toHaveCount(1);
   await expect(python.locator(".study-map-track-node")).toContainText(
     "3 of 80",
   );
-  const currentInMap = await current.evaluate((node) => {
-    const parent = node.closest(".study-map-scroll")!;
-    const nodeBox = node.getBoundingClientRect();
-    const parentBox = parent.getBoundingClientRect();
-    return nodeBox.top >= parentBox.top && nodeBox.bottom <= parentBox.bottom;
-  });
-  expect(currentInMap).toBe(true);
   expect(
     await page.evaluate(
       () => document.documentElement.scrollWidth > innerWidth,
@@ -496,6 +568,7 @@ test("one session button stops, preserves across reload and resumes the same que
   relay.finish(second.payload.requestId);
   await expect(action).toHaveText("Start next question");
   await expect(action).toBeEnabled();
+  await expect(page.locator("#study-message")).toBeEmpty();
   expect((await nativeState(page, first.payload.encounterId)).submissions).toBe(
     1,
   );

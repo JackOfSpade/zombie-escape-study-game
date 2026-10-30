@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { Contract, Encounter, Game, Roadmap } from "../src/model";
+import type { RoadmapAdoptionReceipt } from "../src/roadmap-adoption-types";
 import {
   recordTopicAssessments,
   latestTopicAssessment,
@@ -470,6 +471,62 @@ test("large context reports exact omitted rows and source character ranges", () 
     context.completedConversations.coverage.totalSerializedChars,
   );
   assert.doesNotMatch(JSON.stringify(context), /file:\/\/|\.artifacts\//);
+});
+
+test("context uses the latest adopted roadmap's dispositions and shared learner context", () => {
+  const { g, r, contract } = fixture();
+  r.tracks.PY.progress =
+    "| S0001-A01 | S0001 / 2026-10-24 | T01.1 D1 task | ORIGINAL DISPOSITION | None | Original |";
+  const blocks = {
+    SHARED_PROGRESS:
+      "Updated synthetic learner context after reconciliation.\n",
+    MERGE_RULES: "Synthetic unchanged merge rules.\n",
+    PY_PROGRESS:
+      "### 0.5.1 Attempt status register\n| S0001-A01 | S0001 / 2026-10-24 | T01.1 D1 task | INVALIDATED; corrected ambiguity | None | Latest corrected source |\n",
+    PY_CURRICULUM: "Synthetic unchanged Python curriculum.\n",
+    PE_PROGRESS:
+      "### 0.6 Gap register\n| G0002 | T02.1 | D1 | Updated cross-topic gap |\n",
+    PE_CURRICULUM: "Synthetic unchanged product curriculum.\n",
+  };
+  const canonical = [
+    "---",
+    "document_id: interview_prep_roadmap",
+    "merge_schema_version: 1.0",
+    "revision: 2",
+    "previous_revision: 1",
+    "---",
+    ...Object.entries(blocks).map(
+      ([name, text]) => `<!-- BEGIN ${name} -->\n${text}<!-- END ${name} -->`,
+    ),
+  ].join("\n");
+  g.study.learner!.roadmapAdoptions = [
+    {
+      canonicalHash: "b".repeat(64),
+      adoptedAt: "2026-10-26T12:00:00Z",
+      proposal: { canonical },
+    } as RoadmapAdoptionReceipt,
+  ];
+  const before = structuredClone(g.study);
+  const context = topicAssessmentContext(g, r, contract);
+  const imported = JSON.stringify(context.importedContext);
+  assert.match(imported, /INVALIDATED; corrected ambiguity/);
+  assert.match(imported, /Updated cross-topic gap/);
+  assert.match(
+    imported,
+    /Updated synthetic learner context after reconciliation/,
+  );
+  assert.doesNotMatch(
+    imported,
+    /ORIGINAL DISPOSITION|prefers to explain tradeoffs/,
+  );
+  assert.equal(context.importedContext.revision, 2);
+  assert.equal(context.importedContext.sourceHash, r.sourceHash);
+  assert.equal(context.importedContext.canonicalHash, "b".repeat(64));
+  assert.equal(
+    context.importedContext.evidenceAndGapRows.items[0].canonicalHash,
+    "b".repeat(64),
+  );
+  assert.deepEqual(g.study, before);
 });
 
 test("context preserves current checkpoint proofs and stable scope definitions without changing progress", () => {

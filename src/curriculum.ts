@@ -25,6 +25,7 @@ export function syncLearningView(s: StudyState) {
   s.version = l.version;
   s.cycle = l.cycle;
   s.cycleOffset = l.cycleOffset ?? 0;
+  s.studyTurnPosition = l.studyTurnPosition;
   s.queues = { PY: [...l.tracks.PY.queue], PE: [...l.tracks.PE.queue] };
   s.phases = { PY: l.tracks.PY.phase, PE: l.tracks.PE.phase };
   s.session = l.currentSession;
@@ -146,6 +147,24 @@ export function beginVisit(r: Roadmap, s: StudyState, e: Encounter) {
   s.session ??= "DEVELOPMENT";
   s.pending = { encounter: key, contract: c };
 }
+/** Called only for a newly completed human question, before visit bookkeeping.
+ * Saved off-track tasks remain valid, but cannot consume an owed track turn.
+ * Once initialized, this position is independent of delayed academic assessments.
+ * Legacy saves start at their existing visit-based position without replaying history.
+ */
+export function countStudyTurn(s: StudyState, e: Encounter) {
+  const c = e.problem?.contract;
+  if (!c || e.studyTurnRecorded) return;
+  const ledger = s.profile === "live" ? s.learner : s;
+  if (!ledger) return;
+  e.studyTurnRecorded = true;
+  const position = studyRatioPosition(ledger);
+  ledger.studyTurnPosition =
+    c.track === (["PY", "PE", "PE"] as const)[position]
+      ? (position + 1) % 3
+      : position;
+  if (s.profile === "live") syncLearningView(s);
+}
 export function finishVisit(
   r: Roadmap,
   s: StudyState,
@@ -229,13 +248,18 @@ export function evidencePacket(
   r: Roadmap,
   cutoff = Infinity,
   l?: LearnerLedger,
+  // Assessments retain historical artifact-based IDs. Their original event
+  // boundary may also include a submission event just after the last artifact.
+  acceptedCutoff = cutoff,
 ) {
   return {
     encounter: e.id,
     assessmentPolicy:
       "A displayed assessment may already have a formal attempt ID without any human answer. Issuance, reading, physical defense, NPC work and shared success do not serve an academic visit or establish mastery. Judge only human technical artifacts at or before the captured cutoff. Without such artifacts return unresolved and unknown findings, without scope reviews or historical mappings. A usable visit requires actual human technical work.",
     problem: e.problem,
-    accepted: e.submissions.find((s) => s.id === e.accepted),
+    accepted: e.submissions.find(
+      (s) => s.id === e.accepted && s.seq <= acceptedCutoff,
+    ),
     workspace: workspaceAt(e, cutoff),
     workspaceBase: e.workspaceBase ?? e.problem?.starter ?? "",
     evidenceCutoffSequence:

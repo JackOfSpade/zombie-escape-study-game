@@ -93,27 +93,28 @@ export function studyTrackProgress(
   const checkpoints: StudyCheckpoint[] = objectives.map((o) => {
     const cell = live ? s.learner?.cells[o.id] : undefined;
     const status = live ? cell?.states[tier - 1] : o.cells[tier - 1];
-    const facets = Object.entries(cell?.facets ?? {}).filter(([key]) =>
-      key.startsWith(`D${tier}:`),
+    const facetPrefix = `D${tier}:`;
+    const facets = new Map(
+      Object.entries(cell?.facets ?? {})
+        .filter(([key]) => key.startsWith(facetPrefix))
+        .map(([key, facet]) => [key.slice(facetPrefix.length), facet]),
     );
     const gaps = (gapsByObjective.get(o.id) ?? []).map((gap) => ({
       id: gap.id,
       description: gap.facet.description,
       statement: gap.statement,
     }));
-    const contradicted = facets.some(
+    const contradicted = [...facets].some(
       ([, facet]) => facet.outcome === "contradicted",
     );
-    const partial = facets.some(([, facet]) =>
+    const partial = [...facets].some(([, facet]) =>
       ["independent", "assisted"].includes(facet.outcome),
     );
     const evidence = (evidenceByObjective.get(o.id) ?? [])
-      .filter((e) =>
-        facets.some(
-          ([, facet]) =>
-            facet.outcome === e.outcome && facet.evidenceIds.includes(e.id),
-        ),
-      )
+      .filter((e) => {
+        const facet = facets.get(e.facet);
+        return facet?.outcome === e.outcome && facet.evidenceIds.includes(e.id);
+      })
       .map(({ id, facet, outcome, rationale, at }) => ({
         id,
         facet,
@@ -142,20 +143,20 @@ export function studyTrackProgress(
       sourceRefs: live ? (cell?.sourceRefs ?? o.refs) : o.refs,
     };
   });
-  const topics = [
-    ...new Set(objectives.map((o) => o.id.split(":")[1].split(".")[0])),
-  ].map((id) => {
-    const members = checkpoints.filter((o) =>
-      o.id.startsWith(`${track}:${id}.`),
-    );
-    return {
-      id,
-      name: r.tracks[track].topics[id] ?? id,
-      passed: members.filter((o) => o.status === "verified").length,
-      total: members.length,
-      checkpoints: members,
-    };
-  });
+  const checkpointsByTopic = new Map<string, StudyCheckpoint[]>();
+  for (const checkpoint of checkpoints) {
+    const id = checkpoint.id.split(":")[1].split(".")[0];
+    const members = checkpointsByTopic.get(id) ?? [];
+    members.push(checkpoint);
+    checkpointsByTopic.set(id, members);
+  }
+  const topics = [...checkpointsByTopic].map(([id, members]) => ({
+    id,
+    name: r.tracks[track].topics[id] ?? id,
+    passed: members.filter((o) => o.status === "verified").length,
+    total: members.length,
+    checkpoints: members,
+  }));
   return {
     tier,
     passed: checkpoints.filter((o) => o.status === "verified").length,

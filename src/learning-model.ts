@@ -142,6 +142,8 @@ export interface LearnerLedger {
   version: number;
   cycle: number;
   cycleOffset?: number;
+  /** Completed human questions; scheduling only, never proof or a served visit. */
+  studyTurnPosition?: number;
   careerFocus?: "product-feature-owner" | "full";
   cells: Record<string, LearningCell>;
   finalProgress?: Record<string, FinalProgress>;
@@ -203,7 +205,8 @@ export function servedLearningAttempts(l: LearnerLedger) {
 export const studyRatioPosition = (s: {
   cycle: number;
   cycleOffset?: number;
-}) => (s.cycle + (s.cycleOffset ?? 0)) % 3;
+  studyTurnPosition?: number;
+}) => s.studyTurnPosition ?? (s.cycle + (s.cycleOffset ?? 0)) % 3;
 
 export const FACET_OUTCOMES: readonly FacetProof["outcome"][] = [
   "independent",

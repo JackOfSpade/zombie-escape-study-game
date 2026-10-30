@@ -80,7 +80,7 @@ const checkpoints = createCheckpointQueue<{
     await writeDurable(KEY, payload);
   } catch (error) {
     if (checkpoint) return;
-    // A newer compact checkpoint may have reached local storage while this
+    // A newer checkpoint may have reached local storage while this
     // older durable transaction was pending. Never roll that fallback back.
     let local: string | null = null;
     try {
@@ -123,30 +123,56 @@ export function save(g: Game) {
     data: encode(g),
   } satisfies StoredSave);
   let checkpoint = false;
-  if (payload.length < 1_000_000)
-    try {
-      localStorage.setItem(KEY, payload);
-      checkpoint = true;
-    } catch {}
+  // Capture the whole snapshot before yielding to IndexedDB, including large
+  // drafts/archives when they still fit the browser's actual storage quota.
+  // A fixed size cutoff silently left those edits without crash recovery.
+  try {
+    localStorage.setItem(KEY, payload);
+    checkpoint = true;
+  } catch {}
   return checkpoints.enqueue({ payload, checkpoint, serial });
 }
-export async function load() {
-  let durable: string | null = null;
+async function storedCopies() {
+  let durable: string | null = null,
+    local: string | null = null,
+    durableError: string | undefined,
+    localError: string | undefined;
   try {
     durable = await readDurable(KEY);
-  } catch {}
-  let legacy: string | null = null;
+  } catch (error) {
+    durableError = String(error);
+  }
   try {
-    legacy = localStorage.getItem(KEY);
-  } catch {}
+    local = localStorage.getItem(KEY);
+  } catch (error) {
+    localError = String(error);
+  }
+  return { durable, local, durableError, localError };
+}
+/** Preserve the original stored bytes, including a damaged or unreadable copy. */
+export async function exportRecoveryBackup() {
+  return JSON.stringify(
+    { format: "dead-air-recovery-v1", key: KEY, ...(await storedCopies()) },
+    null,
+    2,
+  );
+}
+export async function load() {
+  const { durable, local, durableError, localError } = await storedCopies();
+  // An unreadable store may hold a newer checkpoint than the readable copy.
+  // Starting from that older copy would overwrite unseen learning on save.
+  if (durableError || localError)
+    throw Error(
+      "Saved checkpoints could not be read. Reload to retry storage access, or export a recovery backup before importing another run.",
+    );
   const valid: { serial: number; game: Game }[] = [];
-  for (const raw of [durable, legacy])
-    if (raw)
+  for (const raw of [durable, local])
+    if (raw !== null)
       try {
         valid.push(unpack(raw));
       } catch {}
   if (!valid.length) {
-    if (durable || legacy)
+    if (durable !== null || local !== null)
       throw Error(
         "Saved checkpoints failed integrity checks. Export a recovery backup before starting another run.",
       );

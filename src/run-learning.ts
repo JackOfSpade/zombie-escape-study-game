@@ -145,6 +145,12 @@ export function retainRunLearning(g: Game, archive = false) {
     (e) =>
       e.problemPresentedSequence !== undefined ||
       directOf(e) !== undefined ||
+      // Legacy/imported drafts can precede the event ledger. Preserve their
+      // actual bytes as context; retention alone never makes them evidence.
+      !!e.chatDraft?.length ||
+      e.workspace !== (e.problem?.starter ?? "") ||
+      [...e.group, ...e.tutor].some((m) => m.kind === "human") ||
+      e.submissions.some((s) => s.author === "human") ||
       e.history.some((h) => h.author === "human") ||
       e.contributors.includes("human") ||
       (e.executions?.length ?? 0) > 0 ||

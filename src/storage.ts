@@ -58,7 +58,9 @@ export function createDurableStorage(
   async function write(key: string, value: string) {
     const db = await database();
     await new Promise<void>((resolve, reject) => {
-      const tx = db.transaction(STORE, "readwrite");
+      // Learner work should reach persistent storage before acknowledging the
+      // transaction, rather than using the browser's relaxed disk-flush policy.
+      const tx = db.transaction(STORE, "readwrite", { durability: "strict" });
       tx.oncomplete = () => resolve();
       tx.onabort = tx.onerror = () =>
         reject(tx.error ?? Error("Durable save transaction failed"));

@@ -25,7 +25,9 @@ test("inline topic assessments are read-only, refresh in place and survive reloa
   await enterStudy(page);
   const root = page.locator(".study-map-root");
   const progressBefore = await root.innerText();
-  const nextBefore = await page.locator(".study-current-topic").innerText();
+  const nextBefore = await page
+    .locator(".study-skill-map")
+    .getAttribute("data-current-marker");
   const first = page.locator(".study-map-topic").first();
   const firstToggle = first.locator(".study-topic-toggle");
   await expect(firstToggle).toHaveAttribute("aria-expanded", "false");
@@ -40,9 +42,10 @@ test("inline topic assessments are read-only, refresh in place and survive reloa
   await expect(page.locator("dialog[open], [role=dialog]")).toHaveCount(0);
   expect(relay.calls).toHaveLength(0);
   await expect(root).toHaveText(progressBefore, { useInnerText: true });
-  await expect(page.locator(".study-current-topic")).toHaveText(nextBefore, {
-    useInnerText: true,
-  });
+  await expect(page.locator(".study-skill-map")).toHaveAttribute(
+    "data-current-marker",
+    nextBefore ?? "",
+  );
   await firstToggle.click();
   await expect(firstToggle).toHaveAttribute("aria-expanded", "false");
   await expect(firstPanel).toBeHidden();
@@ -166,6 +169,10 @@ test("an old completion tool without topic assessments fails honestly and can re
   const topicIds: string[] = payload.topicAssessmentContext.topicIds;
   await topicToggle(page, topicIds[0]).click();
   const body = topicBody(page, topicIds[0]);
+  await expect(topicToggle(page, topicIds[0])).toHaveAttribute(
+    "aria-expanded",
+    "true",
+  );
   const before = await nativeState(page, payload.encounterId);
   const progressBefore = await page.locator(".study-map-root").innerText();
 
@@ -202,59 +209,54 @@ test("an old completion tool without topic assessments fails honestly and can re
   await expect(body).toContainText(`Synthetic assessment for ${topicIds[0]}`);
 });
 
-test("the skill map skips keyboard navigation and opens assessments by pointer only", async ({
+test("the skill map has one tab stop, arrow navigation and keyboard disclosures", async ({
   page,
 }) => {
   const relay = await mockNativeStudy(page);
   await enterStudy(page);
   const toggles = page.locator(".study-topic-toggle");
   const first = toggles.first();
-  await expect(page.locator(".study-map-scroll")).toHaveAttribute(
-    "tabindex",
-    "-1",
+  const last = toggles.last();
+  await expect(page.locator('.study-topic-toggle[tabindex="0"]')).toHaveCount(
+    1,
   );
-  expect(
-    await toggles.evaluateAll((nodes) =>
-      nodes.every(
-        (node) => node.tagName !== "BUTTON" && !node.hasAttribute("tabindex"),
-      ),
-    ),
-  ).toBe(true);
-
-  // Real Tab traversal must skip the whole map while reaching ordinary study
-  // controls. A nonfocusable map should not consume dozens of tab stops.
   await page.locator("#study-only-exit").focus();
-  const visited: string[] = [];
-  for (let i = 0; i < 12; i++) {
-    await page.keyboard.press("Tab");
-    const active = await page.evaluate(() => {
-      const el = document.activeElement;
-      return {
-        map: !!el?.matches(".study-topic-toggle, .study-map-scroll"),
-        id: el?.id ?? "",
-      };
-    });
-    expect(active.map).toBe(false);
-    visited.push(active.id);
-    if (active.id === "study-only-exit") break;
-  }
-  expect(visited).toContain("study-next");
-
-  await first.hover();
-  await page.evaluate(() => (document.activeElement as HTMLElement)?.blur());
+  await page.keyboard.press("Tab");
+  await expect(page.locator('.study-topic-toggle[tabindex="0"]')).toBeFocused();
+  await page.keyboard.press("Tab");
+  await expect(page.locator("#study-next")).toBeFocused();
+  await page.keyboard.press("Shift+Tab");
+  await page.keyboard.press("Home");
+  await expect(first).toBeFocused();
   await page.keyboard.press("Enter");
-  await page.keyboard.press("Space");
-  await expect(
-    page.locator('.study-topic-toggle[aria-expanded="true"]'),
-  ).toHaveCount(0);
-  expect(relay.calls).toHaveLength(0);
-  await first.click();
   await expect(first).toHaveAttribute("aria-expanded", "true");
-  await page.keyboard.press("Enter");
   await page.keyboard.press("Space");
-  await expect(first).toHaveAttribute("aria-expanded", "true");
-  await first.click();
   await expect(first).toHaveAttribute("aria-expanded", "false");
+  await page.keyboard.press("ArrowDown");
+  await expect(toggles.nth(1)).toBeFocused();
+  await page.keyboard.press("End");
+  await expect(last).toBeFocused();
+  await page.keyboard.press("ArrowRight");
+  await expect(first).toBeFocused();
+  await page.keyboard.press("ArrowUp");
+  await expect(last).toBeFocused();
+  await expect(page.locator('.study-topic-toggle[tabindex="0"]')).toHaveCount(
+    1,
+  );
+  expect(relay.calls).toHaveLength(0);
+
+  // A real map update retains the keyboard position and disclosure state.
+  await page.keyboard.press("Space");
+  await expect(last).toHaveAttribute("aria-expanded", "true");
+  await page.evaluate(() => {
+    const r = (window as any).__deadAir.roadmap;
+    r.tracks.PY.objectives.find((o: any) => o.cells[0] !== "P").cells[0] = "P";
+  });
+  await expect(page.locator(".study-map-root")).toContainText("8 of 131");
+  await expect(last).toBeFocused();
+  await expect(last).toHaveAttribute("aria-expanded", "true");
+  await page.keyboard.press("Tab");
+  await expect(page.locator("#study-next")).toBeFocused();
 });
 
 for (const width of [700, 390]) {

@@ -4,7 +4,8 @@ import { test } from "node:test";
 import { createDurableStorage } from "../src/storage";
 function harness(abortRead = false) {
   const requests: IDBOpenDBRequest[] = [],
-    connections: { db: IDBDatabase; closed: number }[] = [];
+    connections: { db: IDBDatabase; closed: number }[] = [],
+    writeOptions: (IDBTransactionOptions | undefined)[] = [];
   const factory = {
     open() {
       const request = {} as IDBOpenDBRequest;
@@ -18,7 +19,12 @@ function harness(abortRead = false) {
       close() {
         connection.closed++;
       },
-      transaction() {
+      transaction(
+        _store: string,
+        mode: IDBTransactionMode,
+        options?: IDBTransactionOptions,
+      ) {
+        if (mode === "readwrite") writeOptions.push(options);
         const tx = {} as IDBTransaction;
         Object.assign(tx, {
           objectStore() {
@@ -48,7 +54,7 @@ function harness(abortRead = false) {
     requests[index].onsuccess?.call(requests[index], new Event("success"));
     return connection;
   }
-  return { factory, requests, connections, open };
+  return { factory, requests, connections, open, writeOptions };
 }
 test("durable storage retries a synchronous open failure instead of caching a rejected connection", async () => {
   const h = harness();
@@ -109,4 +115,5 @@ test("version changes and unexpected closes discard the cached durable connectio
   h.open(2);
   await write;
   assert.equal(h.requests.length, 3);
+  assert.deepEqual(h.writeOptions, [{ durability: "strict" }]);
 });

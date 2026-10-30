@@ -23,14 +23,23 @@ export async function checkBridge() {
     if (!r.ok) throw Error();
     const info = await r.json();
     if (
-      !["development", "study-mode", "chatgpt-handoff"].includes(info.mode) ||
+      !isRecord(info) ||
+      (info.mode !== "development" &&
+        info.mode !== "study-mode" &&
+        info.mode !== "chatgpt-handoff") ||
       !Array.isArray(info.capabilities) ||
       !info.capabilities.every((cap: unknown) => typeof cap === "string") ||
       typeof info.label !== "string" ||
       typeof info.detail !== "string"
     )
       throw Error("Malformed bridge capability handshake");
-    if (version === checkVersion) bridgeStatus = info;
+    if (version === checkVersion)
+      bridgeStatus = {
+        mode: info.mode,
+        label: info.label,
+        capabilities: info.capabilities,
+        detail: info.detail,
+      };
   } catch {
     if (version === checkVersion)
       bridgeStatus = {
@@ -130,12 +139,38 @@ async function readJson(r: Response) {
   if (!isRecord(data)) throw Error("Malformed bridge response");
   return data;
 }
+/** An HTML/empty gateway page leaves delivery ambiguous. A structured JSON
+ * reply is the bridge's actual response, including a definitive refusal. */
+async function gatewayOutage(r: Response) {
+  if (r.status < 502 || r.status > 504) return false;
+  try {
+    JSON.parse(await r.clone().text());
+    return false;
+  } catch {
+    return true;
+  }
+}
 export interface BridgeRequestOptions {
   /** Handoff wait budget; bounded to DIRECT_STUDY_TIMEOUT_MS. */
   timeoutMs?: number;
   nativeScope?: NativeStudyScope;
   /** Stop renewing a released job after its owning session closes. */
   isActive?: () => boolean;
+}
+function waitForHandoff(signal: AbortSignal) {
+  return new Promise<void>((resolve, reject) => {
+    const timer = setTimeout(done, 500);
+    function done() {
+      signal.removeEventListener("abort", abort);
+      resolve();
+    }
+    function abort() {
+      clearTimeout(timer);
+      reject(Error("ChatGPT handoff wait interrupted; exact work is retained"));
+    }
+    if (signal.aborted) abort();
+    else signal.addEventListener("abort", abort, { once: true });
+  });
 }
 /** T describes the operation reply; domain callers still validate its contents. */
 export async function bridgeRequest<T extends object = Record<string, unknown>>(
@@ -154,27 +189,61 @@ export async function bridgeRequest<T extends object = Record<string, unknown>>(
       ? Math.min(requested, DIRECT_STUDY_TIMEOUT_MS)
       : HANDOFF_TIMEOUT_MS;
   const signal = AbortSignal.timeout(handoff ? budget : 45000);
-  let r = await fetch("/api/bridge", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    // Transport identity stays outside the frozen payload, preserving old hashes.
-    body: JSON.stringify({
-      operation,
-      payload,
-      provider,
-      ...(handoff && options?.nativeScope
-        ? { nativeScope: options.nativeScope, chatCode: studyChatCode() }
-        : {}),
-    }),
-    signal,
+  // Capture transport identity once too: a retry after a lost acknowledgement
+  // must address the same released job and chat, even if another chat opens.
+  const body = JSON.stringify({
+    operation,
+    payload,
+    provider,
+    ...(handoff && options?.nativeScope
+      ? { nativeScope: options.nativeScope, chatCode: studyChatCode() }
+      : {}),
   });
+  // Handoff enqueue is idempotent for the exact requestId and payload. Other
+  // providers may already have executed a request and cannot safely be retried.
+  const retrySubmission =
+    handoff &&
+    isRecord(payload) &&
+    typeof payload.requestId === "string" &&
+    !!payload.requestId.trim();
+  let r: Response, submissionOutageAt: number | undefined;
+  for (;;) {
+    if (options?.isActive?.() === false)
+      throw Error("Study session closed; saved work retained");
+    try {
+      const response = await fetch("/api/bridge", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body,
+        signal: handoff
+          ? AbortSignal.any([signal, AbortSignal.timeout(5000)])
+          : signal,
+      });
+      if (retrySubmission && (await gatewayOutage(response)))
+        throw Error("unavailable");
+      r = response;
+      break;
+    } catch (error) {
+      if (!retrySubmission || signal.aborted) throw error;
+      submissionOutageAt ??= Date.now();
+      if (Date.now() - submissionOutageAt > BRIDGE_OUTAGE_GRACE_MS)
+        throw Error(
+          "The study bridge stopped answering; your exact request is saved. Retry it when the bridge is back.",
+        );
+      listening = null;
+      onProgress?.("unknown");
+      await waitForHandoff(signal);
+    }
+  }
   let data = await readJson(r);
   if (r.status === 202) {
     if (
       !handoff ||
       !isRecord(data.handoff) ||
       typeof data.handoff.id !== "string" ||
-      typeof data.handoff.hash !== "string"
+      !data.handoff.id.trim() ||
+      typeof data.handoff.hash !== "string" ||
+      !data.handoff.hash.trim()
     )
       throw Error("Invalid queued bridge receipt");
     const receipt = { id: data.handoff.id, hash: data.handoff.hash };
@@ -184,21 +253,7 @@ export async function bridgeRequest<T extends object = Record<string, unknown>>(
     while (r.status === 202) {
       if (options?.isActive?.() === false)
         throw Error("Study session closed; saved work retained");
-      await new Promise<void>((resolve, reject) => {
-        const timer = setTimeout(done, 500);
-        function done() {
-          signal.removeEventListener("abort", abort);
-          resolve();
-        }
-        function abort() {
-          clearTimeout(timer);
-          reject(
-            Error("ChatGPT handoff wait interrupted; exact work is retained"),
-          );
-        }
-        if (signal.aborted) abort();
-        else signal.addEventListener("abort", abort, { once: true });
-      });
+      await waitForHandoff(signal);
       if (options?.isActive?.() === false)
         throw Error("Study session closed; saved work retained");
       try {
@@ -207,10 +262,8 @@ export async function bridgeRequest<T extends object = Record<string, unknown>>(
           { signal: AbortSignal.any([signal, AbortSignal.timeout(5000)]) },
         );
         // A restarting relay or a dropped dev-server proxy answers 502-504.
-        if (next.status >= 502 && next.status <= 504)
-          throw Error("unavailable");
-        const nextData = await next.json();
-        if (!isRecord(nextData)) throw Error("Malformed bridge response");
+        if (await gatewayOutage(next)) throw Error("unavailable");
+        const nextData = await readJson(next);
         r = next;
         data = nextData;
         unreachableSince = 0;

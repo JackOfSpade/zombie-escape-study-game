@@ -717,6 +717,18 @@ test("separate game connector requires local pairing, PKCE, a signed client asse
         .completion.duplicate,
       true,
     );
+    const finishEvents = bridge
+      .status()
+      .diagnostics.filter(
+        (event: any) =>
+          event.kind === "tool-result" &&
+          event.tool === "finish_study_question" &&
+          event.outcome === "sent",
+      );
+    assert.deepEqual(
+      finishEvents.map((event: any) => event.duplicate),
+      [false, true],
+    );
     assert.equal(
       (
         await relayCall("finish_study_question", {
@@ -808,9 +820,31 @@ test("separate game connector requires local pairing, PKCE, a signed client asse
         rubric: [],
       },
     };
-    const waitingNext = relayCall("get_current_study_question", {
-      after: prepared.completion.continuation.after,
-    });
+    // Four outstanding continuations fill the bounded bridge. A completion
+    // arriving then must be an explicit retryable tool error, never success.
+    const waitingNext = Promise.all(
+      Array.from({ length: 4 }, () =>
+        relayCall("get_current_study_question", {
+          after: prepared.completion.continuation.after,
+        }),
+      ),
+    );
+    let saturated = false;
+    for (let attempt = 0; attempt < 100; attempt++) {
+      const calls = bridge
+        .status()
+        .diagnostics.filter((event: any) => event.kind === "tool-call")
+        .slice(-4);
+      saturated =
+        calls.length === 4 &&
+        calls.every(
+          (event: any) => event.tool === "get_current_study_question",
+        );
+      if (saturated) break;
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    assert.equal(saturated, true);
+    const busyFinish = await relayCall("finish_study_question", nativeAnswer);
     const nextArrival = new Promise<void>((resolve) =>
       setTimeout(() => {
         const queued = q.enqueue("tutor", nextNativePayload, nativeScope);
@@ -818,8 +852,22 @@ test("separate game connector requires local pairing, PKCE, a signed client asse
         resolve();
       }, 25),
     );
-    const nextNative = (await waitingNext).structuredContent;
+    const nextNative = (await waitingNext)[0].structuredContent;
     await nextArrival;
+    assert.equal(busyFinish.isError, true);
+    assert.equal(busyFinish.structuredContent.status, "retryable");
+    assert.equal(busyFinish.structuredContent.reason, "bridge_busy");
+    assert.ok(
+      bridge
+        .status()
+        .diagnostics.some(
+          (event: any) =>
+            event.kind === "tool-result" &&
+            event.tool === "finish_study_question" &&
+            event.status === "retryable" &&
+            event.reason === "bridge_busy",
+        ),
+    );
     assert.equal(nextNative.status, "question");
     assert.equal(nextNative.requestId, nextNativePayload.requestId);
     assert.equal(

@@ -361,3 +361,218 @@ test("hung result polls have a short deadline and exhaust the outage grace inste
   await assert.rejects(bridgeRequest("tutor", {}), /stopped answering/);
   assert.equal(polls, 2);
 });
+
+test("queued HTTP refusals retain their plain-text reason without waiting through an outage grace", async (t) => {
+  const original = globalThis.fetch;
+  t.after(() => {
+    globalThis.fetch = original;
+  });
+  let polls = 0;
+  globalThis.fetch = async (url) => {
+    if (url === "/api/status") return reply("chatgpt-handoff");
+    if (url === "/api/bridge")
+      return Response.json(
+        { handoff: { id: "saved", hash: "captured" } },
+        { status: 202 },
+      );
+    polls++;
+    if (polls > 1)
+      return Response.json({ error: "unexpected retry" }, { status: 400 });
+    return new Response("Synthetic stale question refusal", { status: 409 });
+  };
+  await checkBridge();
+  await assert.rejects(
+    bridgeRequest("tutor", {}),
+    /Synthetic stale question refusal/,
+  );
+  assert.equal(polls, 1);
+});
+
+test("empty queued receipt identities fail before polling", async (t) => {
+  const original = globalThis.fetch;
+  t.after(() => {
+    globalThis.fetch = original;
+  });
+  for (const receipt of [
+    { id: "", hash: "h" },
+    { id: "i", hash: " " },
+  ]) {
+    let polls = 0;
+    globalThis.fetch = async (url) => {
+      if (url === "/api/status") return reply("chatgpt-handoff");
+      if (url === "/api/bridge")
+        return Response.json({ handoff: receipt }, { status: 202 });
+      polls++;
+      return Response.json({ error: "unexpected poll" }, { status: 400 });
+    };
+    await checkBridge();
+    await assert.rejects(
+      bridgeRequest("tutor", {}),
+      /Invalid queued bridge receipt/,
+    );
+    assert.equal(polls, 0);
+  }
+});
+
+test("a lost handoff acknowledgement retries the identical released request before polling its original receipt", async (t) => {
+  const original = globalThis.fetch;
+  t.after(() => {
+    globalThis.fetch = original;
+  });
+  const bodies: string[] = [];
+  const progress: string[] = [];
+  let polls = 0;
+  globalThis.fetch = async (url, init) => {
+    if (url === "/api/status") return reply("chatgpt-handoff");
+    if (url === "/api/bridge") {
+      bodies.push(String(init?.body));
+      // The relay can persist this request even when its acknowledgement is lost.
+      if (bodies.length === 1) throw TypeError("Connection lost after enqueue");
+      assert.equal(bodies[1], bodies[0]);
+      return Response.json(
+        { handoff: { id: "original-job", hash: "original-hash" } },
+        { status: 202 },
+      );
+    }
+    polls++;
+    const query = new URL(String(url), "http://fixture").searchParams;
+    assert.equal(query.get("id"), "original-job");
+    assert.equal(query.get("hash"), "original-hash");
+    return Response.json({ answer: "Recovered reply" });
+  };
+  await checkBridge();
+  assert.deepEqual(
+    await bridgeRequest(
+      "tutor",
+      { requestId: "synthetic-lost-ack", question: "Immutable question" },
+      (phase) => progress.push(phase),
+      {
+        nativeScope: { runId: "synthetic-run", encounterId: "synthetic-task" },
+      },
+    ),
+    { answer: "Recovered reply" },
+  );
+  assert.equal(bodies.length, 2);
+  assert.equal(polls, 1);
+  assert.deepEqual(progress, ["unknown", "queued"]);
+});
+
+test("a hung initial handoff submission has a short deadline and stops retrying after its outage grace", async (t) => {
+  const originalFetch = globalThis.fetch;
+  const originalTimeout = AbortSignal.timeout;
+  const originalNow = Date.now;
+  t.after(() => {
+    globalThis.fetch = originalFetch;
+    AbortSignal.timeout = originalTimeout;
+    Date.now = originalNow;
+  });
+  let now = 1000,
+    posts = 0;
+  Date.now = () => now;
+  AbortSignal.timeout = (ms) => originalTimeout(ms === 5000 ? 10 : ms);
+  globalThis.fetch = async (url, init) => {
+    if (url === "/api/status") return reply("chatgpt-handoff");
+    assert.equal(url, "/api/bridge");
+    posts++;
+    return new Promise<Response>((_resolve, reject) => {
+      init!.signal!.addEventListener(
+        "abort",
+        () => {
+          now += BRIDGE_OUTAGE_GRACE_MS + 1;
+          reject(init!.signal!.reason);
+        },
+        { once: true },
+      );
+    });
+  };
+  await checkBridge();
+  await assert.rejects(
+    bridgeRequest("tutor", { requestId: "synthetic-hung-post" }),
+    /stopped answering; your exact request is saved/,
+  );
+  assert.equal(posts, 2);
+});
+
+test("handoff submission refusals and non-handoff failures are never automatically resubmitted", async (t) => {
+  const original = globalThis.fetch;
+  t.after(() => {
+    globalThis.fetch = original;
+  });
+  for (const mode of ["chatgpt-handoff", "study-mode"]) {
+    let posts = 0;
+    globalThis.fetch = async (url) => {
+      if (url === "/api/status") return reply(mode);
+      posts++;
+      if (mode === "study-mode") throw TypeError("Connection lost");
+      return new Response("This chat is disconnected", { status: 409 });
+    };
+    await checkBridge();
+    await assert.rejects(
+      bridgeRequest("tutor", { requestId: "synthetic-refusal" }),
+      mode === "study-mode" ? /Connection lost/ : /chat is disconnected/,
+    );
+    assert.equal(posts, 1);
+  }
+});
+
+test("an invalid initial handoff response is reported without resubmitting the question", async (t) => {
+  const original = globalThis.fetch;
+  t.after(() => {
+    globalThis.fetch = original;
+  });
+  let posts = 0;
+  globalThis.fetch = async (url) => {
+    if (url === "/api/status") return reply("chatgpt-handoff");
+    posts++;
+    return Response.json(["Malformed completion"]);
+  };
+  await checkBridge();
+  await assert.rejects(
+    bridgeRequest("tutor", { requestId: "synthetic-invalid-completion" }),
+    /Malformed bridge response/,
+  );
+  assert.equal(posts, 1);
+});
+
+test("a structured handoff refusal is definitive even with a gateway status", async (t) => {
+  const original = globalThis.fetch;
+  t.after(() => {
+    globalThis.fetch = original;
+  });
+  let posts = 0;
+  globalThis.fetch = async (url) => {
+    if (url === "/api/status") return reply("chatgpt-handoff");
+    posts++;
+    return posts === 1
+      ? Response.json({ error: "Controlled outage" }, { status: 503 })
+      : Response.json({ error: "Unexpected retry" }, { status: 400 });
+  };
+  await checkBridge();
+  await assert.rejects(
+    bridgeRequest("tutor", { requestId: "synthetic-service-refusal" }),
+    /Controlled outage/,
+  );
+  assert.equal(posts, 1);
+});
+
+test("a gateway HTML response retries the same handoff submission", async (t) => {
+  const original = globalThis.fetch;
+  t.after(() => {
+    globalThis.fetch = original;
+  });
+  const bodies: string[] = [];
+  globalThis.fetch = async (url, init) => {
+    if (url === "/api/status") return reply("chatgpt-handoff");
+    bodies.push(String(init?.body));
+    if (bodies.length === 1)
+      return new Response("<html>Bad gateway</html>", { status: 502 });
+    assert.equal(bodies[1], bodies[0]);
+    return Response.json({ answer: "Recovered after proxy restart" });
+  };
+  await checkBridge();
+  assert.deepEqual(
+    await bridgeRequest("tutor", { requestId: "synthetic-proxy-restart" }),
+    { answer: "Recovered after proxy restart" },
+  );
+  assert.equal(bodies.length, 2);
+});

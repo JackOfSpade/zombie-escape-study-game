@@ -2,11 +2,17 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 import { checkBridge, ensureProblem } from "../src/ai";
-import { eligible, initialStudy } from "../src/curriculum";
+import {
+  beginVisit,
+  countStudyTurn,
+  eligible,
+  initialStudy,
+} from "../src/curriculum";
 import { complete, step } from "../src/engine";
 import { TestRunner } from "../src/gametest/runner";
 import { emptyScenario } from "../src/gametest/schema";
-import type { Roadmap } from "../src/model";
+import { applyLearningAssessment, encounterKey } from "../src/learner";
+import type { Assessment, Encounter, Roadmap } from "../src/model";
 import { decode, encode, recover } from "../src/persistence";
 import { createPlayableGame } from "../src/world";
 import {
@@ -15,6 +21,7 @@ import {
   nextWorkspaceQuestion,
   workspaceQuestion,
   workspaceAssessment,
+  workspaceSelectedQuestion,
   workspaceProgressHtml,
 } from "../src/study-workspace";
 
@@ -116,6 +123,7 @@ test("workspace reuses an issued game question and ignores NPC-only preparation"
   const count = Object.keys(g.encounters).length;
   assert.equal(workspaceQuestion(g), issued);
   assert.equal(nextWorkspaceQuestion(g, r), issued);
+  assert.equal(workspaceSelectedQuestion(g), issued);
   assert.equal(Object.keys(g.encounters).length, count);
   // Retained unfinished work from a closed run is history, not a question the
   // current workspace may reopen or silently reinterpret as a pending visit.
@@ -127,6 +135,54 @@ test("workspace reuses an issued game question and ignores NPC-only preparation"
   g.study.archives.push(archived);
   assert.equal(workspaceQuestion(g), undefined);
   assert.notEqual(nextWorkspaceQuestion(g, r), archived);
+});
+
+test("workspace keeps the selected human question when other displayed tasks precede it", () => {
+  const g = createPlayableGame(127, r);
+  enterStudyWorkspace(g);
+  const [earlier, selected] = Object.values(g.encounters);
+  earlier.problemPresentedSequence = 1;
+  selected.problemPresentedSequence = 2;
+  g.studyWorkspace!.encounter = encounterKey(selected);
+  assert.equal(workspaceSelectedQuestion(g), selected);
+  assert.equal(workspaceQuestion(g), selected);
+  assert.equal(nextWorkspaceQuestion(g, r), selected);
+});
+
+test("consumed generation and displayed NPC-owned work cannot block a new study question", () => {
+  const g = createPlayableGame(128, r);
+  enterStudyWorkspace(g);
+  const consumed = nextWorkspaceQuestion(g, r);
+  consumed.state = "consumed";
+  consumed.pendingGeneration = { requestId: "stale-generation", payload: {} };
+  const npc = Object.values(g.encounters).find((e) => !e.studyOnly)!;
+  npc.owner = "npc-only";
+  npc.problemPresentedSequence = 1;
+  assert.equal(workspaceQuestion(g), undefined);
+  const next = nextWorkspaceQuestion(g, r);
+  assert.notEqual(next, consumed);
+  assert.notEqual(next, npc);
+});
+
+test("a human native session on a consumed NPC lock remains resumable for learning", () => {
+  const g = createPlayableGame(130, r);
+  enterStudyWorkspace(g);
+  const npc = Object.values(g.encounters)[0];
+  npc.state = "consumed";
+  npc.owner = "npc-only";
+  npc.directStudy = {
+    id: "synthetic-human-session",
+    createdAt: 1,
+    provider: "chatgpt-handoff",
+    payloadJson: "{}",
+    questionFingerprint: "synthetic-fingerprint",
+    state: "pending",
+  };
+  assert.equal(workspaceQuestion(g), npc);
+  assert.equal(nextWorkspaceQuestion(g, r), npc);
+  assert.equal(workspaceSelectedQuestion(g), npc);
+  npc.directStudy.state = "applied";
+  assert.equal(workspaceQuestion(g), undefined);
 });
 
 test("live study-only generation receives the exact formal contract and preserves physical pacing", async () => {
@@ -213,7 +269,136 @@ test("next live question waits for its source-bound progress review, while unrel
   assert.notEqual(nextWorkspaceQuestion(g, r), e);
 });
 
-test("dashboard separates verified checkpoints from observations and escapes learner-facing content", () => {
+test("workspace reviews stay bound to their run when station IDs are reused", () => {
+  const g = createPlayableGame(129, r, initialStudy(r, "live"));
+  enterStudyWorkspace(g);
+  const current = nextWorkspaceQuestion(g, r);
+  current.state = "consumed";
+  const archived = structuredClone(current);
+  archived.runId = "previous-run";
+  g.study.archives.push(archived);
+  const oldReview = {
+    id: `assessment-${encounterKey(archived)}-1`,
+    encounter: archived.id,
+    sourceVersion: 0,
+    findings: [],
+    status: "review-required" as const,
+    provenance: "synthetic",
+  };
+  const currentReview = {
+    ...oldReview,
+    id: `assessment-${encounterKey(current)}-2`,
+    status: "applied" as const,
+  };
+  g.study.assessments.push(oldReview, currentReview, {
+    ...oldReview,
+    id: "ambiguous-legacy-review",
+  });
+  assert.equal(workspaceAssessment(g), currentReview);
+  g.studyWorkspace!.encounter = encounterKey(archived);
+  assert.equal(workspaceAssessment(g), oldReview);
+  assert.throws(() => nextWorkspaceQuestion(g, r), /reviewing/);
+});
+
+test("a completed unresolved visit becomes a linked continuation without blocking the owed track", () => {
+  const g = createPlayableGame(131, r, initialStudy(r, "live"));
+  g.study.learner!.reviews = {};
+  g.study.learner!.studyTurnPosition = 0;
+  enterStudyWorkspace(g);
+
+  const issue = () => {
+    const e = nextWorkspaceQuestion(g, r);
+    const contract = eligible(r, g.study);
+    e.problem = {
+      title: "Synthetic standalone question",
+      prompt: "Explain the supplied mechanism.",
+      starter: "",
+      rubric: ["Explain the mechanism"],
+      provenance: "study-mode",
+      contract,
+      scopeDefinitions: [
+        {
+          id: `${contract.objectiveIds[0]}/D${contract.depth}`,
+          objectiveId: contract.objectiveIds[0],
+          depth: contract.depth,
+          sourceScope: contract.scopes[0],
+          facets: [{ id: "mechanism", description: "Explain the mechanism" }],
+        },
+      ],
+    };
+    e.history.push({
+      seq: 1,
+      author: "human",
+      kind: "reasoning",
+      text: "Synthetic learner reasoning retained for assessment.",
+      at: 0,
+      revision: 0,
+    });
+    beginVisit(r, g.study, e);
+    return e;
+  };
+  const finish = (e: Encounter, visitOutcome: "unresolved" | "usable") => {
+    e.state = "consumed";
+    e.directStudy = {
+      id: `synthetic-${e.id}`,
+      createdAt: 1,
+      provider: "chatgpt-handoff",
+      payloadJson: JSON.stringify({ frozenQuestion: e.problem }),
+      questionFingerprint: "synthetic-fingerprint",
+      state: "applied",
+    };
+    countStudyTurn(g.study, e);
+    const assessment: Assessment = {
+      id: `assessment-${encounterKey(e)}-1`,
+      encounter: e.id,
+      sourceVersion: g.study.learner!.version,
+      evidenceCutoffSequence: 1,
+      findings: [],
+      status: "pending",
+      provenance: "study-mode",
+      visitOutcome,
+    };
+    g.study.assessments.push(assessment);
+    applyLearningAssessment(r, g.study.learner!, e, assessment);
+    return assessment;
+  };
+
+  const original = issue();
+  assert.equal(original.problem!.contract.track, "PY");
+  finish(original, "unresolved");
+  const before = structuredClone(original);
+  const parentId = g.study.learner!.attempts[0].id;
+  assert.equal(g.study.learner!.attempts[0].status, "in-progress");
+  delete g.studyWorkspace!.encounter; // Restored view selection is optional.
+  const firstPE = issue();
+  assert.equal(g.study.learner!.attempts[0].status, "interrupted");
+  assert.equal(firstPE.problem!.contract.track, "PE");
+  assert.deepEqual(
+    original,
+    before,
+    "the old question and transcript are immutable",
+  );
+  assert.equal(firstPE.workspace, "");
+  assert.equal(g.study.learner!.cycle, 0);
+  finish(firstPE, "usable");
+  const secondPE = issue();
+  assert.equal(secondPE.problem!.contract.track, "PE");
+  finish(secondPE, "usable");
+  const followup = issue();
+  assert.deepEqual(
+    followup.problem!.contract.objectiveIds,
+    original.problem!.contract.objectiveIds,
+  );
+  assert.equal(g.study.learner!.attempts.at(-1)!.parentAttempt, parentId);
+  const result = finish(followup, "usable");
+  assert.equal(g.study.learner!.cycle, 3);
+  assert.deepEqual(g.study.learner!.continuations, []);
+  applyLearningAssessment(r, g.study.learner!, followup, result);
+  assert.equal(g.study.learner!.cycle, 3, "retry cannot serve the visit twice");
+  assert.deepEqual(original, before);
+});
+
+test("skill map stays stable across an unissued question and escapes learner-facing content", () => {
   const g = createPlayableGame(125, r);
   const before = workspaceProgressHtml(g, r);
   enterStudyWorkspace(g);
@@ -226,5 +411,5 @@ test("dashboard separates verified checkpoints from observations and escapes lea
   const html = workspaceProgressHtml(g, clone);
   assert.ok(!html.includes("<script>"));
   assert.match(html, /&lt;script&gt;/);
-  assert.match(html, /practice does not add verified curriculum credit/);
+  assert.doesNotMatch(html, /study-current-topic|study-review-notes/);
 });
