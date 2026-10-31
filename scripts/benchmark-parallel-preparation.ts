@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
-import { createHash } from "node:crypto";
 import { readFileSync, writeFileSync } from "node:fs";
 import { gameFingerprint } from "./lib/game-fingerprint";
 import { parallelPreparation } from "./lib/parallel-preparation";
+import { sha256 } from "./lib/digest.mjs";
 const r = JSON.parse(readFileSync("public/curriculum.json", "utf8"));
 const cases = [0, 1, 2].map((seed) => {
   const serial = parallelPreparation(r, seed, false),
@@ -35,7 +35,7 @@ const report = {
     "scripts/benchmark-parallel-preparation.ts",
   ].map((path) => ({
     path,
-    sha256: createHash("sha256").update(readFileSync(path)).digest("hex"),
+    sha256: sha256(readFileSync(path)),
   })),
   cases,
 };

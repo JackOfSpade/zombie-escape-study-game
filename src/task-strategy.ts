@@ -1,6 +1,10 @@
 import { type Actor, type Game, type Station, distance } from "./model";
 import { survivorPath } from "./navigation";
-import { routeContacts, routeExposure } from "./survivor-strategy";
+import {
+  CONTACT_PENALTY,
+  routeContacts,
+  routeExposure,
+} from "./survivor-strategy";
 import { canSee, sightRadius } from "./visibility";
 
 /** Select among remembered, eligible tasks. Hidden enemies and unseen stations
@@ -70,7 +74,7 @@ export function chooseTaskStation(g: Game, a: Actor, candidates: Station[]) {
         cost +
         lootCost +
         (occupied ? (defenseRole ? 2 : 8) : 0) +
-        routeContacts(a, route, enemies) * 1000 +
+        routeContacts(a, route, enemies) * CONTACT_PENALTY +
         routeExposure(a, route, enemies) * (3 + (1 - a.risk) * 3),
     });
   }

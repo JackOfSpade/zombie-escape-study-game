@@ -1,3 +1,4 @@
+import type { RoadmapAdoptionReceipt } from "./roadmap-adoption-types";
 const names = [
   "SHARED_PROGRESS",
   "MERGE_RULES",
@@ -108,4 +109,17 @@ export function inspectMergedDocument(raw: string) {
     blocks,
     rows,
   };
+}
+const receiptRowCache = new WeakMap<
+  RoadmapAdoptionReceipt,
+  { text: string; rows: ReturnType<typeof inspectMergedDocument>["rows"] }
+>();
+/** Cached merged-document rows for an adoption receipt, keyed on canonical text. */
+export function receiptRows(receipt: RoadmapAdoptionReceipt) {
+  const text = receipt.proposal.canonical,
+    old = receiptRowCache.get(receipt);
+  if (old?.text === text) return old.rows;
+  const rows = inspectMergedDocument(text).rows;
+  receiptRowCache.set(receipt, { text, rows });
+  return rows;
 }

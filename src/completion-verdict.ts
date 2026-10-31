@@ -1,11 +1,12 @@
+import { isRecord } from "./records";
+
 export function completionVerdict(value: unknown): {
   complete: boolean;
   feedback: string;
   qualified: string[];
 } {
-  if (!value || typeof value !== "object" || Array.isArray(value))
-    throw Error("Malformed completion response");
-  const v = value as Record<string, unknown>;
+  if (!isRecord(value)) throw Error("Malformed completion response");
+  const v = value;
   if (
     typeof v.complete !== "boolean" ||
     typeof v.feedback !== "string" ||

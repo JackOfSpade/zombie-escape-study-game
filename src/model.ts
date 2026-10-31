@@ -699,12 +699,25 @@ export const FURNITURE: Record<
   box: { w: 0.55, h: 0.45, hp: 40, speed: 1.6, resist: 10 },
   drawers: { w: 0.45, h: 0.55, hp: 300, speed: 1, resist: 60 },
 };
+export const HELIPAD: Point = { x: 21.5, y: 10.5 };
+export const HELIPAD_RADIUS = 2.8;
+
 export function rand(g: { rng: number }) {
   let t = (g.rng += 0x6d2b79f5);
   t = Math.imul(t ^ (t >>> 15), t | 1);
   t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
   g.rng >>>= 0;
   return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+}
+export type Rng = { rng: number };
+export const between = (r: Rng, lo: number, hi: number) =>
+  lo + Math.floor(rand(r) * (hi - lo + 1));
+export function shuffle<T>(r: Rng, items: T[]) {
+  for (let i = items.length - 1; i > 0; i--) {
+    const j = Math.floor(rand(r) * (i + 1));
+    [items[i], items[j]] = [items[j], items[i]];
+  }
+  return items;
 }
 export const distance = (a: Point, b: Point) =>
   Math.hypot(a.x - b.x, a.y - b.y);

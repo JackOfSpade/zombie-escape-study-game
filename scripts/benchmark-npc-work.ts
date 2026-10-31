@@ -76,7 +76,7 @@ for (let n = 0; n < 300; n++) {
   if (n % 6 === 0) await materializeNpcWork(g, e, request);
 }
 const report = {
-  mode: "Isolated 1800s scoped-work plus10s idle-check at30 Hz; no horde, empty geometry, one NPC, synthetic materialization adapter; not a survival, semantic or native-provider trial",
+  mode: "Isolated 1800s scoped-work plus 10s idle-check at 30 Hz; no horde, empty geometry, one NPC, synthetic materialization adapter; not a survival, semantic or native-provider trial",
   source,
   seed: g.seed,
   stepSeconds: 1 / 30,

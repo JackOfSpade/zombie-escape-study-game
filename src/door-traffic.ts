@@ -1,3 +1,4 @@
+import { rememberPlace } from "./exploration";
 import { fieldAllows } from "./force-fields";
 import {
   type Actor,
@@ -23,6 +24,18 @@ export interface DoorMotion {
   forwardLimit: number;
   steer: boolean;
 }
+const laneCount = (width: number) =>
+  Math.max(1, Math.floor((width - 0.8) / 0.8) + 1);
+const laneCoordinate = (
+  center: number,
+  offset: number,
+  width: number,
+  lanes: number,
+  lane: number,
+) =>
+  center +
+  offset +
+  (lanes === 1 ? 0 : -width / 2 + 0.4 + (lane * (width - 0.8)) / (lanes - 1));
 /** Use the width of a traversable field instead of funnelling every route into
  * its centre. Reservations are local, bounded and survive a physics checkpoint. */
 export function doorwayMotion(
@@ -53,7 +66,7 @@ export function doorwayMotion(
   if (!state) {
     for (const o of f.furniture) {
       if (!o.field || !fieldAllows(o, a) || distance(o, a) > 5) continue;
-      const { normal, along, width } = axes(o);
+      const { normal, along, width, depth } = axes(o);
       if (width < 1.6) continue;
       const side = Math.sign(a[normal] - o[normal]);
       if (!side || Math.abs(a[along] - o[along]) > width / 2 + 4) continue;
@@ -78,7 +91,7 @@ export function doorwayMotion(
         from = p;
       }
       if (!crosses && !spawnEntry) continue;
-      const lanes = Math.max(1, Math.floor((width - 0.8) / 0.8) + 1);
+      const lanes = laneCount(width);
       // A small stable personal offset avoids identical tracks without random
       // changes of direction on each frame or changing the world's RNG.
       let hash = 0;
@@ -87,20 +100,15 @@ export function doorwayMotion(
       const offset = (((hash >>> 0) % 13) - 6) / 100;
       let best: { lane: number; score: number } | undefined;
       for (let lane = 0; lane < lanes; lane++) {
-        const coordinate =
-          o[along] +
-          offset +
-          (lanes === 1
-            ? 0
-            : -width / 2 + 0.4 + (lane * (width - 0.8)) / (lanes - 1));
+        const coordinate = laneCoordinate(o[along], offset, width, lanes, lane);
         const approach = {
           ...a,
           [along]: coordinate,
-          [normal]: o[normal] + side * (axes(o).depth / 2 + 0.7),
+          [normal]: o[normal] + side * (depth / 2 + 0.7),
         };
         const exit = {
           ...approach,
-          [normal]: o[normal] - side * (axes(o).depth / 2 + 0.9),
+          [normal]: o[normal] - side * (depth / 2 + 0.9),
         };
         if (!walkSegment(f, a, approach) || !walkSegment(f, approach, exit))
           continue;
@@ -146,12 +154,13 @@ export function doorwayMotion(
     }
   }
   if (!state || !door) return;
+  const activeState = state,
+    activeDoor = door;
   const { normal, along, width, depth } = axes(door);
   const position = (a[normal] - door[normal]) * state.side;
   if (position < -depth / 2 - 0.9) {
     delete a.doorTraffic;
-    if (!a.seen.includes(`entered-door-${door.id}`))
-      a.seen.push(`entered-door-${door.id}`);
+    rememberPlace(a, `entered-door-${door.id}`);
     if (
       a.activity === "exploring" &&
       a.target &&
@@ -167,7 +176,7 @@ export function doorwayMotion(
     return;
   }
   state.until = g.time + 2;
-  const lanes = Math.max(1, Math.floor((width - 0.8) / 0.8) + 1);
+  const lanes = laneCount(width);
   // Opposing streams keep right through a wide opening. Reassign only before
   // reaching its threshold; changing lanes inside the field causes cross traffic.
   const opposed = g.survivors.some(
@@ -176,20 +185,18 @@ export function doorwayMotion(
       b.alive &&
       !b.escaped &&
       b.floor === a.floor &&
-      distance(b, door!) < 5 &&
-      (b[normal] - door![normal]) * state!.side < -depth / 2 &&
-      ((b.doorTraffic?.door === door!.id &&
-        b.doorTraffic.side !== state!.side) ||
+      distance(b, activeDoor) < 5 &&
+      (b[normal] - activeDoor[normal]) * activeState.side < -depth / 2 &&
+      ((b.doorTraffic?.door === activeDoor.id &&
+        b.doorTraffic.side !== activeState.side) ||
         (b.navTarget &&
-          (b.navTarget[normal] - door![normal]) * state!.side > 0)),
+          (b.navTarget[normal] - activeDoor[normal]) * activeState.side > 0)),
   );
   if (opposed && position > depth / 2 + 0.4)
     state.lane =
       (normal === "y" ? state.side : -state.side) > 0 ? lanes - 1 : 0;
   const coordinateAt = (lane: number) =>
-    door![along] +
-    state!.offset +
-    (lanes === 1 ? 0 : -width / 2 + 0.4 + (lane * (width - 0.8)) / (lanes - 1));
+    laneCoordinate(activeDoor[along], activeState.offset, width, lanes, lane);
   const staticBlock = (lane: number) =>
     g.survivors.some(
       (b) =>
@@ -198,8 +205,8 @@ export function doorwayMotion(
         !b.escaped &&
         b.floor === a.floor &&
         Math.abs(b[along] - coordinateAt(lane)) < 0.6 &&
-        Math.abs(b[normal] - door![normal]) < 2 &&
-        (a[normal] - b[normal]) * state!.side > -0.2 &&
+        Math.abs(b[normal] - activeDoor[normal]) < 2 &&
+        (a[normal] - b[normal]) * activeState.side > -0.2 &&
         (b.id === "human" ||
           (b.station &&
             b.activity === "studying" &&
@@ -230,12 +237,7 @@ export function doorwayMotion(
       }
     }
   }
-  const coordinate =
-    door[along] +
-    state.offset +
-    (lanes === 1
-      ? 0
-      : -width / 2 + 0.4 + (state.lane * (width - 0.8)) / (lanes - 1));
+  const coordinate = coordinateAt(state.lane);
   const aligned = Math.abs(a[along] - coordinate) < 0.25;
   const point: Point = {
     x: door.x,

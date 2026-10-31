@@ -81,8 +81,20 @@ export function rayBodyDistance(
   radius: number,
 ) {
   let hit = Math.min(
-    rayBoxDistance(origin, dx, dy, { ...o, w: o.w + 2 * radius }),
-    rayBoxDistance(origin, dx, dy, { ...o, h: o.h + 2 * radius }),
+    rayBoxDistance(origin, dx, dy, {
+      x: o.x,
+      y: o.y,
+      w: o.w + 2 * radius,
+      h: o.h,
+      angle: o.angle,
+    }),
+    rayBoxDistance(origin, dx, dy, {
+      x: o.x,
+      y: o.y,
+      w: o.w,
+      h: o.h + 2 * radius,
+      angle: o.angle,
+    }),
   );
   const q = localPoint(origin, o),
     d = localPoint({ x: o.x + dx, y: o.y + dy }, o);

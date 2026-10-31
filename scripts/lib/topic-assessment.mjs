@@ -1,3 +1,5 @@
+import { isRecord as object } from "./is-record.mjs";
+
 /** Narrative topic reflections are separate from facet findings and mastery. */
 export const TOPIC_ASSESSMENT_TEXT_LIMIT = 16000;
 export const TOPIC_ASSESSMENT_INSTRUCTION =
@@ -5,8 +7,6 @@ export const TOPIC_ASSESSMENT_INSTRUCTION =
 
 const TOPIC_ID = /^(PY|PE):[TXI]\d{2}$/;
 const OBJECTIVE_ID = /^(PY|PE):([TXI]\d{2})(?:\.\d+)?$/;
-const object = (value) =>
-  value !== null && typeof value === "object" && !Array.isArray(value);
 
 /** Stable namespaced topics tested by a checkpoint, transfer or final contract. */
 export function topicAssessmentTopics(contract) {

@@ -2,8 +2,8 @@ import type { Point, Zombie } from "./model";
 /** Ephemeral one-tick broad phase. Exact contact tests remain authoritative.
  * Original array order is retained so local queries cannot change tie-breaking. */
 export class ZombieIndex {
-  private cells = new Map<string, Set<Zombie>>();
-  private keys = new Map<Zombie, string>();
+  private cells = new Map<number, Set<Zombie>>();
+  private keys = new Map<Zombie, number>();
   private order = new Map<Zombie, number>();
   constructor(zombies: readonly Zombie[]) {
     zombies.forEach((z, i) => {
@@ -11,12 +11,16 @@ export class ZombieIndex {
       this.update(z);
     });
   }
-  private key(z: Zombie) {
-    return `${z.floor}/${Math.floor(z.x)}/${Math.floor(z.y)}`;
+  /** Packed numeric cell key: avoids a string allocation per cell visit. */
+  private key(floor: number, x: number, y: number) {
+    return (floor * 65536 + (y + 32768)) * 65536 + (x + 32768);
   }
   update(z: Zombie) {
     const old = this.keys.get(z),
-      next = z.hp > 0 ? this.key(z) : undefined;
+      next =
+        z.hp > 0
+          ? this.key(z.floor, Math.floor(z.x), Math.floor(z.y))
+          : undefined;
     if (old === next) return;
     if (old !== undefined) {
       const bucket = this.cells.get(old);
@@ -37,7 +41,7 @@ export class ZombieIndex {
       range = radius + 1e-7;
     for (let y = Math.floor(p.y - range); y <= Math.floor(p.y + range); y++)
       for (let x = Math.floor(p.x - range); x <= Math.floor(p.x + range); x++)
-        for (const z of this.cells.get(`${floor}/${x}/${y}`) ?? [])
+        for (const z of this.cells.get(this.key(floor, x, y)) ?? [])
           if (z.hp > 0 && (z.x - p.x) ** 2 + (z.y - p.y) ** 2 <= range * range)
             result.push(z);
     return result.sort((a, b) => this.order.get(a)! - this.order.get(b)!);

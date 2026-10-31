@@ -1,6 +1,5 @@
 import {
   type Actor,
-  CONFIG,
   type Furniture,
   type Game,
   type Point,
@@ -29,17 +28,36 @@ export function zombieStairArrival(
   if (z.stairUntil === undefined) return;
   const source = g.floors[z.floor],
     next = g.floors[z.floor + 1];
-  if (
-    !source ||
-    !next ||
-    z.floor >= CONFIG.floors ||
-    distance(z, source.stairs) >
-      (source.layout === "pursuit" ? STAIRWELL_RADIUS : 0.8)
-  )
+  const wellRadius = source?.layout === "pursuit" ? STAIRWELL_RADIUS : 0.8;
+  if (!source || !next || distance(z, source.stairs) > wellRadius)
     return { kind: "cancel" };
   if (g.time + 1e-8 < z.stairUntil) return { kind: "wait" };
   const p = next.entry,
     floor = next.index;
+  const bubbleAt = (at: Point) =>
+    g.effects.some(
+      (e) =>
+        e.kind === "bubble" &&
+        e.until > g.time &&
+        e.floor === floor &&
+        canSee(next, e, at, e.radius + 0.5),
+    );
+  const zombieAt = (at: Point) =>
+    (crowd?.near(floor, at, 0.55) ?? g.zombies).some(
+      (other) =>
+        other !== z &&
+        other.hp > 0 &&
+        other.floor === floor &&
+        distance(other, at) < 0.55,
+    );
+  const survivorAt = (at: Point) =>
+    g.survivors.find(
+      (a) =>
+        a.alive &&
+        !a.escaped &&
+        actorOnFloor(g, a, floor) &&
+        distance(a, at) < 0.55,
+    );
   // Stay within the actual well: never skip a barricade or arrive through a
   // wall into the lobby. Body occupancy is checked afresh for every arrival.
   if (next.layout === "pursuit") {
@@ -54,32 +72,15 @@ export function zombieStairArrival(
       (point) =>
         !solid(next, point, 0.25, undefined, true) &&
         walkSegment(next, p, point) &&
-        !g.effects.some(
-          (e) =>
-            e.kind === "bubble" &&
-            e.until > g.time &&
-            e.floor === floor &&
-            canSee(next, e, point, e.radius + 0.5),
-        ) &&
-        !(crowd?.near(floor, point, 0.55) ?? g.zombies).some(
-          (other) =>
-            other !== z &&
-            other.hp > 0 &&
-            other.floor === floor &&
-            distance(other, point) < 0.55,
-        ) &&
-        !g.survivors.some(
-          (a) =>
-            a.alive &&
-            !a.escaped &&
-            actorOnFloor(g, a, floor) &&
-            distance(a, point) < 0.55,
-        ),
+        !bubbleAt(point) &&
+        !zombieAt(point) &&
+        !survivorAt(point),
     );
     if (position) return { kind: "arrive", floor, position: { ...position } };
   }
-  const radius = source.layout === "pursuit" ? STAIRWELL_RADIUS : 0.8;
-  const ahead = (crowd?.near(z.floor, source.stairs, radius) ?? g.zombies).some(
+  const ahead = (
+    crowd?.near(z.floor, source.stairs, wellRadius) ?? g.zombies
+  ).some(
     (other) =>
       other !== z &&
       other.floor === z.floor &&
@@ -87,7 +88,7 @@ export function zombieStairArrival(
       other.stagger <= 0 &&
       other.stairUntil !== undefined &&
       other.stairUntil <= g.time + 1e-8 &&
-      distance(other, source.stairs) <= radius &&
+      distance(other, source.stairs) <= wellRadius &&
       (other.stairUntil < z.stairUntil! ||
         (other.stairUntil === z.stairUntil && other.id < z.id)),
   );
@@ -98,36 +99,12 @@ export function zombieStairArrival(
     )
   )
     return { kind: "wait" };
-  if (
-    g.effects.some(
-      (e) =>
-        e.kind === "bubble" &&
-        e.until > g.time &&
-        e.floor === floor &&
-        canSee(next, e, p, e.radius + 0.5),
-    )
-  )
-    return { kind: "wait" };
+  if (bubbleAt(p)) return { kind: "wait" };
   const object = next.furniture.find((o) => inFurniture(p, o, 0.22));
   if (object) return { kind: "furniture", floor, position: { ...p }, object };
-  if (
-    (crowd?.near(floor, p, 0.55) ?? g.zombies).some(
-      (other) =>
-        other !== z &&
-        other.hp > 0 &&
-        other.floor === floor &&
-        distance(other, p) < 0.55,
-    )
-  )
-    return { kind: "wait" };
+  if (zombieAt(p)) return { kind: "wait" };
   // A survivor cannot become an invulnerable plug in the arrival point.
-  const actor = g.survivors.find(
-    (a) =>
-      a.alive &&
-      !a.escaped &&
-      actorOnFloor(g, a, floor) &&
-      distance(a, p) < 0.55,
-  );
+  const actor = survivorAt(p);
   if (actor)
     return canSee(next, p, actor, 0.78, actor.vault?.obstacle) &&
       line(next, p, actor, true, actor.vault?.obstacle)

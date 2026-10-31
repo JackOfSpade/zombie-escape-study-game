@@ -1,5 +1,6 @@
 import { encounterKey, interruptLearningAttempt } from "./learner";
 import type { Encounter, Game, TutorRequest } from "./model";
+import { isRecord } from "./records";
 
 /** Static roadmap texts re-derivable from the curriculum; never re-read once settled. */
 export const RELEASED_REQUEST_FIELDS = [
@@ -15,9 +16,8 @@ export function releaseRequestContext(job: { payloadJson: string }): boolean {
   } catch {
     return false;
   }
-  if (!payload || typeof payload !== "object" || Array.isArray(payload))
-    return false;
-  const record = payload as Record<string, unknown>;
+  if (!isRecord(payload)) return false;
+  const record = payload;
   let removed = false;
   for (const field of RELEASED_REQUEST_FIELDS)
     if (field in record) {
@@ -87,8 +87,8 @@ const DIRECT_STATES = new Set([
 export function recoverDirectStudy(e: Encounter): void {
   const holder = e as { directStudy?: unknown };
   if (holder.directStudy === undefined) return;
-  const s = holder.directStudy as Record<string, unknown> | null;
-  if (!s || typeof s !== "object" || Array.isArray(s)) {
+  const s = holder.directStudy;
+  if (!isRecord(s)) {
     delete holder.directStudy;
     return;
   }

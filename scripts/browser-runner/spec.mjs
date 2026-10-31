@@ -68,7 +68,7 @@ export function browserSteps(value = []) {
 }
 export function browserSpec(code, steps) {
   if (typeof code !== "string" || new TextEncoder().encode(code).length > 65536)
-    throw Error("Expected one React TSX component up to64KiB");
+    throw Error("Expected one React TSX component up to 64 KiB");
   return {
     language: "typescript",
     environment: "react",

@@ -258,7 +258,6 @@ export class FirstPersonView {
   private limbPose = { x: 0, y: 0, rotation: 0 };
   private target = new Vector3();
   private scratchPoint: Point = { x: 0, y: 0 };
-  private playerMotion?: Motion;
   private adaptive: AdaptiveResolution;
   private gpuTimer: GpuTimer;
   private pixelRatio: number;
@@ -322,7 +321,6 @@ export class FirstPersonView {
       this.run = game;
     }
     this.useFloor(floor);
-    this.playerMotion ??= createMotion(a.x, a.y, game.time, a.hp);
     for (const context of this.floorScenes.values())
       context.root.visible = false;
     this.floorRoot.visible = true;
@@ -376,7 +374,6 @@ export class FirstPersonView {
       if (!outside)
         this.fill.intensity = 0.22 + this.atmosphere.currentLight * 0.22;
     } else this.atmosphere.phone.visible = false;
-    updateMotion(this.playerMotion!, a.x, a.y, game.time, a.hp);
     this.sync(game, a, floor, palette);
     this.syncPanels(game, a, floor);
     for (const pool of this.poolList) pool.flush();
@@ -1892,7 +1889,6 @@ export class FirstPersonView {
     this.poolList = [];
     this.visuals = new Map();
     this.panels = [];
-    this.playerMotion = undefined;
     this.theme = "";
     this.architectureKey = "";
     this.shellKey = "";

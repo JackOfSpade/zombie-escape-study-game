@@ -1,5 +1,6 @@
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
+import { join } from "node:path";
 import { PRESETS } from "../../src/gametest/presets";
 import { parseScenario, type Scenario } from "../../src/gametest/schema";
 export interface GameTestInput {
@@ -30,7 +31,7 @@ export function discoverGameTests(): GameTestInput[] {
       source: `builtin:${s.id}`,
       scenario: structuredClone(s),
     })),
-    ...files.map((name) => readGameTest(`${root}/${name}`)),
+    ...files.map((name) => readGameTest(join(root, name))),
   ];
 }
 export function uniqueGameTests(inputs: GameTestInput[]): GameTestInput[] {

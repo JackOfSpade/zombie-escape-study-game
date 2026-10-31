@@ -24,6 +24,19 @@ import {
 import { prepareRoadmapExport, sha256 } from "../src/roadmap-export";
 import { reviewRoadmap } from "../src/roadmap-review";
 import { createGame } from "../src/world";
+
+async function waitUntil(
+  ready: () => boolean,
+  label: string,
+  timeoutMs = 5000,
+): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (!ready()) {
+    if (Date.now() > deadline)
+      throw new Error(`Timed out after ${timeoutMs}ms waiting for ${label}`);
+    await new Promise((resolve) => setTimeout(resolve, 1));
+  }
+}
 const r: Roadmap = JSON.parse(readFileSync("public/curriculum.json", "utf8"));
 async function fixture(output = true) {
   const g = createGame(7, r);
@@ -321,7 +334,7 @@ test("concurrent identical review coalesces, different packets wait explicitly a
     () => reviewEnvironment(g, r, other.id, async () => {}),
     /already running/,
   );
-  while (!finish) await new Promise((resolve) => setTimeout(resolve, 1));
+  await waitUntil(() => finish !== undefined, "finish callback");
   g.study.profile = "development";
   finish(undefined);
   await pending;
@@ -535,7 +548,7 @@ test("replacing the canonical packet during a pending review cannot apply its la
         finish = () => resolve(judgment(p));
       }),
   );
-  while (!finish) await new Promise((resolve) => setTimeout(resolve, 1));
+  await waitUntil(() => finish !== undefined, "finish callback");
   g.study.environmentObservations = [{ ...o, learnerStatement: "Replacement" }];
   finish();
   await pending;
@@ -663,7 +676,7 @@ test("provider change while an ENV response is pending cannot apply it or retry 
   try {
     await checkBridge();
     const pending = reviewEnvironmentObservation(g, r, o.id);
-    while (!finish) await new Promise((resolve) => setTimeout(resolve, 1));
+    await waitUntil(() => finish !== undefined, "finish callback");
     mode = "study-mode";
     await checkBridge();
     finish();

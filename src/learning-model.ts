@@ -41,6 +41,12 @@ export interface FinalProgress {
 }
 export const isFinalTarget = (id: string) =>
   /^(PY|PE):(?:[TX]\d{2}|I\d{2})$/.test(id);
+export const reviewSignature = (record: ReviewRecord | undefined) =>
+  JSON.stringify(
+    Object.entries(record ?? {})
+      .filter(([, v]) => v !== undefined)
+      .sort(([a], [b]) => a.localeCompare(b)),
+  );
 export const scopeKey = (id: string, depth: number) =>
   `${id}/${isFinalTarget(id) ? "T4" : `D${depth}`}`;
 export function learningProgress(

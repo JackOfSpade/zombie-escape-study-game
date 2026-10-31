@@ -1,7 +1,10 @@
 import { HttpInputError, readJsonBody } from "./http-json.mjs";
 import { createServer } from "node:http";
 import { executionRoute } from "./execution-route.mjs";
-import { autonomousHandoff } from "./chatgpt-handoff-queue.mjs";
+import {
+  autonomousHandoff,
+  HANDOFF_OPERATIONS,
+} from "./chatgpt-handoff-queue.mjs";
 
 /** Construct the actual loopback relay without launching Vite, for isolated transport verification. */
 export function createStudyBridgeServer({
@@ -93,19 +96,7 @@ export function createStudyBridgeServer({
           !parsed ||
           typeof parsed !== "object" ||
           Array.isArray(parsed) ||
-          ![
-            "generate",
-            "tutor",
-            "complete",
-            "assess",
-            "group",
-            "materialize-work",
-            "materialize-outcome",
-            "review-environment",
-            "reconcile-roadmap",
-            "npc-chatter",
-            "npc-chatter-review",
-          ].includes(parsed.operation)
+          !HANDOFF_OPERATIONS.includes(parsed.operation)
         )
           throw new HttpInputError(400, "Unknown operation");
         // Bind captured packets at the actual forwarding boundary as well as in

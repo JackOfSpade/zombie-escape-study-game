@@ -211,8 +211,7 @@ function paintFloorCell(
   }
 }
 
-let terrain:
-  { key: string; canvas: HTMLCanvasElement; floor: Floor } | undefined;
+let terrain: { key: string; canvas: HTMLCanvasElement } | undefined;
 /** Whole-floor floor/wall texture, rebuilt only when walls or the theme change. */
 export function terrainCanvas(f: Floor, theme: Theme, seed: number) {
   const key = `${f.index}/${theme}/${seed}/${f.generation?.version ?? 0}/${f.tiles.map((r) => r.join("")).join("")}`;
@@ -248,7 +247,7 @@ export function terrainCanvas(f: Floor, theme: Theme, seed: number) {
       if (!solidAt(x, y + 1)) c.fillRect(px, py + PX, PX, PX * 0.12);
       if (!solidAt(x + 1, y)) c.fillRect(px + PX, py, PX * 0.12, PX);
     }
-  terrain = { key, canvas, floor: f };
+  terrain = { key, canvas };
   return canvas;
 }
 

@@ -29,12 +29,7 @@ const OAUTH_CONSENT_POLICY_VERSION = "document-navigation-v2";
 
 function hostMatches(req, hostname) {
   const raw = req.headers?.host;
-  const count = Array.isArray(req.rawHeaders)
-    ? req.rawHeaders.filter(
-        (_, i) =>
-          i % 2 === 0 && String(req.rawHeaders[i]).toLowerCase() === "host",
-      ).length
-    : 1;
+  const count = rawHeaderCount(req, "host");
   if (typeof raw !== "string" || count !== 1) return false;
   const normalize = (value) =>
     value
@@ -755,20 +750,28 @@ export function createRequestHandler({
     CONSTANTS.UNAUTHENTICATED_AGGREGATE_RATE_PER_SECOND,
     now,
   );
-  let aggregateOnly = false;
+  // Degradation is per kind and self-healing: evictionsInLastMinute() is a
+  // sliding window, and skipped take() calls insert no new keys, so it drains.
+  const aggregateOnlyByKind = Object.create(null);
   const charge = (kind, source, credentialless = true) => {
     const bucket = sourceBuckets[kind];
-    if (
-      !aggregateOnly &&
-      bucket.evictionsInLastMinute() > CONSTANTS.BUCKET_EVICTIONS_PER_MINUTE
-    ) {
-      aggregateOnly = true;
-      writeAudit({ ev: "rate_lru_aggregate_only", kind });
+    const degraded =
+      bucket.evictionsInLastMinute() > CONSTANTS.BUCKET_EVICTIONS_PER_MINUTE;
+    if (degraded !== Boolean(aggregateOnlyByKind[kind])) {
+      aggregateOnlyByKind[kind] = degraded;
+      writeAudit({
+        ev: degraded
+          ? "rate_lru_aggregate_only"
+          : "rate_lru_per_source_restored",
+        kind,
+      });
     }
-    const perSource = aggregateOnly ? 0 : bucket.take(source);
+    const perSource = degraded ? 0 : bucket.take(source);
     // The aggregate is a second layer, not a fallback after the source bucket
     // empties: rotating source keys must not mint an unlimited global budget.
-    const global = credentialless ? aggregate() : 0;
+    // A degraded kind has no per-source limiter, so even credentialed
+    // failures must pay the aggregate rather than go unlimited.
+    const global = credentialless || degraded ? aggregate() : 0;
     return perSource || global;
   };
   const challenge = (error) =>
@@ -804,7 +807,7 @@ export function createRequestHandler({
     // A malformed/unknown bearer is still credential-less for the aggregate.
     // Only an authenticator that positively recognizes its family may exempt
     // an expired or revoked bearer from the anonymous aggregate.
-    const wait = charge("mcp_anon", sourceKey(req), !knownFamily);
+    const wait = charge("mcp_anon", sourceKey(req));
     if (wait) return throttled(req, res, wait);
     closeEarly(req, res);
     const challengeError = error
@@ -1055,7 +1058,11 @@ export function createRequestHandler({
     if (req.method === "POST") {
       if (
         (pathname === "/oauth/token" || pathname === "/oauth/revoke") &&
-        !(await enforceSourcePolicy(req, res, pathname.slice(1)))
+        !(await enforceSourcePolicy(
+          req,
+          res,
+          pathname === "/oauth/token" ? "token" : "revoke",
+        ))
       )
         return null;
       if (declaredTooLarge(req, CONSTANTS.OAUTH_BODY_CAP_BYTES)) {
@@ -1164,7 +1171,7 @@ export function createRequestHandler({
               secFetchSite:
                 String(req.headers?.["sec-fetch-site"] || "").toLowerCase() ||
                 undefined,
-              route: state.pathname.slice(1),
+              route: state.pathname === "/oauth/token" ? "token" : "revoke",
             });
         },
         // OAuth may reject a transaction-bearing consent POST after the outer

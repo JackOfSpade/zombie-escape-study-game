@@ -1,7 +1,13 @@
 import { doorFrame } from "../doors";
-import { human, nearbyDoor, nearestGrip, nearestStation } from "../engine";
+import {
+  canBoard,
+  human,
+  nearbyDoor,
+  nearestGrip,
+  nearestStation,
+} from "../engine";
 import { surfacePoint } from "../furniture-geometry";
-import { CONFIG, distance, type Game } from "../model";
+import { distance, type Game } from "../model";
 import { objectName } from "../render";
 import { lookTarget, lookTargetPrompt } from "./targeting";
 
@@ -9,14 +15,7 @@ import { lookTarget, lookTargetPrompt } from "./targeting";
 export function interactionPrompt(game: Game, yaw?: number) {
   const a = human(game);
   if (a.grip) return "E · Release grip";
-  if (
-    a.floor === CONFIG.floors &&
-    !a.stairTravel &&
-    distance(a, { x: 21.5, y: 10.5 }) <= 2.8 &&
-    game.time < game.helicopter.until &&
-    game.helicopter.passengers.length < 4
-  )
-    return "E · Board helicopter";
+  if (canBoard(game, a)) return "E · Board helicopter";
   if (yaw !== undefined) {
     const target = lookTarget(game, yaw);
     if (target) return lookTargetPrompt(game, target);

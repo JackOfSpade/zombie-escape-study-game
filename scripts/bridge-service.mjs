@@ -1,5 +1,5 @@
 import { fork } from "node:child_process";
-import { createHash, randomBytes } from "node:crypto";
+import { randomBytes } from "node:crypto";
 import {
   closeSync,
   lstatSync,
@@ -12,6 +12,8 @@ import {
 import { join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { privateDirectory } from "./chatgpt-tunnel-config.mjs";
+import { sha256 } from "./lib/digest.mjs";
+import { assertOwnerOnly } from "./lib/private-fs.mjs";
 const project = fileURLToPath(new URL("../", import.meta.url));
 export const defaults = {
   directory: join(project, ".local/bridge-service"),
@@ -22,14 +24,11 @@ export const defaults = {
 const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 function readPrivate(path) {
   const s = lstatSync(path);
-  if (
-    !s.isFile() ||
-    s.isSymbolicLink() ||
-    s.uid !== process.getuid?.() ||
-    s.mode & 0o077 ||
-    s.size > 8192
-  )
-    throw Error("Unsafe bridge service ownership record");
+  assertOwnerOnly(s, {
+    kind: "file",
+    maxBytes: 8192,
+    message: "Unsafe bridge service ownership record",
+  });
   return JSON.parse(readFileSync(path, "utf8"));
 }
 function record(options) {
@@ -42,7 +41,7 @@ function record(options) {
 }
 function optionsFor(options) {
   const o = { ...defaults, ...options };
-  o.root = createHash("sha256").update(realpathSync(o.root)).digest("hex");
+  o.root = sha256(realpathSync(o.root));
   if (!Number.isInteger(o.port) || o.port < 1 || o.port > 65535)
     throw Error("Invalid bridge port");
   return o;
@@ -153,13 +152,10 @@ export async function ensureBridge(options = {}) {
     const log = join(o.directory, "service.log");
     try {
       const stat = lstatSync(log);
-      if (
-        !stat.isFile() ||
-        stat.isSymbolicLink() ||
-        stat.uid !== process.getuid?.() ||
-        stat.mode & 0o077
-      )
-        throw Error("Unsafe bridge log");
+      assertOwnerOnly(stat, {
+        kind: "file",
+        message: "Unsafe bridge log",
+      });
     } catch (error) {
       if (error.code !== "ENOENT") throw error;
     }

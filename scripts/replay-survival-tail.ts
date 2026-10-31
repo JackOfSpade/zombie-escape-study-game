@@ -1,8 +1,8 @@
-import { createHash } from "node:crypto";
 import { readFileSync, writeFileSync } from "node:fs";
 import { step } from "../src/engine";
 import { type Game, distance } from "../src/model";
 import { gameFingerprint } from "./lib/game-fingerprint";
+import { sha256 } from "./lib/digest.mjs";
 const fixture =
     process.env.TAIL_FIXTURE ??
     "docs/evidence/threat-memory-1800-42-world.json",
@@ -10,7 +10,7 @@ const fixture =
     process.env.TAIL_REPORT ?? "docs/evidence/threat-memory-tail-42.json",
   seconds = Number(process.env.TAIL_SECONDS ?? 60);
 if (!Number.isFinite(seconds) || seconds <= 0 || seconds > 300)
-  throw Error("Tail duration must be within300 simulation seconds");
+  throw Error("Tail duration must be within 300 simulation seconds");
 const raw = readFileSync(fixture, "utf8"),
   g = JSON.parse(raw) as Game;
 if (g.status !== "playing" || !g.survivors[0].escaped)
@@ -77,11 +77,9 @@ for (let i = 0; i < Math.ceil(seconds * 30); i++) {
 const report = {
   mode: "Continuation of a captured NPC-only world under current source, not a fresh run or human learning/balance acceptance",
   fixture,
-  inputSha256: createHash("sha256").update(raw).digest("hex"),
+  inputSha256: sha256(raw),
   currentSource: gameFingerprint(),
-  runnerSha256: createHash("sha256")
-    .update(readFileSync(new URL(import.meta.url)))
-    .digest("hex"),
+  runnerSha256: sha256(readFileSync(new URL(import.meta.url))),
   start,
   seconds: g.time - start,
   stepSeconds: 1 / 30,

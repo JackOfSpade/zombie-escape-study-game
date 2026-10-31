@@ -179,7 +179,7 @@ header[aria-label="Game controls"] {
 .study-map-scroll {
   /* Rendering restores scrollTop explicitly; browser anchoring must not undo it. */
   overflow-anchor: none;
-  max-height: min(440px, 52dvh);
+  max-height: min(440px, calc(var(--view-height) * 0.52));
   overflow-y: auto;
   overflow-x: hidden;
   scrollbar-gutter: stable both-edges;

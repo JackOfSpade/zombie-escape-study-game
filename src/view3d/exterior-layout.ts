@@ -213,13 +213,17 @@ export function cityBackdrop(floor: Floor): CityBlock[] {
 export function cityLayout(floor: Floor): CityLayout | undefined {
   const b = floor.boundary;
   if (!b) return undefined;
+  const rows = b.rows.slice(b.top, b.bottom),
+    left = Math.min(...rows.map((r) => r.left)) - 1,
+    right = Math.max(...rows.map((r) => r.right)) + 1,
+    north = b.top - 3,
+    south = b.bottom + 3;
   if (floor.city) {
-    const rows = b.rows.slice(b.top, b.bottom);
     return {
-      left: Math.min(...rows.map((r) => r.left)) - 1,
-      right: Math.max(...rows.map((r) => r.right)) + 1,
-      north: b.top - 3,
-      south: b.bottom + 3,
+      left,
+      right,
+      north,
+      south,
       blocks: floor.city.obstacles
         .filter((o) => o.kind === "building")
         .map((o) => ({
@@ -234,12 +238,7 @@ export function cityLayout(floor: Floor): CityLayout | undefined {
         })),
     };
   }
-  const rows = b.rows.slice(b.top, b.bottom),
-    left = Math.min(...rows.map((r) => r.left)) - 1,
-    right = Math.max(...rows.map((r) => r.right)) + 1,
-    north = b.top - 3,
-    south = b.bottom + 3,
-    blocks: CityBlock[] = [],
+  const blocks: CityBlock[] = [],
     colors = ["#52616a", "#5e6260", "#514e48", "#687078", "#615754"];
   const add = (
     x: number,

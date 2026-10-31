@@ -2,7 +2,7 @@ import {
   QUESTION_DESIGN_GUIDANCE,
   QUESTION_ADAPTATION_GUIDANCE,
 } from "./lib/study-question-policy.mjs";
-import { randomUUID, timingSafeEqual } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import {
   readFileSync,
   writeFileSync,
@@ -13,6 +13,9 @@ import {
 import { dirname } from "node:path";
 import { validProbeKnowledge, validProbeOutcome } from "./lib/probe-reply.mjs";
 import { sha256 as hash } from "./lib/digest.mjs";
+import { safeEqual } from "./lib/safe-equal.mjs";
+import { isRecord as object } from "./lib/is-record.mjs";
+import { assertOwnerOnly } from "./lib/private-fs.mjs";
 import {
   NPC_DIALOGUE_GENERATION_INSTRUCTION,
   NPC_DIALOGUE_REVIEW_INSTRUCTION,
@@ -47,8 +50,6 @@ const ambientOperation = (operation) =>
 // Hidden game tabs may poll only once a minute. Both the relay's claim filter
 // and queue retention must outlast that cadence to preserve an awaited turn.
 export const HANDOFF_REQUESTER_LIVE_MS = 75_000;
-const object = (value) =>
-  value !== null && typeof value === "object" && !Array.isArray(value);
 /** Bounds for a native direct-study transcript returned once at completion. */
 export const DIRECT_TRANSCRIPT_LIMITS = Object.freeze({
   entries: 100,
@@ -128,6 +129,9 @@ export function nativeJobScope(job) {
 }
 export const nativePreparationJob = (job) =>
   ["generate", "assess"].includes(job.operation) && !!job.nativeScope;
+export const nativeJob = (job) =>
+  nativePreparationJob(job) ||
+  (job.operation === "tutor" && job.payload?.mode === "terminal-direct");
 export const legacyWorkerJob = (job) =>
   !nativePreparationJob(job) && job.payload?.mode !== "terminal-direct";
 /** The operation contract without legacy worker-session instructions. */
@@ -774,22 +778,16 @@ export function createHandoffQueue({
   if (file) {
     mkdirSync(dirname(file), { recursive: true, mode: 0o700 });
     const parent = lstatSync(dirname(file));
-    if (
-      parent.isSymbolicLink() ||
-      parent.uid !== process.getuid?.() ||
-      parent.mode & 0o077
-    )
-      throw Error("Handoff directory must be owner-only and not a symlink");
+    assertOwnerOnly(parent, {
+      message: "Handoff directory must be owner-only and not a symlink",
+    });
     try {
       const stat = lstatSync(file);
-      if (
-        stat.isSymbolicLink() ||
-        !stat.isFile() ||
-        stat.uid !== process.getuid?.() ||
-        stat.mode & 0o077 ||
-        stat.size > maxBytes
-      )
-        throw Error("Unsafe handoff state file");
+      assertOwnerOnly(stat, {
+        kind: "file",
+        maxBytes,
+        message: "Unsafe handoff state file",
+      });
       const saved = JSON.parse(readFileSync(file, "utf8"));
       if (saved.schema !== 1 || !Array.isArray(saved.jobs))
         throw Error("Invalid handoff state");
@@ -973,8 +971,7 @@ export function createHandoffQueue({
           j.worker === worker &&
           j.claim === claim &&
           j.status === "done" &&
-          (nativePreparationJob(j) ||
-            (j.operation === "tutor" && j.payload.mode === "terminal-direct")),
+          nativeJob(j),
       );
       if (!job) return;
       return {
@@ -1129,12 +1126,7 @@ export function createHandoffQueue({
           previous.chatCode = chatCode;
           save();
         }
-        if (
-          nativePreparationJob(previous) ||
-          (previous.operation === "tutor" &&
-            previous.payload.mode === "terminal-direct")
-        )
-          polled.set(previous.id, now());
+        if (nativeJob(previous)) polled.set(previous.id, now());
         return { id: previous.id, hash: previous.hash };
       }
       // Answered and abandoned queued jobs expire after a day. An old request
@@ -1178,11 +1170,7 @@ export function createHandoffQueue({
       save();
       const retained = new Set(state.jobs.map((j) => j.id));
       for (const id of polled.keys()) if (!retained.has(id)) polled.delete(id);
-      if (
-        nativePreparationJob(job) ||
-        (job.operation === "tutor" && job.payload.mode === "terminal-direct")
-      )
-        polled.set(job.id, now());
+      if (nativeJob(job)) polled.set(job.id, now());
       return { id: job.id, hash: job.hash };
     },
     result(id, digest) {
@@ -1338,14 +1326,7 @@ export function createHandoffQueue({
       checkEnabled();
       purgeChatter();
       const job = state.jobs.find((j) => j.id === id);
-      if (
-        !job ||
-        job.worker !== worker ||
-        typeof claim !== "string" ||
-        typeof job.claim !== "string" ||
-        claim.length !== job.claim.length ||
-        !timingSafeEqual(Buffer.from(claim), Buffer.from(job.claim))
-      )
+      if (!job || job.worker !== worker || !safeEqual(claim, job.claim))
         throw Error("Wrong worker, job or claim");
       checkAutonomous(job.operation, job.payload);
       restoredLegacyClaims.delete(job.id);

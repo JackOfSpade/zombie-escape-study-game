@@ -220,10 +220,10 @@ async function cleanOrphanSpeech(tempRoot, alive) {
   }
   let inspected = 0;
   for await (const entry of root) {
-    const match =
-      /^zombie-npc-speech-v1-([1-9][0-9]{0,9})-[A-Za-z0-9]{6}$/.exec(
-        entry.name,
-      );
+    if (!entry.name.startsWith(NPC_SPEECH_TEMP_PREFIX)) continue;
+    const match = /^([1-9][0-9]{0,9})-[A-Za-z0-9]{6}$/.exec(
+      entry.name.slice(NPC_SPEECH_TEMP_PREFIX.length),
+    );
     if (!match) continue;
     if (++inspected > 128) break;
     const pid = Number(match[1]),
@@ -307,12 +307,22 @@ export function createNpcSpeechService(options = {}) {
     (directory ??= (async () => {
       const root = options.tempRoot ?? tmpdir();
       await cleanOrphanSpeech(root, options.isProcessAlive ?? processAlive);
-      const path = await mkdtemp(
-        join(root, `${NPC_SPEECH_TEMP_PREFIX}${process.pid}-`),
-      );
-      await chmod(path, 0o700);
+      let path;
+      try {
+        path = await mkdtemp(
+          join(root, `${NPC_SPEECH_TEMP_PREFIX}${process.pid}-`),
+        );
+        await chmod(path, 0o700);
+      } catch (error) {
+        if (path)
+          await rm(path, { recursive: true, force: true }).catch(() => {});
+        throw error;
+      }
       return path;
-    })());
+    })().catch((error) => {
+      directory = undefined;
+      throw error;
+    }));
   const drop = (ticket) => {
     const record = tickets.get(ticket);
     if (!record) return;

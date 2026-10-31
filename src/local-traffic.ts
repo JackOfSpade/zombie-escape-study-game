@@ -54,6 +54,7 @@ export function trafficVelocity(
   if (collision(preferred) < 0.01) return preferred;
   const nx = preferred.x / speed,
     ny = preferred.y / speed;
+  const previous = a.physics;
   let best = { x: 0, y: 0 },
     score = collision(best) + 2.2,
     chosenSide = 0;
@@ -68,7 +69,6 @@ export function trafficVelocity(
         x: (nx * cos - ny * sin) * speed * scale,
         y: (ny * cos + nx * sin) * speed * scale,
       };
-      const previous = a.physics;
       const continuity = previous
         ? Math.hypot(v.x - previous.x, v.y - previous.y) / speed
         : 0;
@@ -87,11 +87,9 @@ export function trafficVelocity(
         y: a.y + (v.y / (speed * scale)) * look,
       };
       if (!walkSegment(g.floors[a.floor], a, end)) continue;
-      if (value < score) {
-        score = value;
-        best = v;
-        chosenSide = Math.sign(degrees);
-      }
+      score = value;
+      best = v;
+      chosenSide = Math.sign(degrees);
     }
   }
   if (chosenSide && !a.trafficPass)

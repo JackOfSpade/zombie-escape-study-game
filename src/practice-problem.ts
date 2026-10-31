@@ -52,7 +52,7 @@ export function devProblem(
   if (contract.track === "PE") {
     // The static PE bank cannot adapt to arbitrary declared gaps, so it never
     // appends them as extra chores; the RNG draws above stay unchanged.
-    const question = productPractice(contract, n * 100);
+    const question = productPractice(contract);
     return {
       ...question,
       starter: "",

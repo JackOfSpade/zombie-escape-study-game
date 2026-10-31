@@ -1770,12 +1770,7 @@ export function createOAuthServer({
       return fail(false);
     const match = /^Bearer +([A-Za-z0-9._~+/-]+=*)$/i.exec(header);
     if (!match || match[1].length > 512) return fail(true);
-    const presented = sha(match[1]);
-    let record = null;
-    for (const [hash, candidate] of accessTokens) {
-      if (crypto.timingSafeEqual(presented, Buffer.from(hash, "hex")))
-        record = candidate;
-    }
+    const record = fixedDigestLookup(accessTokens, shaHex(match[1]));
     const family = record ? families.get(record.familyId) : null;
     if (
       !record ||
@@ -1795,13 +1790,7 @@ export function createOAuthServer({
 
   async function handle(req, res, pathname, serverContext = {}) {
     if (typeof pathname !== "string") return false;
-    const known =
-      discoveryDocument(pathname) !== null ||
-      pathname === AUTHORIZATION_PATH ||
-      pathname === TOKEN_PATH ||
-      pathname === REVOKE_PATH;
     if (
-      !known &&
       !pathname.startsWith("/.well-known/") &&
       !pathname.startsWith("/oauth/")
     )

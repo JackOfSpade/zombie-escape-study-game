@@ -1,7 +1,8 @@
 import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
-import { createHash } from "node:crypto";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { sha256 } from "./lib/digest.mjs";
+import { isRecord as record } from "./lib/is-record.mjs";
 import {
   buildNpcDialogueReview,
   NPC_DIALOGUE_ISSUES,
@@ -89,9 +90,6 @@ export interface SuppliedRealismResult {
   provenance: ResultProvenance;
 }
 
-function record(value: unknown): value is Record<string, unknown> {
-  return !!value && typeof value === "object" && !Array.isArray(value);
-}
 function text(value: unknown, limit: number): value is string {
   return typeof value === "string" && !!value.trim() && value.length <= limit;
 }
@@ -277,24 +275,21 @@ function fixtureContext(
       name: "Survivor",
       role: "survivor",
     },
-    source = createHash("sha256")
-      .update(
-        JSON.stringify([
-          entry.situation,
-          entry.facts,
-          entry.unknowns,
-          entry.rubric,
-          example.decision,
-          example.text,
-          example.refs,
-          ...(entry.speaker ? [entry.speaker] : []),
-          ...(entry.conversation || entry.recentLines || example.conversation
-            ? [entry.conversation, entry.recentLines, example.conversation]
-            : []),
-        ]),
-      )
-      .digest("hex")
-      .slice(0, 16);
+    source = sha256(
+      JSON.stringify([
+        entry.situation,
+        entry.facts,
+        entry.unknowns,
+        entry.rubric,
+        example.decision,
+        example.text,
+        example.refs,
+        ...(entry.speaker ? [entry.speaker] : []),
+        ...(entry.conversation || entry.recentLines || example.conversation
+          ? [entry.conversation, entry.recentLines, example.conversation]
+          : []),
+      ]),
+    ).slice(0, 16);
   return {
     requestId: `realism-${entry.id}-${source}`,
     actorId: speaker.id,

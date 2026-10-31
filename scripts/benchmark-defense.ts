@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { FURNITURE, type Roadmap } from "../src/model";
 import {
@@ -8,6 +7,7 @@ import {
   type DefensePolicy,
 } from "./lib/defense-scenario";
 import { gameFingerprint } from "./lib/game-fingerprint";
+import { sha256 } from "./lib/digest.mjs";
 const roadmap: Roadmap = JSON.parse(
   readFileSync("public/curriculum.json", "utf8"),
 );
@@ -27,7 +27,7 @@ const driverFiles = [
   "scripts/lib/defense-scenario.ts",
 ].map((path) => ({
   path,
-  sha256: createHash("sha256").update(readFileSync(path)).digest("hex"),
+  sha256: sha256(readFileSync(path)),
 }));
 const output =
   process.env.DEFENSE_REPORT ?? "docs/evidence/defense-benchmark.json";

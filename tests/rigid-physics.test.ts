@@ -370,7 +370,7 @@ test("an active end grip and rotating furniture continue identically after a sav
   assert.ok(Math.abs(o.angle ?? 0) > 0.05);
 });
 
-test("wall fixtures refresh once per floor/tick, independently of body count, and still follow changed tiles", () => {
+test("wall change detection builds no tile strings, independently of body count, and still follows changed tiles", () => {
   const { g, a, f } = scene();
   let scans = 0;
   for (const row of f.tiles)
@@ -388,7 +388,7 @@ test("wall fixtures refresh once per floor/tick, independently of body count, an
   }
   beginPhysics(g);
   finishPhysics(g, 1 / 30);
-  assert.equal(scans, 34);
+  assert.equal(scans, 0);
   a.y = 12.5;
   f.tiles[12][11] = 1;
   for (let i = 0; i < 30; i++) {
@@ -397,7 +397,7 @@ test("wall fixtures refresh once per floor/tick, independently of body count, an
     finishPhysics(g, 1 / 30);
   }
   assert.ok(a.x < 10.8, "a newly added wall actually blocks the body");
-  assert.equal(scans, 34 * 31);
+  assert.equal(scans, 0);
 });
 test("same-direction NPC traffic follows its lane instead of orbiting the next body", () => {
   const { g, a } = scene();

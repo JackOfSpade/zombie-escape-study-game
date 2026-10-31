@@ -1,4 +1,4 @@
-const object = (v) => v !== null && typeof v === "object" && !Array.isArray(v);
+import { isRecord as object } from "./is-record.mjs";
 const plain = (v, max) =>
   typeof v === "string" &&
   !!v.trim() &&

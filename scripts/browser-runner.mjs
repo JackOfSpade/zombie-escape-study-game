@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { sha256 } from "./lib/digest.mjs";
 import { docker, boundedText } from "./runner-process.mjs";
 import {
   browserContainerOptions,
@@ -16,10 +16,8 @@ export async function executeReact(input, id) {
       language: "typescript",
       environment: "react",
       startedAt,
-      codeHash: createHash("sha256").update(spec.code).digest("hex"),
-      specHash: createHash("sha256")
-        .update(browserSpecText(spec.code, spec.steps))
-        .digest("hex"),
+      codeHash: sha256(spec.code),
+      specHash: sha256(browserSpecText(spec.code, spec.steps)),
       limits: { network: "none", hostMounts: false, ...browserLimits },
     };
   let imageId;
@@ -96,7 +94,7 @@ export async function executeReact(input, id) {
           dataUrl: "data:image/jpeg;base64," + bytes.toString("base64"),
           width: 640,
           height: 400,
-          sha256: createHash("sha256").update(bytes).digest("hex"),
+          sha256: sha256(bytes),
         };
     }
     if (observed) delete observed.preview;

@@ -3,12 +3,15 @@ import {
   FURNITURE,
   H,
   W,
+  between,
   rand,
+  shuffle,
   type Floor,
   type Furniture,
   type FurnitureKind,
   type OfficeRoomType,
   type Point,
+  type Rng,
 } from "./model";
 import { boxesOverlap } from "./furniture-geometry";
 import { canPlace, inFurniture, wall } from "./spatial";
@@ -85,16 +88,6 @@ interface Group {
   pieces: Piece[];
   /** A fixed anchor instead of a searched one. */
   at?: { x: number; y: number; angle: number };
-}
-type Rng = { rng: number };
-const between = (r: Rng, lo: number, hi: number) =>
-  lo + Math.floor(rand(r) * (hi - lo + 1));
-function shuffle<T>(r: Rng, items: T[]) {
-  for (let i = items.length - 1; i > 0; i--) {
-    const j = Math.floor(rand(r) * (i + 1));
-    [items[i], items[j]] = [items[j], items[i]];
-  }
-  return items;
 }
 const N = 0,
   S = Math.PI,

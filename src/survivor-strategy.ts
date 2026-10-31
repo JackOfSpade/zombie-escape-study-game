@@ -1,32 +1,44 @@
-import { distance, rand, type Actor, type Game, type Point } from "./model";
+import {
+  HELIPAD,
+  HELIPAD_RADIUS,
+  distance,
+  rand,
+  type Actor,
+  type Game,
+  type Point,
+} from "./model";
 import { survivorPath, walkSegment, type NavStep } from "./navigation";
 import { solid } from "./spatial";
 
+/** Smallest distance from `p` to the polyline `origin -> ...route`. */
+function closestApproach(origin: Point, route: Point[], p: Point) {
+  let closest = Infinity,
+    from = origin;
+  for (const to of route) {
+    const dx = to.x - from.x,
+      dy = to.y - from.y,
+      length = dx * dx + dy * dy;
+    const t = length
+      ? Math.max(
+          0,
+          Math.min(1, ((p.x - from.x) * dx + (p.y - from.y) * dy) / length),
+        )
+      : 0;
+    closest = Math.min(
+      closest,
+      distance(p, { x: from.x + dx * t, y: from.y + dy * t }),
+    );
+    from = to;
+  }
+  return closest;
+}
+/** Score added per enemy the route passes too close to. */
+export const CONTACT_PENALTY = 1000;
 /** Visible enemies near any part of the route, not just its destination. */
 export function routeExposure(origin: Point, route: Point[], enemies: Point[]) {
   let exposure = 0;
   for (const enemy of enemies) {
-    let closest = Infinity,
-      from = origin;
-    for (const to of route) {
-      const dx = to.x - from.x,
-        dy = to.y - from.y,
-        length = dx * dx + dy * dy;
-      const t = length
-        ? Math.max(
-            0,
-            Math.min(
-              1,
-              ((enemy.x - from.x) * dx + (enemy.y - from.y) * dy) / length,
-            ),
-          )
-        : 0;
-      closest = Math.min(
-        closest,
-        distance(enemy, { x: from.x + dx * t, y: from.y + dy * t }),
-      );
-      from = to;
-    }
+    const closest = closestApproach(origin, route, enemy);
     exposure += Math.max(0, 1.25 - closest) ** 2;
   }
   return exposure;
@@ -63,10 +75,10 @@ export function chooseRetreat(
         clearance +
         exits * 0.7 -
         danger -
-        routeContacts(a, route, enemies) * 1000 -
+        routeContacts(a, route, enemies) * CONTACT_PENALTY -
         vaults * 0.5 +
         (pickup
-          ? -Math.max(0, distance(point, { x: 21.5, y: 10.5 }) - 2.8) *
+          ? -Math.max(0, distance(point, HELIPAD) - HELIPAD_RADIUS) *
             (1 + a.risk * 0.4)
           : 0) +
         (a.access.includes(a.floor) ? -distance(point, f.stairs) * 0.15 : 0) +
@@ -150,27 +162,7 @@ export function chooseRetreat(
 export function routeContacts(origin: Point, route: Point[], enemies: Point[]) {
   let contacts = 0;
   for (const enemy of enemies) {
-    let closest = Infinity,
-      from = origin;
-    for (const to of route) {
-      const dx = to.x - from.x,
-        dy = to.y - from.y,
-        length = dx * dx + dy * dy;
-      const t = length
-        ? Math.max(
-            0,
-            Math.min(
-              1,
-              ((enemy.x - from.x) * dx + (enemy.y - from.y) * dy) / length,
-            ),
-          )
-        : 0;
-      closest = Math.min(
-        closest,
-        distance(enemy, { x: from.x + dx * t, y: from.y + dy * t }),
-      );
-      from = to;
-    }
+    const closest = closestApproach(origin, route, enemy);
     if (closest < Math.min(1.1, distance(origin, enemy) - 0.03)) contacts++;
   }
   return contacts;
@@ -180,7 +172,7 @@ export function unsafeReturn(g: Game, a: Actor, enemies: Point[]) {
     e = a.intent ? g.encounters[a.intent] : undefined;
   const target =
     a.floor === g.floors.length - 1
-      ? { x: 21.5, y: 10.5 }
+      ? HELIPAD
       : a.access.includes(a.floor)
         ? f.stairs
         : e && e.floor === a.floor && e.state !== "consumed"

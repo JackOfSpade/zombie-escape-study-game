@@ -17,7 +17,7 @@ import {
   restoreFullQueues,
 } from "./learner";
 import { roleFocused } from "./career-profile";
-import type { LearnerLedger, LearningAttempt } from "./learning-model";
+import type { LearnerLedger } from "./learning-model";
 import { learningAttemptRoot, servedLearningAttempts } from "./learning-model";
 import type { Roadmap, Track } from "./model";
 import {
@@ -65,6 +65,18 @@ function block(raw: string, name: string) {
   if (raw.split(start).length !== 2 || raw.split(end).length !== 2)
     throw Error(`Missing or repeated ${name} block`);
   return raw.split(start)[1].split(end)[0];
+}
+function gapLineMap(source: string, track?: string) {
+  const text = track ? block(source, `${track}_PROGRESS`) : source;
+  const lines = new Map<string, string>();
+  for (const line of section(
+    text,
+    "0.6 Facet gaps, unknowns, and dependencies",
+  ).text.split("\n")) {
+    const id = /^\| (G\d{4}) \|/.exec(line)?.[1];
+    if (id && !lines.has(id)) lines.set(id, line);
+  }
+  return lines;
 }
 function replaceBlock(raw: string, name: string, value: string) {
   const old = block(raw, name);
@@ -145,12 +157,6 @@ function upsert(raw: string, rows: string[][]) {
 }
 const short = (id: string) => id.split(":").at(-1)!;
 const topic = (id: string) => short(id).split(".")[0];
-function root(l: LearnerLedger, a: LearningAttempt) {
-  return learningAttemptRoot(l, a);
-}
-function visits(l: LearnerLedger) {
-  return servedLearningAttempts(l);
-}
 function count(
   r: Roadmap,
   l: LearnerLedger,
@@ -267,7 +273,7 @@ function validate(r: Roadmap, l: LearnerLedger) {
       baselineSessions.has(a.session)
     )
       throw Error("Invalid or historical attempt allocation");
-    root(l, a);
+    learningAttemptRoot(l, a);
   }
   for (const e of l.evidence) {
     const a = l.attempts.find((a) => a.id === e.attemptId);
@@ -663,7 +669,7 @@ export async function prepareRoadmapExport(
       gapIds[key] = formatIdentifier("G", counters.nextGap++, 4);
     }
   }
-  const served = visits(l),
+  const served = servedLearningAttempts(l),
     priorServed = l.roadmapAdoptions?.at(-1)?.localServedAttempts,
     recentServed = priorServed
       ? served.filter((a) => !priorServed.includes(a.id))
@@ -933,22 +939,13 @@ export async function prepareRoadmapExport(
       ),
     );
     p = inSection(p, "0.6 Facet gaps, unknowns, and dependencies", (s) => {
+      const baseGapLines = gapLineMap(r.tracks[t].progress);
+      let parentGapLines: Map<string, string> | undefined;
       let out = table(s, (c) => {
         if (!/^G\d{4}$/.test(c[0])) return;
-        const baseLine = section(
-          r.tracks[t].progress,
-          "0.6 Facet gaps, unknowns, and dependencies",
-        )
-          .text.split("\n")
-          .find((line) => line.startsWith(`| ${c[0]} |`));
+        const baseLine = baseGapLines.get(c[0]);
         const importedLine =
-          baseLine ??
-          section(
-            block(parent, `${t}_PROGRESS`),
-            "0.6 Facet gaps, unknowns, and dependencies",
-          )
-            .text.split("\n")
-            .find((line) => line.startsWith(`| ${c[0]} |`));
+          baseLine ?? (parentGapLines ??= gapLineMap(parent, t)).get(c[0]);
         if (!importedLine) return;
         c = split(importedLine);
         const m = /^([TX]\d{2}\.\d+) \/ D([1-4])$/.exec(c[1]);

@@ -1,7 +1,7 @@
-import { createHash } from "node:crypto";
 import { readFileSync, writeFileSync } from "node:fs";
 import { compoundEgress } from "./lib/compound-egress";
 import { gameFingerprint } from "./lib/game-fingerprint";
+import { sha256 } from "./lib/digest.mjs";
 const r = JSON.parse(readFileSync("public/curriculum.json", "utf8"));
 const cases = [0, 1, 2].map((seed) => compoundEgress(r, seed, true));
 const report = {
@@ -19,7 +19,7 @@ const report = {
     "scripts/probe-compound-egress.ts",
   ].map((path) => ({
     path,
-    sha256: createHash("sha256").update(readFileSync(path)).digest("hex"),
+    sha256: sha256(readFileSync(path)),
   })),
   cases,
 };

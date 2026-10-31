@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { sha256 } from "./lib/digest.mjs";
 import { createServer, request } from "node:http";
 import { open, readFile, realpath } from "node:fs/promises";
 import { extname, resolve, sep } from "node:path";
@@ -41,9 +41,7 @@ export async function createAppServer({
       .finally(() => (restarting = null));
   };
   const root = await realpath(directory);
-  const build = createHash("sha256")
-    .update(await readFile(resolve(root, "index.html")))
-    .digest("hex");
+  const build = sha256(await readFile(resolve(root, "index.html")));
   return createServer(async (req, res) => {
     res.setHeader("X-Content-Type-Options", "nosniff");
     res.setHeader("Cache-Control", "no-store");

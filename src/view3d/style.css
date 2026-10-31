@@ -11,7 +11,8 @@
   top: calc(var(--hud-inset) + 56px);
   right: var(--hud-inset);
   width: clamp(140px, 22%, 220px);
-  height: clamp(140px, 22vw, 220px);
+  height: auto;
+  aspect-ratio: 1 / 1;
   border: 1px solid #536361;
   border-radius: 8px;
   box-shadow: 0 4px 16px #0009;
@@ -67,10 +68,10 @@ body.first-person .world-top {
   max-width: 65%;
   z-index: 1;
 }
-@media (max-width: 600px) {
+@container (max-width: 600px) {
   #world.minimap {
     width: 130px;
-    height: 130px;
+    height: auto;
   }
   #pointer-hint {
     bottom: 120px;

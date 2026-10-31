@@ -1,4 +1,4 @@
-import { timingSafeEqual } from "node:crypto";
+import { safeEqual } from "./lib/safe-equal.mjs";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { join, resolve } from "node:path";
 import { createStudyBridgeServer } from "./study-bridge-server.mjs";
@@ -78,12 +78,7 @@ export async function startBridgeService(boot, options = {}) {
       async route(req, res) {
         if (req.url !== "/_bridge-service") return handoff.route(req, res);
         const token = req.headers["x-bridge-control"];
-        if (
-          req.headers.origin ||
-          typeof token !== "string" ||
-          Buffer.byteLength(token) !== Buffer.byteLength(boot.token) ||
-          !timingSafeEqual(Buffer.from(token), Buffer.from(boot.token))
-        ) {
+        if (req.headers.origin || !safeEqual(token, boot.token)) {
           res.writeHead(403);
           res.end(
             JSON.stringify({ error: "Bridge owner authorization required" }),

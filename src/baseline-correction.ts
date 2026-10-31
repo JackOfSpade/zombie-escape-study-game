@@ -1,6 +1,6 @@
 import { facetProofValid, independentProofValid } from "./historical-proof";
 import { historicalScope } from "./historical-scope";
-import type { LearnerLedger } from "./learning-model";
+import { reviewSignature, type LearnerLedger } from "./learning-model";
 import type { Roadmap } from "./model";
 import {
   baselineCheckpointRefs,
@@ -31,15 +31,9 @@ export function reviewBaselineCorrections(
           nextReview = parsed.resume?.reviews
             ? parsed.resume.reviews[id]
             : review;
-        const signature = (value: typeof review | undefined) =>
-          JSON.stringify(
-            Object.entries(value ?? {})
-              .filter(([, v]) => v !== undefined)
-              .sort(([a], [b]) => a.localeCompare(b)),
-          );
         if (
           !retentionReviewed.has(id) &&
-          (signature(review) !== signature(nextReview) ||
+          (reviewSignature(review) !== reviewSignature(nextReview) ||
             (depth === 1 &&
               review &&
               parsed.tracks[track].objectives.find((item) => item.id === o.id)

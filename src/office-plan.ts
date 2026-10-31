@@ -3,9 +3,12 @@ import {
   type Furniture,
   type Game,
   type Point,
+  type Rng,
   H,
   W,
+  between,
   rand,
+  shuffle,
 } from "./model";
 import { footprintTiles } from "./building-layout";
 import { carveStairwells } from "./stairwell";
@@ -22,16 +25,7 @@ import {
 /** Version 5 office floor plans: six chain sectors of varied shape between
  * the rear entry and the front stairs. See docs/FLOOR_PLAN_DESIGN.md. */
 export type PlanFamily = "stack" | "columns" | "serpentine";
-type Rng = { rng: number };
-const int = (r: Rng, lo: number, hi: number) =>
-  lo + Math.floor(rand(r) * (hi - lo + 1));
-function shuffle<T>(r: Rng, items: T[]) {
-  for (let i = items.length - 1; i > 0; i--) {
-    const j = Math.floor(rand(r) * (i + 1));
-    [items[i], items[j]] = [items[j], items[i]];
-  }
-  return items;
-}
+const int = between;
 
 /** Interior cell labels while planning: -2 outside the bounding box, -1 wall
  * (or outside the shell inside the box), 0..5 the sector order. */
@@ -755,7 +749,7 @@ function attempt(
   return { plan, roomOf, terminals };
 }
 
-function fieldDoor(
+export function fieldDoor(
   g: Game,
   f: Floor,
   id: string,

@@ -3,25 +3,13 @@ import {
   type FacetProof,
   type LearnerLedger,
 } from "./learning-model";
-import type { Roadmap } from "./model";
+import type { Roadmap, Track } from "./model";
 import { observationInvalidated } from "./observation-validity";
 import type {
   ImportedFacetMapping,
   RoadmapAdoptionReceipt,
 } from "./roadmap-adoption-types";
-import { inspectMergedDocument } from "./roadmap-structure";
-const cache = new WeakMap<
-  RoadmapAdoptionReceipt,
-  { text: string; rows: ReturnType<typeof inspectMergedDocument>["rows"] }
->();
-function rows(receipt: RoadmapAdoptionReceipt) {
-  const text = receipt.proposal.canonical,
-    old = cache.get(receipt);
-  if (old?.text === text) return old.rows;
-  const rows = inspectMergedDocument(text).rows;
-  cache.set(receipt, { text, rows });
-  return rows;
-}
+import { receiptRows } from "./roadmap-structure";
 /** Manual merged roadmaps may bind final evidence in the authoritative final
  * register instead of repeating a synthetic D4 label in the observation title.
  * An explicit conflicting depth is never overridden by that cross-reference. */
@@ -41,7 +29,7 @@ function finalRegisterDepth(
   const heading = integration
     ? "0.8 Integration coverage"
     : "0.7 Topic transfer and retention";
-  const row = [...rows(receipt)].find(
+  const row = [...receiptRows(receipt)].find(
     ([key]) =>
       key.startsWith(`${track}_PROGRESS/${heading}/`) && key.endsWith(`/${id}`),
   )?.[1];
@@ -81,7 +69,7 @@ export function importedMappingValid(
       throw Error(
         "Imported proof requires a canonical source evidence identifier",
       );
-    const found = [...rows(v)].find(
+    const found = [...receiptRows(v)].find(
       ([key]) =>
         key.startsWith(`${track}_PROGRESS/0.5 Assessment evidence register/`) &&
         key.endsWith(`/${ref}`),
@@ -111,7 +99,7 @@ export function importedMappingValid(
     )
       throw Error("Imported evidence scope or exact excerpt does not match");
     if (m.outcome === "unknown") continue;
-    const attempt = [...rows(v)]
+    const attempt = [...receiptRows(v)]
       .find(
         ([key]) =>
           key.startsWith(`${track}_PROGRESS/0.5.1 Attempt status register/`) &&
@@ -198,6 +186,18 @@ export function importedProofValid(
 }
 export const adoptedSourceText = (l?: LearnerLedger) =>
   l?.roadmapAdoptions?.at(-1)?.proposal.canonical;
+export const adoptedTrackProgress = (
+  l: LearnerLedger | undefined,
+  track: Track,
+) =>
+  adoptedSourceText(l)
+    ?.split(`<!-- BEGIN ${track}_PROGRESS -->`)[1]
+    ?.split(`<!-- END ${track}_PROGRESS -->`)[0];
+export const trackProgressContext = (
+  l: LearnerLedger | undefined,
+  r: Roadmap,
+  track: Track,
+) => adoptedTrackProgress(l, track) ?? r.tracks[track].progress;
 export function importedEnvironmentStatus(
   r: Roadmap,
   l: LearnerLedger,
@@ -208,7 +208,7 @@ export function importedEnvironmentStatus(
   for (const receipt of l.roadmapAdoptions ?? [])
     for (const m of receipt.proposal.environment ?? []) {
       if (m.envId !== id) continue;
-      const found = [...rows(receipt)].find(
+      const found = [...receiptRows(receipt)].find(
         ([key]) =>
           key.startsWith(
             "PE_PROGRESS/0.8.1 Environment-backed verification/",
@@ -251,7 +251,7 @@ export function importedEnvironmentEvidence(
   for (const receipt of l.roadmapAdoptions ?? [])
     for (const mapping of receipt.proposal.environment ?? []) {
       if (mapping.envId !== id || mapping.status === "U") continue;
-      const row = [...rows(receipt)].find(
+      const row = [...receiptRows(receipt)].find(
         ([key]) =>
           key.startsWith(
             "PE_PROGRESS/0.8.1 Environment-backed verification/",

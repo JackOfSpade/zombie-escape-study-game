@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { edit, ensureProblem } from "../src/ai";
 import {
@@ -26,12 +25,11 @@ import { solid } from "../src/spatial";
 import { canSee, sightRadius } from "../src/visibility";
 import { pushAxis, walkTo as simpleWalk } from "./lib/defense-scenario";
 import { gameFingerprint } from "./lib/game-fingerprint";
+import { sha256 as sha } from "./lib/digest.mjs";
 const input =
     process.env.LATE_WORLD ??
     "docs/evidence/inflow-study-retreat-0-final-world.json",
   prefix = process.env.LATE_REPORT ?? "docs/evidence/late-extraction-shields-0";
-const sha = (s: string | Buffer) =>
-  createHash("sha256").update(s).digest("hex");
 const raw = readFileSync(input),
   g = recover(JSON.parse(raw.toString()) as Game),
   a = human(g),

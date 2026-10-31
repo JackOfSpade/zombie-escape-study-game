@@ -40,7 +40,6 @@ export function executionText(job: WorkspaceExecution) {
     if (steps.length) {
       lines.push("Automated task actions and checks:");
       for (const s of steps) {
-        if (typeof s.selector !== "string") throw Error("Invalid saved action");
         const expected =
           s.kind === "expect-text"
             ? ` equals ${JSON.stringify(s.text)}`

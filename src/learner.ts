@@ -50,18 +50,19 @@ import { externalResolutionRow } from "./roadmap-active-work";
 import { allocationCounters, formatIdentifier } from "./roadmap-identifiers";
 import { sourceSessionStatus } from "./roadmap-structure";
 export const encounterKey = (e: Encounter) => `${e.runId ?? "legacy"}/${e.id}`;
+const localDateFormat = new Intl.DateTimeFormat("en-CA", {
+  timeZone: "America/Toronto",
+  year: "numeric",
+  month: "2-digit",
+  day: "2-digit",
+});
 export function localDate(at = new Date().toISOString()) {
-  const parts = new Intl.DateTimeFormat("en-CA", {
-    timeZone: "America/Toronto",
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-  }).formatToParts(new Date(at));
+  const parts = localDateFormat.formatToParts(new Date(at));
   return ["year", "month", "day"]
     .map((type) => parts.find((p) => p.type === type)!.value)
     .join("-");
 }
-const addDays = (day: string, n: number) => {
+export const addDays = (day: string, n: number) => {
   const d = new Date(`${day}T12:00:00Z`);
   d.setUTCDate(d.getUTCDate() + n);
   return d.toISOString().slice(0, 10);
@@ -288,7 +289,8 @@ export function restoreFullQueues(r: Roadmap, l: LearnerLedger) {
   }
   // Older focused saves may lack a full-profile cursor. Rebuild only PE,
   // keeping the curriculum's canonical order; Python never changed profile.
-  for (const t of ["PE"] as const) {
+  {
+    const t = "PE" as const;
     const s = l.tracks[t];
     if (s.phase === "COMPLETE" && s.cleared < 4) s.phase = "REPAIR_VERIFY";
     for (const name of incompleteTopics(r, l, t, s.tier))
@@ -446,6 +448,7 @@ export function eligibleLearning(
     const last = servedLearningAttempts(l)
       .filter((a) => a.contract.track === track)
       .at(-1);
+    const today = localDate(at);
     const due =
       last?.contract.review && s.phase !== "COMPLETE"
         ? undefined
@@ -454,7 +457,7 @@ export function eligibleLearning(
               (v) =>
                 v.objectiveId.startsWith(`${track}:`) &&
                 v.depth <= s.tier &&
-                v.due <= localDate(at) &&
+                v.due <= today &&
                 !baselineReviewSuspended(r, l, v) &&
                 (!focused || focusReviewEligible(r, l, v)),
             )
@@ -1367,12 +1370,9 @@ export function applyLearningAssessment(
         other.status === "served" &&
         attemptRoot(work, other) === attemptRoot(work, attempt),
     );
-    if (equivalent) {
-      attempt.status = "served";
-      attempt.endedAt = at;
-    } else {
-      attempt.status = "served";
-      attempt.endedAt = at;
+    attempt.status = "served";
+    attempt.endedAt = at;
+    if (!equivalent) {
       const c = attempt.contract,
         s = work.tracks[c.track];
       if (!c.review) {

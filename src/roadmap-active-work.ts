@@ -5,20 +5,8 @@ import type {
   ActiveAttemptSnapshot,
   RoadmapReconciliationJob,
 } from "./roadmap-adoption-types";
-import { inspectMergedDocument } from "./roadmap-structure";
+import { receiptRows } from "./roadmap-structure";
 const key = (e: Encounter) => `${e.runId ?? "legacy"}/${e.id}`;
-const sourceRows = new WeakMap<
-  object,
-  { text: string; rows: Map<string, string> }
->();
-function rows(receipt: NonNullable<LearnerLedger["roadmapAdoptions"]>[number]) {
-  const text = receipt.proposal.canonical,
-    cached = sourceRows.get(receipt);
-  if (cached?.text === text) return cached.rows;
-  const result = inspectMergedDocument(text).rows;
-  sourceRows.set(receipt, { text, rows: result });
-  return result;
-}
 const encounter = (g: Game, id: string) =>
   [...Object.values(g.encounters), ...g.study.archives].find(
     (e) => key(e) === id,
@@ -125,7 +113,7 @@ export function externalResolutionRow(l: LearnerLedger, a: LearningAttempt) {
     ),
     row =
       receipt &&
-      [...rows(receipt)].find(
+      [...receiptRows(receipt)].find(
         ([key]) =>
           key.startsWith(
             `${a.contract.track}_PROGRESS/0.5.1 Attempt status register/`,

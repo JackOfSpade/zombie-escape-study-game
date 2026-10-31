@@ -17,8 +17,7 @@ select,
 textarea {
   font: inherit;
 }
-button,
-.file-button {
+button {
   padding: 0.6rem 0.8rem;
   background: #203638;
   border: 1px solid #46605a;
@@ -26,8 +25,7 @@ button,
   color: inherit;
   cursor: pointer;
 }
-button:hover,
-.file-button:hover {
+button:hover {
   border-color: #76e8b1;
 }
 button:focus-visible,
@@ -212,9 +210,6 @@ textarea {
 details summary {
   cursor: pointer;
   padding: 0.3rem 0;
-}
-.file-button {
-  display: inline-block;
 }
 input[type="file"] {
   max-width: 100%;

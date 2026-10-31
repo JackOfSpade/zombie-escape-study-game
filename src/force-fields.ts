@@ -369,8 +369,52 @@ export function updateFields(g: Game, previous?: ReadonlyMap<string, Point>) {
 }
 const views = new WeakMap<
   Floor,
-  Map<string, { signature: string; floor: Floor }>
+  Map<string, { signature: ViewSignature; floor: Floor }>
 >();
+/** Furniture ids, plus each field's state, at the moment a view was built. */
+interface ViewSignature {
+  keyed: boolean;
+  ids: string[];
+  fields: unknown[];
+}
+function viewMatches(s: ViewSignature, f: Floor, a: Actor, keyed: boolean) {
+  if (s.keyed !== keyed || s.ids.length !== f.furniture.length) return false;
+  let k = 0;
+  for (let i = 0; i < f.furniture.length; i++) {
+    const o = f.furniture[i];
+    if (s.ids[i] !== o.id) return false;
+    if (!o.field) continue;
+    const v = s.fields;
+    if (
+      v[k++] !== o.destroyed ||
+      v[k++] !== o.x ||
+      v[k++] !== o.y ||
+      v[k++] !== o.w ||
+      v[k++] !== o.h ||
+      v[k++] !== o.angle ||
+      v[k++] !== o.open ||
+      v[k++] !== fieldAllows(o, a)
+    )
+      return false;
+  }
+  return true;
+}
+function viewSignature(f: Floor, a: Actor, keyed: boolean): ViewSignature {
+  const fields: unknown[] = [];
+  for (const o of f.furniture)
+    if (o.field)
+      fields.push(
+        o.destroyed,
+        o.x,
+        o.y,
+        o.w,
+        o.h,
+        o.angle,
+        o.open,
+        fieldAllows(o, a),
+      );
+  return { keyed, ids: f.furniture.map((o) => o.id), fields };
+}
 const virtual = new WeakSet<Floor>();
 /** Actor-specific navigation views keep personal access out of shared geometry. */
 export function survivorFloor(f: Floor, p: Point): Floor {
@@ -384,28 +428,15 @@ export function survivorFloor(f: Floor, p: Point): Floor {
   const a = p as Actor;
   // The view shares every non-field object by reference, so only fields and
   // the set of objects decide whether it must be rebuilt.
-  const signature = JSON.stringify([
-    (a.keys ?? 0) > 0,
-    f.furniture.map((o) =>
-      o.field
-        ? [
-            o.id,
-            o.destroyed,
-            o.x,
-            o.y,
-            o.w,
-            o.h,
-            o.angle,
-            o.open,
-            fieldAllows(o, a),
-          ]
-        : o.id,
-    ),
-  ]);
+  const keyed = (a.keys ?? 0) > 0;
   let map = views.get(f);
   if (!map) views.set(f, (map = new Map()));
   const old = map.get(a.id);
-  if (old?.signature === signature && old.floor.tiles === f.tiles)
+  if (
+    old &&
+    old.floor.tiles === f.tiles &&
+    viewMatches(old.signature, f, a, keyed)
+  )
     return old.floor;
   const view: Floor = {
     ...f,
@@ -426,6 +457,6 @@ export function survivorFloor(f: Floor, p: Point): Floor {
       }),
   };
   virtual.add(view);
-  map.set(a.id, { signature, floor: view });
+  map.set(a.id, { signature: viewSignature(f, a, keyed), floor: view });
   return view;
 }

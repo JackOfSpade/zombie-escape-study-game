@@ -80,6 +80,6 @@ export function itemUseIssue(g: Game, a: Actor, it: Item | undefined) {
     (it.kind === "weapon" || it.kind === "repulsor") &&
     !itemTargets(g, a, it.kind).length
   )
-    return "No exposed living target within 5 tiles; charge kept.";
+    return `No exposed living target within ${EQUIPMENT[it.kind].range} tiles; charge kept.`;
   return undefined;
 }
