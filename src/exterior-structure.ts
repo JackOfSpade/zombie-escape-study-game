@@ -96,6 +96,7 @@ function structureKey(g: Game) {
       f.boundary?.bottom,
       f.stairs,
       f.entry,
+      f.design?.brokenGuard,
     ]),
     !!g.floors[0]?.city,
   ]);
@@ -276,6 +277,8 @@ function outerSide(
  * chosen per run: the glass and rail are gone and the edge is open. */
 function brokenBay(g: Game, level: number) {
   if (level === 0 && !g.floors[0]?.boundary) return undefined;
+  const authored = g.floors[level]?.design?.brokenGuard;
+  if (authored) return authored;
   const roll = interiorHash(g.seed, level, "broken-guard");
   // Segment 3 is the long level east walk, 4 the south gallery.
   return { segment: 3 + (roll % 2), bay: 1 + ((roll >>> 3) % 2) };

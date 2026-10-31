@@ -7,6 +7,8 @@ export default defineConfig({
     "game-test-lab.spec.ts",
     "keyboard-access.spec.ts",
     "pause-controls.spec.ts",
+    "run-designer.spec.ts",
+    "run-design-dressing.spec.ts",
   ],
   workers: 1,
   retries: 0,

@@ -370,6 +370,10 @@ export interface BuildingFootprint {
   rows: { left: number; right: number }[];
 }
 export interface Floor {
+  /** Frozen authored choices; shared by rendering, collisions and NPC facts. */
+  design?: import("./run-design-contract.mjs").RunFloorDesign;
+  /** Authored neighbourhood signs and skyline, stored on the ground floor. */
+  exteriorDesign?: import("./run-design-contract.mjs").RunExteriorDesign;
   /** Persisted physical ground-level streets and urban obstacles for fresh runs. */
   city?: import("./city-layout").CityPlan;
   boundary?: BuildingFootprint;
@@ -605,6 +609,10 @@ export interface Settings {
   reducedFlash: boolean;
 }
 export interface Game {
+  /** First-start preview awaiting an explicit AI design or procedural choice. */
+  preparingRun?: boolean;
+  /** Accepted AI blueprint and provenance. Loading never requests a replacement. */
+  design?: import("./run-design-contract.mjs").SavedRunDesign;
   /** Study workspace freezes the saved world while native study continues. */
   studyWorkspace?: { enabled: boolean; wasPaused: boolean; encounter?: string };
   fieldPacing?: import("./field-pacing").FieldPacing;

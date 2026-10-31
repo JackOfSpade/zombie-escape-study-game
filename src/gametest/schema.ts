@@ -7,6 +7,7 @@ import {
   type Point,
 } from "../model";
 import { isRecord } from "../records";
+import { parseRunDesign, type RunDesign } from "../run-design-contract.mjs";
 export const LAB_LIMITS = {
   entities: 512,
   actions: 512,
@@ -102,6 +103,8 @@ export interface Scenario {
   pacing?: "study";
   /** Persisted physical exterior streets; omitted retains historical fixtures. */
   city?: boolean;
+  /** Saved synthetic AI choices; never invokes a model or reads a real run. */
+  design?: RunDesign;
   simulation: "game" | "physics";
   maxTicks: number;
   startTime: number;
@@ -262,6 +265,7 @@ export function parseScenario(value: string | unknown): Scenario {
     "rules",
     "pacing",
     "city",
+    "design",
     "simulation",
     "maxTicks",
     "startTime",
@@ -304,6 +308,15 @@ export function parseScenario(value: string | unknown): Scenario {
       (s.template === "building" && s.rules === "force-fields"),
     "Randomized layouts require a building and force-field rules.",
   );
+  if (s.design !== undefined) {
+    requireThat(
+      s.template === "building" &&
+        s.layout === "randomized" &&
+        s.rules === "force-fields",
+      "Authored designs require a randomized force-field building.",
+    );
+    parseRunDesign(s.design);
+  }
   requireThat(
     integer(s.maxTicks, 1, LAB_LIMITS.ticks) &&
       number(s.startTime, 0, 86400) &&

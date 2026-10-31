@@ -2,6 +2,16 @@
 
 This is a separate non-API ChatGPT connector for the game, adapted from generic transport/security code in the user's Infinite Canvas project. It does not verify or claim native ChatGPT Study Mode. The original native adapter remains available separately. No production credentials, job state or application generator were copied from the reference project; see `scripts/chatgpt-security/PROVENANCE.json`.
 
+## AI-authored new runs
+
+`design-run` uses the same ChatGPT handoff for fictional world authoring. It is separate from study generation and sends only a versioned request identity, run seed, up to five prior fictional design summaries, and an optional rejected candidate with bounded validation errors. The shared `src/run-design-contract.mjs` parser rejects additional request fields; learner state, curriculum, saved conversations and credentials are not part of this packet.
+
+Each generation has its own chat code and native scope (`runId` equals the generation ID, `encounterId` is `run-design`). The player's pasted request uses `get_current_study_question` to retrieve a `prepare` turn whose operation is `design-run`; `finish_study_preparation` returns the exact correlated design JSON. The turn contains world-design instructions rather than tutoring instructions. Its bound continuation waits up to five seconds for a repair of this same generation and chat; if none arrives it returns waiting and the assistant stops. It cannot continue into a study question, assessment or another run's design. Native preparation routing keeps it out of legacy worker claims. The game validates geometry and novelty before adopting the result; a delivery receipt alone does not mean a design was accepted.
+
+Transport retries preserve the exact request ID, payload and provider. A geometry repair is a new request within the same generation, carrying the previous candidate and its validation errors. Explicit cancellation discards only the matching design receipt and prevents late completion; ordinary timeouts and relay outages retain the queued request for retry. Saved runs keep their adopted designs and never request a replacement during reload. No API key or new provider is used. A bridge running older code must be restarted through its normal service controls before it advertises this operation; restarting the bridge does not restore sharing or a worker session.
+
+Offline transport tests use synthetic designs and an isolated queue/server. They verify schema rejection, exact identity, cancellation, durable retry and native delivery; they do not establish external model design quality or release real player data.
+
 ## Current native conversation flow
 
 In the learning workspace, the main session button changes from **Start next question** to **Stop question**, then **Resume in new chat**. Stopping saves the issued question and stops accepting its old chat's result, including across reloads. Resuming preserves the exact question and curriculum binding but creates a fresh request and chat code; copy the request into a new ChatGPT chat. Earlier messages remain in the original ChatGPT chat and are not transferred or treated as learner evidence in the new session.

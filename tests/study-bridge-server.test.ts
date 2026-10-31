@@ -88,6 +88,7 @@ test("actual relay forwards complete reconciliation files with configured auth a
     for (const [origin, operation, expected] of [
       ["https://untrusted.invalid", "reconcile-roadmap", 403],
       ["http://127.0.0.1:5173", "unrecognized-operation", 400],
+      ["http://127.0.0.1:5173", "design-run", 409],
     ] as const) {
       const result = await fetch(base + "api/bridge", {
         method: "POST",

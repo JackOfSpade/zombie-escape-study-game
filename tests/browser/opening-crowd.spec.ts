@@ -1,9 +1,10 @@
+import { startProceduralRun } from "./helpers/procedural-run";
 import { expect, test } from "@playwright/test";
 test("reported opening seed clears the entrance with solid NPC traffic", async ({
   page,
 }) => {
   await page.goto("/");
-  await page.locator("#start").click();
+  await startProceduralRun(page);
   const result = await page.evaluate(async () => {
     const { createGame } = await import("/src/world.ts" as string),
       { step } = await import("/src/engine.ts" as string);

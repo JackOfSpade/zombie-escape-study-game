@@ -1,9 +1,10 @@
+import { startProceduralRun } from "./helpers/procedural-run";
 import { expect, test } from "@playwright/test";
 test("last-run seed: E releases the physical first entrance and keyboard input physically enters", async ({
   page,
 }) => {
   await page.goto("/");
-  await page.locator("#start").click();
+  await startProceduralRun(page);
   await page.evaluate(async () => {
     const { createGame } = await import("/src/world.ts" as string),
       { step } = await import("/src/engine.ts" as string);
@@ -57,7 +58,7 @@ test("opening countdown prevents all zombie spawns until ten simulation seconds"
   page,
 }) => {
   await page.goto("/");
-  await page.locator("#start").click();
+  await startProceduralRun(page);
   // Fresh runs use the force-field swarm wording; legacy worlds say zombies.
   await expect(page.locator("#next-description")).toContainText(
     /(Swarm begins|Zombies spawn) in/,

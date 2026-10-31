@@ -1,3 +1,4 @@
+import { startProceduralRun } from "./helpers/procedural-run";
 import { mkdir } from "node:fs/promises";
 import { expect, test, type Page } from "./helpers/offline-test";
 import { openPlayerMenu } from "./helpers/game-menu";
@@ -707,7 +708,7 @@ test("the player can turn contextual NPC voices off in Settings", async ({
   await page.evaluate(() => {
     (window as any).__deadAir.game.settings.view = "top-down";
   });
-  await page.getByRole("button", { name: "Enter the building" }).click();
+  await startProceduralRun(page);
   await openPlayerMenu(page);
   await page.locator("#settings-toggle").click();
   await expect(page.locator("#npc-voices")).toBeChecked();

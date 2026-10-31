@@ -551,13 +551,19 @@ function carveStrip(
 
 const OPPOSITE: Record<Edge, Edge> = { n: "s", s: "n", w: "e", e: "w" };
 /** Rooms along one or two outer wall runs of each block, open core. */
-function carveSector(plan: Plan, order: number, room: number, r: Rng) {
+function carveSector(
+  plan: Plan,
+  order: number,
+  room: number,
+  r: Rng,
+  designedKinds?: SubRoomKind[],
+) {
   const hall = room === 2;
   if (hall && rand(r) < 0.5) return;
   let left = hall ? 2 : 8;
-  const kinds: SubRoomKind[] = hall
-    ? ["office", "storage"]
-    : ["office", "meeting", "storage", "break"];
+  const kinds: SubRoomKind[] =
+    designedKinds ??
+    (hall ? ["office", "storage"] : ["office", "meeting", "storage", "break"]);
   const area = (b: Rect) => (b.x2 - b.x1 + 1) * (b.y2 - b.y1 + 1);
   const blocks = [...plan.blocks[order]].sort((a, b) => area(b) - area(a));
   for (const B of blocks) {
@@ -736,10 +742,10 @@ function attempt(
     for (const [x, y] of gate.cells) f.tiles[y][x] = 0;
     plan.gates.push(gate);
   }
-  const roomOf = [-1, 2, ...shuffle(r, [3, 0, 1])];
+  const roomOf = [-1, 2, ...(f.design?.roomOrder ?? shuffle(r, [3, 0, 1]))];
   if (!defaults)
     for (let order = 1; order <= 4; order++)
-      carveSector(plan, order, roomOf[order], r);
+      carveSector(plan, order, roomOf[order], r, f.design?.subroomKinds);
   const terminals: Point[][] = [];
   for (let order = 1; order <= 4; order++) {
     const t = placeTerminals(plan, order, counts[roomOf[order]], r);
@@ -747,6 +753,11 @@ function attempt(
     terminals[order] = t;
   }
   return { plan, roomOf, terminals };
+}
+
+/** The authored quota is shared by construction and validation. */
+export function forwardFieldQuota(g: Game, f: Floor, room: number) {
+  return f.design?.fieldQuotas[room] ?? 3 + ((g.seed + f.index + room) % 3);
 }
 
 export function fieldDoor(
@@ -796,7 +807,7 @@ export function fieldDoor(
       ...(kind === "public"
         ? { publicEntry: true }
         : kind === "forward"
-          ? { limit: 3 + ((g.seed + f.index + room) % 3), direction }
+          ? { limit: forwardFieldQuota(g, f, room), direction }
           : {}),
     },
   };
@@ -907,15 +918,17 @@ export function planOfficeFloor(
   );
   const mainHp = f.furniture.find((o) => o.id === "main-gate")?.maxHp;
   let errors: string[] = ["no plan"];
-  for (let i = 0; i < 24 + 8; i++) {
-    const fallback = i >= 24;
+  for (let i = 0; i < (f.design ? 64 : 24 + 8); i++) {
+    const fallback = !f.design && i >= 24;
     // Bands are hallway-like, so they are drawn rarely and otherwise serve as
     // the fallback; departments side by side or around a spine come first.
-    const family: PlanFamily = fallback
-      ? "stack"
-      : rand(random) < 0.125
+    const family: PlanFamily =
+      f.design?.family ??
+      (fallback
         ? "stack"
-        : FAMILIES[1 + int(random, 0, 1)];
+        : rand(random) < 0.125
+          ? "stack"
+          : FAMILIES[1 + int(random, 0, 1)]);
     const draft = attempt(f, random, family, fallback, counts);
     if (!draft) continue;
     commit(g, f, draft, mainHp);

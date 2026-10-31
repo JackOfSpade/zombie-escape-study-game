@@ -1,3 +1,7 @@
+import {
+  chooseProceduralRun,
+  startProceduralRun,
+} from "./helpers/procedural-run";
 import { expect, test } from "@playwright/test";
 import {
   flushNativeSave,
@@ -24,7 +28,7 @@ test("after combat death the live building can be watched, paused and reloaded w
 }) => {
   await mockNativeStudy(page);
   await page.goto("/");
-  await page.getByRole("button", { name: "Enter the building" }).click();
+  await startProceduralRun(page);
   await page.evaluate(() => {
     const g = (window as any).__deadAir.game;
     g.zombies = [];
@@ -127,6 +131,7 @@ test("after combat death the live building can be watched, paused and reloaded w
   // A new run leaves spectator mode.
   await page.getByRole("button", { name: "Run summary" }).click();
   await page.getByRole("button", { name: "Begin another run" }).click();
+  await chooseProceduralRun(page);
   await expect(page.locator("body")).not.toHaveClass(/spectating/);
   await expect(page.locator("#spectator")).toBeHidden();
   await expect(page.locator("#start-card")).toBeHidden();

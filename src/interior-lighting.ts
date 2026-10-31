@@ -96,16 +96,21 @@ export function buildInteriorLighting(
       interiorHash(seed, floor.index, "broken-circuit") %
         Math.max(1, darkSector.length)
     ]?.id;
+  const authoredPower = (id: string) => {
+    const room = /^room([0-3])$/.exec(id);
+    return room ? floor.design?.power[Number(room[1])] : undefined;
+  };
   for (const sector of sectors) {
     const roll = interiorHash(seed, floor.index, sector.id),
       power: InteriorPower =
-        sector.id === forcedOutage
+        authoredPower(sector.id) ??
+        (sector.id === forcedOutage
           ? "outage"
           : sector.id === "entry" || sector.id === "room2"
             ? "lit"
             : roll % 4 === 0
               ? "dim"
-              : "lit";
+              : "lit");
     for (const rect of sector.blocks)
       plan.zones.push({
         id: sector.id,
@@ -120,13 +125,14 @@ export function buildInteriorLighting(
     for (const room of sector.rooms) {
       const roll = interiorHash(seed, floor.index, room.id),
         power: InteriorPower =
-          sector.id === forcedOutage
+          authoredPower(sector.id) ??
+          (sector.id === forcedOutage
             ? "outage"
             : room.kind === "storage" || roll % 6 === 0
               ? "outage"
               : roll % 3 === 0
                 ? "dim"
-                : "lit";
+                : "lit");
       plan.zones.push({
         id: room.id,
         rect: { ...room.rect },

@@ -1,4 +1,5 @@
-import { pursuitLayout } from "./pursuit-layout";
+import { pursuitLayout, pursuitLayoutErrors } from "./pursuit-layout";
+import { forwardFieldQuota } from "./office-plan";
 import {
   buildingLayoutErrors,
   buildingRoof,
@@ -8,6 +9,7 @@ import { carveStairwells } from "./stairwell";
 import {
   fieldClearance,
   furnishOffice,
+  furnishingErrors,
   pursuitOfficeZones,
 } from "./office-layout";
 import { rayBodyDistance } from "./visibility";
@@ -105,7 +107,10 @@ export function redesign(
 ) {
   g.rules = "force-fields";
   if (options.randomized) {
-    const boundary = createBuildingFootprint(g.seed);
+    const boundary = createBuildingFootprint(
+      g.seed,
+      g.design?.design.footprint,
+    );
     for (const f of g.floors) f.boundary = structuredClone(boundary);
   }
   for (const a of g.survivors) {
@@ -143,7 +148,7 @@ export function redesign(
         exit: !entrance && o.id !== "main-gate",
         ...(entrance && !publicEntry
           ? {
-              limit: 3 + ((g.seed + f.index + Number(entrance[1])) % 3),
+              limit: forwardFieldQuota(g, f, Number(entrance[1])),
               direction: Number(entrance[1]) % 2 === 0 ? -1 : 1,
             }
           : {}),
@@ -184,6 +189,16 @@ export function redesign(
         g.seed,
         floor.furniture.filter((o) => /-room\d-door$/.test(o.id)),
       );
+      if (g.design) {
+        const errors = [
+          ...pursuitLayoutErrors(g, floor),
+          ...furnishingErrors(floor),
+        ];
+        if (errors.length)
+          throw Error(
+            `Invalid designed floor ${floor.index}: ${errors.join("; ")}`,
+          );
+      }
     }
   if (options.randomized) {
     const errors = buildingLayoutErrors(g);

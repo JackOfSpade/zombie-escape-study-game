@@ -1,3 +1,4 @@
+import { startProceduralRun } from "./helpers/procedural-run";
 import { openGameMenu } from "./helpers/game-menu";
 import { selectTopDown } from "./helpers/view-mode";
 // Synthetic bridge responses exercise the real UI/adapter, not native semantic quality.
@@ -173,7 +174,7 @@ for (const scenario of [
       });
     });
     await page.goto("/");
-    await page.getByRole("button", { name: "Enter the building" }).click();
+    await startProceduralRun(page);
     // Roadmap menus are view-independent; headless WebGL is software-rendered.
     await selectTopDown(page);
     const before = await page.evaluate(() => {

@@ -150,12 +150,39 @@ async function gatewayOutage(r: Response) {
     return true;
   }
 }
+export interface HandoffReceipt {
+  id: string;
+  hash: string;
+}
+export function isHandoffReceipt(value: unknown): value is HandoffReceipt {
+  return (
+    isRecord(value) &&
+    typeof value.id === "string" &&
+    !!value.id.trim() &&
+    value.id.length <= 128 &&
+    typeof value.hash === "string" &&
+    !!value.hash.trim() &&
+    value.hash.length <= 128
+  );
+}
+/** Explicit cancellation only; ordinary transport failures retain the request. */
+export async function discardRunDesign(receipt: HandoffReceipt) {
+  if (!isHandoffReceipt(receipt)) throw Error("Invalid queued bridge receipt");
+  await fetch(
+    `/api/bridge/result?id=${encodeURIComponent(receipt.id)}&hash=${encodeURIComponent(receipt.hash)}&operation=design-run`,
+    { method: "DELETE", signal: AbortSignal.timeout(1500) },
+  ).catch(() => {});
+}
 export interface BridgeRequestOptions {
   /** Cancel optional presentation work when its owner is no longer active. */
   signal?: AbortSignal;
   /** Handoff wait budget; bounded to DIRECT_STUDY_TIMEOUT_MS. */
   timeoutMs?: number;
   nativeScope?: NativeStudyScope;
+  /** A run-design generation keeps its own chat without rotating study chats. */
+  chatCode?: string;
+  /** Preserve the exact receipt before polling, including across retries/reloads. */
+  onQueued?: (receipt: HandoffReceipt) => void | Promise<void>;
   /** Stop renewing a released job after its owning session closes. */
   isActive?: () => boolean;
 }
@@ -183,6 +210,12 @@ export async function bridgeRequest<T extends object = Record<string, unknown>>(
 ) {
   if (options?.isActive?.() === false)
     throw Error("Study session closed; saved work retained");
+  if (
+    options?.chatCode !== undefined &&
+    (typeof options.chatCode !== "string" ||
+      !/^[A-Z0-9]{6,16}$/.test(options.chatCode))
+  )
+    throw Error("Invalid captured handoff chat code");
   const provider = status().mode,
     handoff = provider === "chatgpt-handoff";
   const requested = options?.timeoutMs;
@@ -203,7 +236,10 @@ export async function bridgeRequest<T extends object = Record<string, unknown>>(
     payload,
     provider,
     ...(handoff && options?.nativeScope
-      ? { nativeScope: options.nativeScope, chatCode: studyChatCode() }
+      ? {
+          nativeScope: options.nativeScope,
+          chatCode: options.chatCode ?? studyChatCode(),
+        }
       : {}),
   });
   // Handoff enqueue is idempotent for the exact requestId and payload. Other
@@ -213,7 +249,8 @@ export async function bridgeRequest<T extends object = Record<string, unknown>>(
     isRecord(payload) &&
     typeof payload.requestId === "string" &&
     !!payload.requestId.trim();
-  let chatterReceipt: { id: string; hash: string } | undefined;
+  let chatterReceipt: HandoffReceipt | undefined,
+    designReceipt: HandoffReceipt | undefined;
   try {
     let r: Response, submissionOutageAt: number | undefined;
     for (;;) {
@@ -246,18 +283,13 @@ export async function bridgeRequest<T extends object = Record<string, unknown>>(
     }
     let data = await readJson(r);
     if (r.status === 202) {
-      if (
-        !handoff ||
-        !isRecord(data.handoff) ||
-        typeof data.handoff.id !== "string" ||
-        !data.handoff.id.trim() ||
-        typeof data.handoff.hash !== "string" ||
-        !data.handoff.hash.trim()
-      )
+      if (!handoff || !isHandoffReceipt(data.handoff))
         throw Error("Invalid queued bridge receipt");
       const receipt = { id: data.handoff.id, hash: data.handoff.hash };
       if (operation === "npc-chatter" || operation === "npc-chatter-review")
         chatterReceipt = receipt;
+      if (operation === "design-run") designReceipt = receipt;
+      await options?.onQueued?.(receipt);
       onProgress?.("queued");
       let nextProgressCheck = 0,
         unreachableSince = 0;
@@ -321,6 +353,11 @@ export async function bridgeRequest<T extends object = Record<string, unknown>>(
       );
     return data as T;
   } finally {
+    if (designReceipt && options?.signal?.aborted) {
+      // A user cancellation abandons this exact design. Transport deadlines and
+      // relay outages retain it for retry, as do successfully delivered designs.
+      await discardRunDesign(designReceipt);
+    }
     if (chatterReceipt) {
       // Consumed/cancelled ambient lines have no durable role. This endpoint
       // cannot discard a study request, even if its receipt is supplied.

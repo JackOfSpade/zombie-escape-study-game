@@ -1,10 +1,11 @@
+import { startProceduralRun } from "./helpers/procedural-run";
 import { expect, test } from "./helpers/offline-test";
 
 test("busy first-person scene reports bounded render time and draw calls", async ({
   page,
 }, testInfo) => {
   await page.goto("/");
-  await page.getByRole("button", { name: "Enter the building" }).click();
+  await startProceduralRun(page);
   await page.evaluate(async () => {
     const { TestRunner } = await import("/src/gametest/runner.ts" as string),
       { emptyScenario } = await import("/src/gametest/schema.ts" as string),

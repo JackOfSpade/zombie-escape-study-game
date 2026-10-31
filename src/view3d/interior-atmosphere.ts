@@ -34,6 +34,7 @@ import { furnitureHeight } from "./furniture-height";
 import { InstancePool } from "./instances";
 import { InteriorLightmap } from "./interior-lightmap";
 import { outsideBuilding } from "./exterior-layout";
+import type { RunStory } from "../run-design-contract.mjs";
 
 interface Detail {
   slot: number;
@@ -57,6 +58,8 @@ interface FloorAtmosphere {
   solids: InstancePool;
   tubes: InstancePool;
   cards: InstancePool[];
+  /** Authored cards belong to this floor; legacy cards stay shared. */
+  authoredMaterials?: MeshStandardMaterial[];
   furnishings: Furnishing[];
 }
 
@@ -65,7 +68,10 @@ const MAX_FURNISHINGS = 72;
 const MAX_DESKS = 64;
 const CARD_CAPACITY = 128;
 
-function storyTexture(story: number): CanvasTexture | undefined {
+function storyTexture(
+  story: number,
+  authored?: RunStory,
+): CanvasTexture | undefined {
   if (typeof document === "undefined") return undefined;
   const canvas = document.createElement("canvas");
   canvas.width = 512;
@@ -85,7 +91,40 @@ function storyTexture(story: number): CanvasTexture | undefined {
     c.textAlign = "center";
     c.fillText(text, width / 2, y, width - 48);
   };
-  if (story === 0) {
+  if (authored) {
+    // The bounded plain-text design is rendered directly, never parsed as HTML.
+    // Wrap by measured width so long names and narrow whiteboards remain readable.
+    const wrap = (text: string, size: number, maxLines: number) => {
+      c.font = `${story === 3 ? "italic" : "600"} ${size}px sans-serif`;
+      const lines: string[] = [];
+      let row = "";
+      for (const word of text.split(/\s+/)) {
+        const candidate = row ? `${row} ${word}` : word;
+        if (row && c.measureText(candidate).width > width - 60) {
+          lines.push(row);
+          row = word;
+        } else row = candidate;
+      }
+      if (row) lines.push(row);
+      return lines.length > maxLines
+        ? [...lines.slice(0, maxLines - 1), lines.slice(maxLines - 1).join(" ")]
+        : lines;
+    };
+    const titleSize = story === 3 ? 27 : 35,
+      bodySize = story === 3 ? 21 : 28,
+      title = wrap(authored.title, titleSize, 2),
+      body = authored.lines.flatMap((text) => wrap(text, bodySize, 2)),
+      titleTop = story === 3 ? 40 : 67,
+      bodyTop = story === 3 ? 112 : 198,
+      bodyStep = Math.min(
+        story === 3 ? 20 : 48,
+        (height - bodyTop - 35) / Math.max(1, body.length - 1),
+      );
+    title.forEach((text, i) =>
+      line(text, titleTop + i * (titleSize + 8), titleSize, "#843f35"),
+    );
+    body.forEach((text, i) => line(text, bodyTop + i * bodyStep, bodySize));
+  } else if (story === 0) {
     c.fillStyle = "#8b493b";
     c.fillRect(20, 24, width - 40, 94);
     line("BUILDING NOTICE", 85, 40, "#fff2cf");
@@ -375,6 +414,15 @@ export class InteriorAtmosphere {
     group.name = `office-atmosphere-${floor.index}`;
     group.position.y = floor.index * FLOOR_HEIGHT;
     const plan = buildInteriorLighting(floor, seed),
+      authoredMaterials = floor.design?.stories.map((story, i) => {
+        const material = new MeshStandardMaterial({
+          color: "white",
+          map: storyTexture(i, story) ?? null,
+          roughness: 0.98,
+        });
+        this.lightmap.patch(material);
+        return material;
+      }),
       solids = new InstancePool(
         group,
         new BoxGeometry(1, 1, 1),
@@ -389,7 +437,7 @@ export class InteriorAtmosphere {
         128,
         false,
       ),
-      cards = this.cardMaterials.map(
+      cards = (authoredMaterials ?? this.cardMaterials).map(
         (material) =>
           new InstancePool(
             group,
@@ -405,6 +453,7 @@ export class InteriorAtmosphere {
         solids,
         tubes,
         cards,
+        authoredMaterials,
         furnishings: [],
       };
     solids.mesh.name = "office-personal-effects-and-fixtures";
@@ -841,6 +890,10 @@ export class InteriorAtmosphere {
     this.lightmap.clear(context.plan.floor.index);
     for (const pool of [context.solids, context.tubes, ...context.cards])
       pool.dispose(false);
+    for (const material of context.authoredMaterials ?? []) {
+      material.map?.dispose();
+      material.dispose();
+    }
     context.group.removeFromParent();
   }
 

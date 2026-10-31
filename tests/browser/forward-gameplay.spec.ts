@@ -1,3 +1,4 @@
+import { startProceduralRun } from "./helpers/procedural-run";
 import { expect, test } from "@playwright/test";
 import { readFileSync } from "node:fs";
 const stacked = JSON.parse(
@@ -16,7 +17,7 @@ test("new runs share one randomized boundary on every floor and retain it after 
   page,
 }) => {
   await page.goto("/");
-  await page.locator("#start").click();
+  await startProceduralRun(page);
   const before = await page.evaluate(() => {
     const g = (window as any).__deadAir.game;
     return {
@@ -85,7 +86,7 @@ test("the actual Space key climbs a two-object barricade and records its attempt
   page,
 }) => {
   await page.goto("/");
-  await page.locator("#start").click();
+  await startProceduralRun(page);
   await page.evaluate(async (s) => {
     const { TestRunner } = await import("/src/gametest/runner.ts" as string);
     const g = (window as any).__deadAir.game,

@@ -1,3 +1,4 @@
+import { chooseProceduralRun } from "./helpers/procedural-run";
 // Real issuance/persistence lifecycle with a synthetic native conversation.
 import { expect, test } from "@playwright/test";
 import { enterLegacyBuilding } from "./helpers/legacy-world";
@@ -165,6 +166,7 @@ test("restart saves the unfinished native task and immediately allows a new ques
   );
   await page.getByRole("button", { name: "Run summary", exact: true }).click();
   await page.getByRole("button", { name: "Begin another run" }).click();
+  await chooseProceduralRun(page);
   await expect(page.locator("#start-card")).toBeHidden();
   await position();
   const after = await page.evaluate(() => {

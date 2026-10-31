@@ -1,3 +1,4 @@
+import { startProceduralRun } from "./helpers/procedural-run";
 import { expect, type Page } from "@playwright/test";
 
 /** Every API request stays inside this synthetic browser context. There is no
@@ -114,7 +115,7 @@ export async function mockNativeStudy(page: Page, capable = true) {
 
 export async function enterNativeGame(page: Page) {
   await page.goto("/");
-  await page.getByRole("button", { name: "Enter the building" }).click();
+  await startProceduralRun(page);
   await page.evaluate(() => {
     const g = (window as any).__deadAir.game;
     g.zombies = [];

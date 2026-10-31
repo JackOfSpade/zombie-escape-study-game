@@ -1,3 +1,4 @@
+import { startProceduralRun } from "./helpers/procedural-run";
 import { expect, test } from "@playwright/test";
 import { readFileSync } from "node:fs";
 const fixture = JSON.parse(
@@ -7,7 +8,7 @@ test("Space continues past five mixed barricades when each blocks the previous l
   page,
 }) => {
   await page.goto("/");
-  await page.locator("#start").click();
+  await startProceduralRun(page);
   await page.evaluate(async (s) => {
     const { TestRunner } = await import("/src/gametest/runner.ts" as string);
     const g = (window as any).__deadAir.game,

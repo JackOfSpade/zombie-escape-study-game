@@ -167,14 +167,16 @@ export function createHandoffRoutes(
             )
           ) {
             send(res, 403, {
-              error: "Discard temporary voices from the game UI",
+              error: "Cancel optional game requests from the game UI",
             });
             return true;
           }
           send(
             res,
             200,
-            queue.discardChatter(
+            (url.searchParams.get("operation") === "design-run"
+              ? queue.discardDesign
+              : queue.discardChatter)(
               url.searchParams.get("id"),
               url.searchParams.get("hash"),
             ),

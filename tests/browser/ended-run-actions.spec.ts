@@ -1,3 +1,4 @@
+import { startProceduralRun } from "./helpers/procedural-run";
 import { expect, test } from "@playwright/test";
 test("Space cannot create a vault or physical work event after the player's death", async ({
   page,
@@ -5,7 +6,7 @@ test("Space cannot create a vault or physical work event after the player's deat
   const downloads: string[] = [];
   page.on("download", (file) => downloads.push(file.suggestedFilename()));
   await page.goto("/");
-  await page.getByRole("button", { name: "Enter the building" }).click();
+  await startProceduralRun(page);
   await page.evaluate(() => {
     const g = (window as any).__deadAir.game,
       a = g.survivors[0],

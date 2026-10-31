@@ -1,9 +1,10 @@
+import { startProceduralRun } from "./helpers/procedural-run";
 import { expect, test } from "@playwright/test";
 test("E at a red field with zero keys denies entry without a timed unlock", async ({
   page,
 }) => {
   await page.goto("/");
-  await page.getByRole("button", { name: "Enter the building" }).click();
+  await startProceduralRun(page);
   await page.evaluate(async () => {
     const root = "/src/";
     const { TestRunner } = await import(
@@ -64,7 +65,7 @@ test("E at a red field spends a key even beside another survivor's solo terminal
   page,
 }) => {
   await page.goto("/");
-  await page.getByRole("button", { name: "Enter the building" }).click();
+  await startProceduralRun(page);
   await page.evaluate(async () => {
     const root = "/src/";
     const { TestRunner } = await import(
