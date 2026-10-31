@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { test } from "node:test";
+import { test, type TestContext } from "node:test";
 import {
   BRIDGE_OUTAGE_GRACE_MS,
   bridgeRequest,
@@ -14,6 +14,12 @@ const reply = (mode = "study-mode") =>
     capabilities: ["generate"],
     detail: "Local fixture only",
   });
+/** AbortSignal.timeout timers do not hold the event loop open, so a test
+ * waiting only on one must keep the loop alive until its deadline fires. */
+function holdEventLoop(t: TestContext) {
+  const timer = setInterval(() => {}, 1000);
+  t.after(() => clearInterval(timer));
+}
 test("overlapping bridge checks cannot let an old failure replace a newer connection", async (t) => {
   const original = globalThis.fetch;
   t.after(() => {
@@ -334,6 +340,7 @@ test("hung result polls have a short deadline and exhaust the outage grace inste
     AbortSignal.timeout = originalTimeout;
     Date.now = originalNow;
   });
+  holdEventLoop(t);
   let now = 1000,
     polls = 0;
   Date.now = () => now;
@@ -466,6 +473,7 @@ test("a hung initial handoff submission has a short deadline and stops retrying 
     AbortSignal.timeout = originalTimeout;
     Date.now = originalNow;
   });
+  holdEventLoop(t);
   let now = 1000,
     posts = 0;
   Date.now = () => now;

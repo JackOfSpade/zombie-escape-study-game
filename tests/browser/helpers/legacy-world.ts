@@ -9,6 +9,12 @@ import type { Page } from "@playwright/test";
  */
 export async function enterLegacyBuilding(page: Page) {
   await page.goto("/");
+  // Legacy fixtures are top-down. Never render the first-person city start:
+  // software WebGL on CI makes each of those frames cost seconds.
+  await page.waitForFunction(() => !!(window as any).__deadAir);
+  await page.evaluate(() => {
+    (window as any).__deadAir.game.settings.view = "top-down";
+  });
   await page.getByRole("button", { name: "Enter the building" }).click();
   await useLegacyWorld(page);
 }
