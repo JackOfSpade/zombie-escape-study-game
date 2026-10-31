@@ -350,10 +350,7 @@ export class FirstPersonView {
       this.materials.screen.emissive.copy(palette.terminal);
     }
     const fog = this.scene.fog as Fog,
-      outside =
-        this.exterior.enabled &&
-        (outsideBuilding(floor, a.x, a.y) ||
-          a.stairTravel?.walked !== undefined);
+      outside = this.exterior.enabled && outsideBuilding(floor, a.x, a.y);
     // Architectural depth, rather than an opaque near fog curtain, closes
     // rooms. City sightlines must survive through real perimeter windows.
     const city = game.floors[0].city;
@@ -369,11 +366,11 @@ export class FirstPersonView {
     this.resize();
     const horizontal = Math.cos(pitch),
       route =
-        a.stairTravel?.walked !== undefined
+        !a.elevated && a.stairTravel?.walked !== undefined
           ? sampleStairRoute(game, a.stairTravel)
           : undefined,
       eyeX = route?.x ?? a.x,
-      eyeY = (route?.y ?? elevation) + 1.6,
+      eyeY = (a.elevated?.feet ?? route?.y ?? elevation) + 1.6,
       eyeZ = route?.z ?? a.y;
     this.camera.position.set(eyeX, eyeY, eyeZ);
     this.target.set(
@@ -383,6 +380,7 @@ export class FirstPersonView {
     );
     this.camera.lookAt(this.target);
     this.exterior.update(game.time, game.settings.reducedFlash);
+    this.gallery.update(game);
     this.atmosphere.group.visible = !!floor.boundary;
     if (floor.boundary) {
       this.atmosphere.update(game, this.camera, dt);
@@ -398,7 +396,7 @@ export class FirstPersonView {
     this.sync(game, a, floor, palette);
     this.syncPanels(game, a, floor);
     for (const pool of this.poolList) pool.flush();
-    if (a.stairTravel?.walked !== undefined) {
+    if (a.stairTravel && (a.elevated || a.stairTravel.walked !== undefined)) {
       // The real destination is drawn before crossing its threshold. Retain
       // both floor scenes so arriving changes simulation ownership only.
       const destination = game.floors[a.stairTravel.toFloor];
@@ -899,7 +897,8 @@ export class FirstPersonView {
         this.markPresent(zombie);
         const exteriorStairView =
           game.floors[0].city &&
-          a.stairTravel?.walked !== undefined &&
+          (a.elevated || a.stairTravel?.walked !== undefined) &&
+          outsideBuilding(game.floors[a.floor], a.x, a.y) &&
           zombie.floor === 0;
         if (
           exteriorOnly || exteriorStairView

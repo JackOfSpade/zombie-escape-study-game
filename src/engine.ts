@@ -80,6 +80,7 @@ import {
   physicsFloor,
   physicsKick,
   physicsMove,
+  physicsElevated,
   ZOMBIE_PUSH,
 } from "./physics";
 import {
@@ -101,7 +102,8 @@ import {
   enterCityStairBase,
   enterStairs,
   stairwellAt,
-  walkStairs,
+  ensureWalkingBody,
+  settleElevated,
 } from "./stair-travel";
 import { STAIRWELL_RADIUS, stairwell } from "./stairwell";
 import { actorOnFloor } from "./stair-route";
@@ -116,10 +118,13 @@ import { ZombieIndex } from "./zombie-index";
 import { zombieStairArrival } from "./zombie-stairs";
 import { sectorAt } from "./floor-plan";
 import { cityApproachTarget, spawnCityReinforcements } from "./city-invasion";
+import { jumpElevated, stepElevated } from "./elevated-physics";
 export interface Input {
   x: number;
   y: number;
   grab: boolean;
+  /** One-shot jump request, consumed by this simulation tick. */
+  jump?: boolean;
   /** First-person walking follows the physical stair/gallery instead of a timer. */
   stairWalk?: boolean;
 }
@@ -234,7 +239,7 @@ export function claimStation(g: Game, a: Actor, stationId: string) {
 export function releaseStation(a: Actor) {
   delete a.station;
 }
-function death(g: Game, a: Actor) {
+function death(g: Game, a: Actor, cause?: string) {
   a.alive = false;
   a.hp = 0;
   delete a.stairTravel;
@@ -248,7 +253,9 @@ function death(g: Game, a: Actor) {
   const ev = event(
     g,
     "death",
-    `${a.name} ${a.id === "human" ? "were" : "was"} lost on Floor ${a.floor + 1}.`,
+    cause
+      ? `${a.name} ${cause} on Floor ${a.floor + 1}.`
+      : `${a.name} ${a.id === "human" ? "were" : "was"} lost on Floor ${a.floor + 1}.`,
     a.floor,
     a.id,
   );
@@ -268,6 +275,22 @@ function death(g: Game, a: Actor) {
       "The run ended. Your terminal work and learning evidence are preserved.";
   }
 }
+/** Shared survivor damage path, including an explicit cause for fatal falls. */
+export function damageSurvivor(
+  g: Game,
+  a: Actor,
+  amount: number,
+  cause?: string,
+) {
+  if (!a.alive || a.escaped || !Number.isFinite(amount) || amount <= 0) return;
+  a.hp -= amount;
+  if (a.hp <= 0) death(g, a, cause);
+}
+
+export function fallDamage(drop: number) {
+  return drop > 2.5 ? ((drop - 2.5) * 100) / 6.5 : 0;
+}
+
 export function tickSurge(g: Game) {
   const s = g.surge;
   if (s.state === "calm" && g.time >= s.anchor + s.quietDelay) {
@@ -330,7 +353,14 @@ export function board(g: Game, a: Actor) {
   return true;
 }
 export function vault(g: Game, a: Actor, obstacleId?: string): boolean {
-  if (!a.alive || a.escaped || a.vault || a.stairTravel || a.cooldown > 0)
+  if (
+    !a.alive ||
+    a.escaped ||
+    a.vault ||
+    a.stairTravel ||
+    a.elevated ||
+    a.cooldown > 0
+  )
     return false;
   const f = g.floors[a.floor];
   // Search reachable surfaces, not object centers. A nearby
@@ -2092,7 +2122,6 @@ function strikeSurvivor(
   floor: number,
   position: Point,
 ) {
-  prey.hp -= g.surge.state === "active" ? 21 : 14;
   const hit = event(
     g,
     "survivor-hit",
@@ -2103,7 +2132,7 @@ function strikeSurvivor(
   hit.position = { x: position.x, y: position.y };
   if (floor !== z.floor) hit.stairContact = true;
   z.cooldown = 0.95;
-  if (prey.hp <= 0) death(g, prey);
+  damageSurvivor(g, prey, g.surge.state === "active" ? 21 : 14);
 }
 function strikeFurniture(
   g: Game,
@@ -2590,16 +2619,57 @@ function advanceStep(
   if (humanActive(g) && a.alive && !a.escaped) {
     a.cooldown = Math.max(0, a.cooldown - dt);
     if (input.stairWalk) enterCityStairBase(g, a, input);
-    enterStairs(g, a, !!input.stairWalk);
+    if (!a.elevated || a.elevated.grounded)
+      enterStairs(g, a, !!input.stairWalk || !!a.elevated, input);
     // An older saved timed flight can be resumed as a walkable flight without
     // regenerating the world or changing the player's earned stair access.
-    if (input.stairWalk && a.stairTravel && a.stairTravel.walked === undefined)
+    if (
+      (input.stairWalk || input.jump) &&
+      a.stairTravel &&
+      a.stairTravel.walked === undefined
+    )
       a.stairTravel.walked = 0;
+    ensureWalkingBody(g, a);
+    if (input.jump && !a.vault) {
+      const vaulted = g.rules !== "force-fields" && vault(g, a);
+      if (!vaulted) jumpElevated(g, a);
+    }
     const walking = a.stairTravel?.walked !== undefined;
     // Walking out of the staircase cancels a flight; walking inside it does not.
-    const landed = !walking && advanceStairs(g, a) && !a.stairTravel;
-    if (walking) walkStairs(g, a, input, dt);
-    else if (landed) {
+    const landed =
+      !walking && !a.elevated && advanceStairs(g, a) && !a.stairTravel;
+    if (a.elevated) {
+      const magnitude = Math.hypot(input.x, input.y);
+      if (magnitude) {
+        a.heading = { x: input.x / magnitude, y: input.y / magnitude };
+        a.noiseUntil = g.time + 0.4;
+        a.noiseLevel = 4;
+      }
+      physicsElevated(g, (elapsed) => {
+        if (!a.elevated || !a.alive || a.escaped) return;
+        const result = stepElevated(g, a, input, elapsed);
+        settleElevated(g, a, result.surface);
+        if (result.landed) {
+          const damage = fallDamage(result.landed.drop);
+          if (damage > 0) {
+            const fall = event(
+              g,
+              "fall",
+              `${a.name} fell ${result.landed.drop.toFixed(1)} metres and took ${Math.round(damage)} damage.`,
+              a.floor,
+              a.id,
+            );
+            fall.position = { x: a.x, y: a.y };
+            damageSurvivor(
+              g,
+              a,
+              damage,
+              a.id === "human" ? "fell to your death" : "fell to their death",
+            );
+          }
+        }
+      });
+    } else if (landed) {
       /* Settle on the new floor's landing before taking input again. */
     } else if (a.vault) advanceVault(a, dt);
     else if (input.x || input.y) {

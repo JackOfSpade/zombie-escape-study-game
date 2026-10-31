@@ -52,7 +52,10 @@ const active = (e: Entity) =>
       (!e.open || !!e.door) &&
       !(e.kind === "gate" && e.turning < 0)
     : actor(e)
-      ? e.alive && !e.escaped && e.stairTravel?.walked === undefined
+      ? e.alive &&
+        !e.escaped &&
+        !e.elevated &&
+        e.stairTravel?.walked === undefined
       : e.hp > 0;
 interface RecordBody {
   entity: Entity;
@@ -113,6 +116,14 @@ export function beginPhysics(g: Game) {
 export function finishPhysics(g: Game, dt: number) {
   return layers.get(g)!.finish(dt);
 }
+/** Run the human's vertical motor on the native contact clock, so a jump
+ * competes for force-field admission at the same swept time as floor bodies. */
+export function physicsElevated(g: Game, advance: (dt: number) => void) {
+  const layer = layers.get(g);
+  if (!layer?.running) return false;
+  layer.elevated = advance;
+  return true;
+}
 export function physicsKick(g: Game, z: Zombie, from: Point) {
   let layer = layers.get(g);
   if (!layer) {
@@ -152,6 +163,7 @@ export function physicsFloor(g: Game, floor: number) {
 
 class PhysicsLayer {
   running = false;
+  elevated?: (dt: number) => void;
   private floors: FloorPhysics[] = [];
   private views: Floor[] = [];
   private records = new Map<Entity, RecordBody>();
@@ -419,6 +431,7 @@ class PhysicsLayer {
   }
   begin() {
     this.running = true;
+    this.elevated = undefined;
     this.views.length = 0;
     this.movedBy.clear();
     for (let i = 0; i < this.g.floors.length; i++) this.floor(i, true);
@@ -858,7 +871,7 @@ class PhysicsLayer {
       f.furniture.some((o) => o.field && !o.destroyed),
     )
       ? this.g.survivors.filter(
-          (a) => a.alive && !a.escaped && this.records.has(a),
+          (a) => a.alive && !a.escaped && (this.records.has(a) || !!a.elevated),
         )
       : [];
     for (let i = 0; i < steps; i++) {
@@ -946,9 +959,12 @@ class PhysicsLayer {
       const beforeFields = new Map(
         fieldPeople.map((a) => [
           a.id,
-          { ...this.records.get(a)!.body.getPosition() },
+          {
+            ...(this.records.get(a)?.body.getPosition() ?? { x: a.x, y: a.y }),
+          },
         ]),
       );
+      this.elevated?.(dt / steps);
       // Kinetic floor friction. planck 1.5.1's FrictionJoint never applies its
       // linear impulse (its clamp aliases the accumulated impulse), so the
       // joint only resists turning and sliding friction is applied here.
@@ -969,11 +985,14 @@ class PhysicsLayer {
       for (const f of this.floors) f.world.step(dt / steps, 12, 20);
       this.stickOrSlip(dt / steps, movable);
       if (fieldPeople.length) {
-        for (const a of fieldPeople)
-          Object.assign(a, this.records.get(a)!.body.getPosition());
+        for (const a of fieldPeople) {
+          const body = this.records.get(a)?.body;
+          if (body) Object.assign(a, body.getPosition());
+        }
         updateFields(this.g, beforeFields);
         for (const a of fieldPeople) {
-          const body = this.records.get(a)!.body;
+          const body = this.records.get(a)?.body;
+          if (!body) continue;
           if (distance(a, body.getPosition()) > 1e-8) {
             body.setTransform(Vec2(a.x, a.y), 0);
             body.setLinearVelocity(Vec2(0, 0));

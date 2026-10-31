@@ -20,7 +20,7 @@ export interface AudioPose {
 }
 export function actorSoundOrigin(g: Game, actor: Actor): SoundOrigin {
   const route =
-    actor.stairTravel?.walked === undefined
+    actor.elevated || actor.stairTravel?.walked === undefined
       ? undefined
       : sampleStairRoute(g, actor.stairTravel);
   return {
@@ -28,7 +28,7 @@ export function actorSoundOrigin(g: Game, actor: Actor): SoundOrigin {
     y: route?.z ?? actor.y,
     floor: actor.floor,
     height:
-      (route?.y ?? actor.floor * FLOOR_HEIGHT) -
+      (actor.elevated?.feet ?? route?.y ?? actor.floor * FLOOR_HEIGHT) -
       actor.floor * FLOOR_HEIGHT +
       1.45,
   };

@@ -33,6 +33,7 @@ import { playerCanSee } from "../visibility";
 import { furnitureHeight } from "./furniture-height";
 import { InstancePool } from "./instances";
 import { InteriorLightmap } from "./interior-lightmap";
+import { outsideBuilding } from "./exterior-layout";
 
 interface Detail {
   slot: number;
@@ -686,10 +687,12 @@ export class InteriorAtmosphere {
         other === floor || other.index === player.stairTravel?.toFloor;
       if (context.group.visible) this.syncFurnishings(context);
     }
-    this.currentLight =
-      player.stairTravel?.walked !== undefined
-        ? 1
-        : lightAt(active.plan, player);
+    const feet = player.elevated?.feet ?? player.floor * FLOOR_HEIGHT,
+      indoors =
+        !outsideBuilding(floor, player.x, player.y) &&
+        feet >= floor.index * FLOOR_HEIGHT - 0.3 &&
+        feet < floor.index * FLOOR_HEIGHT + 2.82;
+    this.currentLight = indoors ? lightAt(active.plan, player) : 1;
     const nearby = this.updatePracticals(game, floor, active, dt);
     if (this.phone.parent !== camera) camera.add(this.phone);
     // Keep the light in the scene even at zero intensity: hiding the phone
@@ -737,7 +740,8 @@ export class InteriorAtmosphere {
   ) {
     const player = game.survivors[0],
       enabled =
-        floor.index < CONFIG.floors && player.stairTravel?.walked === undefined,
+        floor.index < CONFIG.floors &&
+        !outsideBuilding(floor, player.x, player.y),
       range = FIXTURE_RANGE - 0.5,
       fade = 1.5;
     if (this.practicalFloor !== floor.index) {
@@ -805,7 +809,7 @@ export class InteriorAtmosphere {
     this.dust.visible =
       lit &&
       floor.index < CONFIG.floors &&
-      game.survivors[0].stairTravel?.walked === undefined;
+      !outsideBuilding(floor, game.survivors[0].x, game.survivors[0].y);
     if (!this.dust.visible) return;
     const a = game.survivors[0],
       position = this.dustGeometry.getAttribute("position"),

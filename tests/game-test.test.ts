@@ -354,3 +354,72 @@ test("enabling natural spawns opens the arena's outside staging lane", () => {
   ];
   assert.equal(new TestRunner(s, roadmap).run().status, "passed");
 });
+
+test("jump and walkTo are bounded human game inputs, and elevation/falling are explicit properties", () => {
+  const s = emptyScenario();
+  for (const action of [
+    { tick: 1, type: "jump", id: "npc-0" },
+    { tick: 1, type: "jump", id: "human", target: "auto" },
+    { tick: 1, type: "walkTo", id: "human", x: Infinity, y: 1 },
+    { tick: 1, type: "walkTo", id: "npc-0", x: 5, y: 5 },
+    { tick: 1, type: "walkTo", id: "human", x: 5, y: 5, stairWalk: 1 },
+  ])
+    assert.throws(() => parseScenario({ ...s, actions: [action] }));
+  for (const action of [
+    { tick: 1, type: "jump", id: "human" },
+    { tick: 1, type: "walkTo", id: "human", x: 5, y: 5 },
+  ])
+    assert.throws(() =>
+      parseScenario({ ...s, simulation: "physics", actions: [action] }),
+    );
+  s.rules = "force-fields";
+  s.maxTicks = 90;
+  s.actions = [
+    { tick: 1, type: "walkTo", id: "human", x: 8, y: 12.5 },
+    { tick: 1, type: "jump", id: "human" },
+    { tick: 10, type: "checkpoint" },
+  ];
+  s.checks = [
+    {
+      name: "Jump has height",
+      mode: "at",
+      tick: 5,
+      query: { type: "property", id: "human", field: "elevation" },
+      op: "gte",
+      expected: 0.7,
+    },
+    {
+      name: "Gravity acts",
+      mode: "eventually",
+      query: { type: "property", id: "human", field: "falling" },
+      op: "eq",
+      expected: true,
+    },
+    {
+      name: "Target reached",
+      mode: "at",
+      tick: 90,
+      query: { type: "property", id: "human", field: "x" },
+      op: "gte",
+      expected: 7.89,
+    },
+    {
+      name: "Target is not overshot",
+      mode: "at",
+      tick: 90,
+      query: { type: "property", id: "human", field: "x" },
+      op: "lte",
+      expected: 8.11,
+    },
+    {
+      name: "One-shot jump lands",
+      mode: "at",
+      tick: 90,
+      query: { type: "property", id: "human", field: "elevation" },
+      op: "eq",
+      expected: 0,
+    },
+  ];
+  const result = new TestRunner(s, roadmap).run();
+  assert.equal(result.status, "passed", JSON.stringify(result));
+});

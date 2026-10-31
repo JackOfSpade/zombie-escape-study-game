@@ -12,9 +12,18 @@ import { line, solid } from "./spatial";
 import { STAIRWELL_RADIUS, inStairwell, stairwell } from "./stairwell";
 import {
   cityStairBase,
+  buildStairRoute,
+  FLOOR_HEIGHT,
   sampleStairRoute,
   STAIR_ROUTE_WIDTH,
 } from "./stair-route";
+import {
+  insideFootprint,
+  startElevated,
+  stepElevated,
+  surfaceBelow,
+  type ElevatedSurface,
+} from "./elevated-physics";
 
 /** On a carved well, walking this close to the marker completes the flight. */
 export const STAIRWELL_DEEP = STAIRWELL_RADIUS / 2;
@@ -29,6 +38,9 @@ export interface StairTravel {
   walked?: number;
   /** A licensed walker joined the ground flight from its actual city position. */
   cityBase?: boolean;
+  /** A physical walker has left the building, and later entered a floor plate. */
+  left?: boolean;
+  arrived?: boolean;
 }
 const refusedCityBase = new WeakSet<Actor>();
 
@@ -117,9 +129,19 @@ export function stairwellAt(g: Game, a: Actor): "up" | "down" | undefined {
 /** Walking into a staircase starts its flight. Standing in one, or arriving
  * in one from another floor, does not start another; the survivor must step
  * out and back in. A locked staircase refuses the entry and says why. */
-export function enterStairs(g: Game, a: Actor, walking = false) {
+export function enterStairs(g: Game, a: Actor, walking = false, input?: Point) {
   const well = a.alive && !a.escaped ? stairwellAt(g, a) : undefined;
-  if (well === a.stairwell) return false;
+  if (well === a.stairwell) {
+    // A newly unlocked visible portal must work without requiring an unseen
+    // step-out/reset. Outbound input also distinguishes this from an arrival.
+    const outbound = well && input && input.y * (well === "up" ? -1 : 1) > 0;
+    if (
+      !walking ||
+      !outbound ||
+      (well === "up" && !a.access.includes(a.floor) && !devPass(a))
+    )
+      return false;
+  }
   if (well) a.stairwell = well;
   else delete a.stairwell;
   if (!well || a.stairTravel || a.vault) return false;
@@ -174,7 +196,7 @@ function startStairTravel(
   walking: boolean,
 ) {
   a.stairTravel = travel;
-  if (walking) delete a.physics;
+  if (walking) startElevated(g, a);
   delete a.station;
   delete a.handling;
   delete a.grip;
@@ -213,7 +235,7 @@ export function advanceStairs(g: Game, a: Actor) {
   if (
     !a.alive ||
     a.escaped ||
-    a.floor !== travel.fromFloor ||
+    (travel.walked === undefined && a.floor !== travel.fromFloor) ||
     !marker ||
     (travel.walked === undefined && !inStairwell(a, marker))
   ) {
@@ -221,7 +243,7 @@ export function advanceStairs(g: Game, a: Actor) {
     return false;
   }
   if (travel.walked !== undefined) {
-    if (travel.walked + 1e-8 < sampleStairRoute(g, travel).length) return true;
+    if (!travel.arrived) return true;
   } else {
     const deep =
       source.layout === "pursuit" && distance(a, marker) <= STAIRWELL_DEEP;
@@ -279,7 +301,11 @@ export function advanceStairs(g: Game, a: Actor) {
       (z) => z.hp > 0 && z.floor === travel.toFloor && distance(z, p) < 0.55,
     );
   // A crowded landing never blocks a flight forever: physics separates bodies.
-  const landing = candidates.find(free) ?? candidates[0];
+  // The physical walker has already reached a clear floor plate. Preserve
+  // that exact position; only timed AI flights need a landing search.
+  const landing = travel.arrived
+    ? travel.destination
+    : (candidates.find(free) ?? candidates[0]);
   if (!landing) {
     if (a.id === "human")
       g.notice = "Stair landing blocked. Step back out to stay on this floor.";
@@ -287,7 +313,10 @@ export function advanceStairs(g: Game, a: Actor) {
   }
   a.floor = travel.toFloor;
   Object.assign(a, landing);
-  if (travel.walked !== undefined) delete a.physics;
+  if (travel.walked !== undefined) {
+    delete a.physics;
+    delete a.elevated;
+  }
   delete a.stairTravel;
   a.path = [];
   delete a.target;
@@ -304,37 +333,118 @@ export function advanceStairs(g: Game, a: Actor) {
   return true;
 }
 
-/** A narrow, railed stair is its own continuous motor, separate from the
- * floor's flat Planck world. Looking around or standing still never advances
- * it. Both forward and backward input use the actual current flight tangent. */
-export function walkStairs(g: Game, a: Actor, input: Point, dt: number) {
+/** Upgrade a saved centreline pose once, then retain free physical movement. */
+export function ensureWalkingBody(g: Game, a: Actor) {
   const travel = a.stairTravel;
-  if (!travel || travel.walked === undefined) return false;
-  const pose = sampleStairRoute(g, travel),
-    n = Math.max(1, Math.hypot(input.x, input.y)),
-    movement =
-      ((input.x * pose.tangent.x + input.y * pose.tangent.y) / n) *
-      a.speed *
-      dt,
-    next = Math.max(0, Math.min(pose.length, travel.walked + movement));
-  if (movement < 0 && next <= 1e-8) {
-    Object.assign(a, travel.origin);
+  if (!travel || travel.walked === undefined || a.elevated) return;
+  const pose = sampleStairRoute(g, travel);
+  a.x = pose.x;
+  a.y = pose.z;
+  // Old centreline saves used a smooth ramp, while the visible flight has
+  // discrete 18 cm treads. Settle within the ordinary step/snap tolerance.
+  const surface = surfaceBelow(g, a, a, pose.y + 0.3);
+  startElevated(
+    g,
+    a,
+    surface && Math.abs(surface.height - pose.y) <= 0.3
+      ? surface.height
+      : pose.y,
+  );
+}
+
+/** Keep the historical route distance as a projection, never a constraint. */
+function projectWalkingProgress(g: Game, a: Actor) {
+  const travel = a.stairTravel!;
+  const route = buildStairRoute(g, travel);
+  let along = 0,
+    best = Infinity,
+    walked = 0;
+  for (let i = 1; i < route.points.length; i++) {
+    const p = route.points[i - 1],
+      q = route.points[i];
+    const dx = q.x - p.x,
+      dy = q.y - p.y,
+      dz = q.z - p.z;
+    const length = Math.hypot(dx, dy, dz);
+    const t = length
+      ? Math.max(
+          0,
+          Math.min(
+            1,
+            ((a.x - p.x) * dx +
+              (a.elevated!.feet - p.y) * dy +
+              (a.y - p.z) * dz) /
+              (length * length),
+          ),
+        )
+      : 0;
+    const distance = Math.hypot(
+      a.x - p.x - dx * t,
+      a.elevated!.feet - p.y - dy * t,
+      a.y - p.z - dz * t,
+    );
+    if (distance < best) {
+      best = distance;
+      walked = along + length * t;
+    }
+    along += length;
+  }
+  travel.walked = walked;
+}
+
+/** Transfer to flat physics only on a real floor plate or city ground. */
+export function settleElevated(g: Game, a: Actor, surface?: ElevatedSurface) {
+  const body = a.elevated;
+  if (!body) return;
+  const travel = a.stairTravel;
+  a.floor = Math.max(
+    0,
+    Math.min(CONFIG.floors, Math.floor((body.feet + 0.05) / FLOOR_HEIGHT)),
+  );
+  if (travel?.walked !== undefined) {
+    projectWalkingProgress(g, a);
+    if (!insideFootprint(g.floors[travel.fromFloor], a)) travel.left = true;
+    if (!body.grounded || !surface) return;
+    if (surface.kind === "ground") {
+      cancelStairs(g, a);
+      a.floor = 0;
+      if (g.floors[0].city) delete a.elevated;
+      delete a.physics;
+    } else if (surface.kind === "plate" && surface.inside) {
+      a.floor = surface.floor;
+      if (
+        (!travel.left && !inStairwell(a, travel.origin)) ||
+        (travel.left && surface.floor === travel.fromFloor)
+      ) {
+        cancelStairs(g, a);
+        delete a.elevated;
+        delete a.physics;
+        a.stairwell = stairwellAt(g, a);
+      } else if (travel.left) {
+        travel.toFloor = surface.floor;
+        travel.destination = { x: a.x, y: a.y };
+        travel.arrived = true;
+        advanceStairs(g, a);
+      }
+    }
+  } else if (
+    body.grounded &&
+    surface &&
+    (surface.kind === "plate" || surface.kind === "ground")
+  ) {
+    a.floor = surface.floor;
+    // Historical fixtures have no city physics outside the tile grid. Keep
+    // their flat outdoor body until a real plate, without an invisible edge.
+    if (surface.kind === "plate" || g.floors[0].city) delete a.elevated;
     delete a.physics;
-    // Returning to the same doorway is an arrival, not a fresh entry. The
-    // next backward step must be able to leave the well normally.
-    a.stairwell = travel.toFloor > travel.fromFloor ? "up" : "down";
-    cancelStairs(g, a);
-    return true;
   }
-  travel.walked = next;
-  const stepped = sampleStairRoute(g, travel);
-  a.x = stepped.x;
-  a.y = stepped.z;
-  if (movement !== 0) {
-    a.heading = { x: input.x / n, y: input.y / n };
-    a.noiseUntil = g.time + 0.4;
-    a.noiseLevel = 4;
-  }
-  advanceStairs(g, a);
-  return true;
+}
+
+/** Walk freely in two dimensions; only visible geometry blocks the body. */
+export function walkStairs(g: Game, a: Actor, input: Point, dt: number) {
+  if (a.stairTravel?.walked === undefined) return false;
+  ensureWalkingBody(g, a);
+  const result = stepElevated(g, a, input, dt);
+  settleElevated(g, a, result.surface);
+  return result;
 }

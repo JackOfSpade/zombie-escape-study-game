@@ -175,6 +175,15 @@ export interface DoorState {
 export interface Actor extends Point {
   keys?: number;
   physics?: PhysicsMotion;
+  /** Human-only vertical body, retained as plain data across saves. */
+  elevated?: {
+    feet: number;
+    vx: number;
+    vy: number;
+    vz: number;
+    peak: number;
+    grounded: boolean;
+  };
   technical?: import("./npc-cognition").NpcProfile;
   id: string;
   name: string;

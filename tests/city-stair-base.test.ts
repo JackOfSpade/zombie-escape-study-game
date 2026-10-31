@@ -5,7 +5,7 @@ import { DoubleSide, Mesh, MeshBasicMaterial, Raycaster, Vector3 } from "three";
 import { step } from "../src/engine";
 import { type Actor, type Game, type Roadmap } from "../src/model";
 import { decode, encode, recover } from "../src/persistence";
-import { cityStairBase, sampleStairRoute } from "../src/stair-route";
+import { buildStairRoute, cityStairBase } from "../src/stair-route";
 import { enterCityStairBase } from "../src/stair-travel";
 import { buildCityStairFoundation } from "../src/view3d/stair-gallery";
 import { createPlayableGame } from "../src/world";
@@ -42,10 +42,8 @@ function walk(
   for (let i = 0; i < ticks; i++)
     step(g, DT, { ...input, grab: false, stairWalk });
 }
-function pose(g: Game, a: Actor) {
-  return a.stairTravel
-    ? sampleStairRoute(g, a.stairTravel)
-    : { x: a.x, y: a.floor * 3.6, z: a.y };
+function pose(a: Actor) {
+  return { x: a.x, y: a.elevated?.feet ?? a.floor * 3.6, z: a.y };
 }
 
 test("native court walking cannot pass through the solid lowest flight at any visible riser", () => {
@@ -115,32 +113,25 @@ test("a credentialed player joins from the actual court position and looking or 
   assert.deepEqual({ x: a.x, y: a.y }, origin);
   assert.deepEqual(a.stairTravel!.origin, origin);
   assert.equal(a.stairTravel!.cityBase, true);
-  const initial = sampleStairRoute(g, a.stairTravel!);
-  assert.deepEqual(
-    { x: initial.x, y: initial.y, z: initial.z },
-    { x: origin.x, y: 0, z: origin.y },
-  );
+  const initial = pose(a);
+  assert.deepEqual(initial, { x: origin.x, y: 0, z: origin.y });
   assert.equal(a.stairTravel!.walked, 0);
   let previous = initial;
   for (let i = 0; i < 24; i++) {
-    const before = sampleStairRoute(g, a.stairTravel!);
-    step(g, DT, { ...before.tangent, grab: false, stairWalk: true });
-    const next = sampleStairRoute(g, a.stairTravel!);
+    step(g, DT, { x: 0, y: 1, grab: false, stairWalk: true });
+    const next = pose(a);
     assert.ok(
-      Math.hypot(
-        next.x - previous.x,
-        next.y - previous.y,
-        next.z - previous.z,
-      ) <=
+      Math.hypot(next.x - previous.x, next.z - previous.z) <=
         a.speed * DT + 1e-7,
     );
+    assert.ok(Math.abs(next.y - previous.y) <= 0.3 + 1e-7);
     previous = next;
   }
   assert.ok(previous.y > 0.4 && a.y > base.start.y);
   const distance = a.stairTravel!.walked;
   walk(g, idle, 120);
   assert.equal(a.stairTravel!.walked, distance);
-  assert.deepEqual(sampleStairRoute(g, a.stairTravel!), previous);
+  assert.deepEqual(pose(a), previous);
   assert.equal(g.events.filter((e) => e.type === "climb").length, 0);
 });
 
@@ -157,7 +148,7 @@ test("unlicensed and sideways court walkers stay physically blocked and receive 
   assert.equal(enterCityStairBase(g, a, { x: 0, y: -1 }), false);
 });
 
-test("a city-base ascent preserves its exact pose through save, reverses to the real origin and reaches the upper landing by walking", () => {
+test("a city-base ascent saves its exact body, reverses freely and reaches the upper landing by walking", () => {
   const original = fixture();
   original.a.access = [0];
   const origin = { x: original.a.x, y: original.a.y };
@@ -165,53 +156,57 @@ test("a city-base ascent preserves its exact pose through save, reverses to the 
     enterCityStairBase(original.g, original.a, { x: 0, y: 1 }),
     true,
   );
-  for (let i = 0; i < 30; i++) {
-    const p = sampleStairRoute(original.g, original.a.stairTravel!);
-    step(original.g, DT, { ...p.tangent, grab: false, stairWalk: true });
-  }
-  const savedPose = sampleStairRoute(original.g, original.a.stairTravel!),
+  walk(original.g, { x: 0, y: 1 }, 30);
+  const savedPose = pose(original.a),
+    savedBody = structuredClone(original.a.elevated),
     g = recover(decode(encode(original.g))),
     a = g.survivors[0];
-  assert.deepEqual(sampleStairRoute(g, a.stairTravel!), savedPose);
-  for (let i = 0; i < 100 && a.stairTravel; i++) {
-    const p = sampleStairRoute(g, a.stairTravel);
-    step(g, DT, {
-      x: -p.tangent.x,
-      y: -p.tangent.y,
-      grab: false,
-      stairWalk: true,
-    });
-  }
+  assert.deepEqual(pose(a), savedPose);
+  assert.deepEqual(a.elevated, savedBody);
+  walk(g, { x: 0, y: -1 }, 50);
   assert.equal(a.stairTravel, undefined);
-  assert.deepEqual({ x: a.x, y: a.y }, origin);
+  assert.ok(
+    a.y < origin.y,
+    "reversal walks into the court without snapping to the old origin",
+  );
   assert.equal(a.floor, 0);
+  assert.equal(a.hp, 100);
   assert.equal(g.events.filter((e) => e.type === "climb").length, 0);
   const base = cityStairBase(g)!;
-  walk(g, { x: 0, y: -1 }, 6);
-  assert.ok(
-    a.y < origin.y && !a.stairTravel,
-    "backing away resumes ordinary court walking",
-  );
-  walk(g, { x: 0, y: 1 }, 15);
-  assert.ok(g.survivors[0].stairTravel?.cityBase);
-  let previous = pose(g, a);
-  for (let i = 0; i < 1000 && a.floor === 0; i++) {
-    const p = sampleStairRoute(g, a.stairTravel!);
-    step(g, DT, { ...p.tangent, grab: false, stairWalk: true });
-    const next = pose(g, a);
+  for (let i = 0; i < 150 && !a.stairTravel; i++)
+    step(g, DT, { x: 0, y: 1, grab: false, stairWalk: true });
+  assert.ok((a as Actor).stairTravel?.cityBase);
+  const route = buildStairRoute(g, a.stairTravel!);
+  let previous = pose(a);
+  for (const p of [
+    ...route.points.slice(1),
+    { x: g.floors[1].entry.x, z: g.floors[1].boundary!.bottom - 0.5 },
+  ]) {
+    for (
+      let i = 0;
+      i < 500 && Math.hypot(a.x - p.x, a.y - p.z) > a.speed * DT;
+      i++
+    ) {
+      const dx = p.x - a.x,
+        dy = p.z - a.y,
+        n = Math.hypot(dx, dy);
+      step(g, DT, { x: dx / n, y: dy / n, grab: false, stairWalk: true });
+      const next = pose(a);
+      assert.ok(
+        Math.hypot(next.x - previous.x, next.z - previous.z) <=
+          a.speed * DT + 1e-7,
+      );
+      assert.ok(Math.abs(next.y - previous.y) <= 0.3 + 1e-7);
+      previous = next;
+    }
     assert.ok(
-      Math.hypot(
-        next.x - previous.x,
-        next.y - previous.y,
-        next.z - previous.z,
-      ) <=
-        a.speed * DT + 1e-7,
+      Math.hypot(a.x - p.x, a.y - p.z) <= a.speed * DT + 1e-7,
+      `walk reaches (${p.x}, ${p.z}) from (${a.x}, ${a.y})`,
     );
-    previous = next;
   }
   assert.equal(a.floor, 1);
   assert.equal(a.stairTravel, undefined);
-  assert.deepEqual({ x: a.x, y: a.y }, g.floors[1].entry);
+  assert.equal(a.hp, 100);
   assert.equal(a.access.includes(1), false);
   assert.ok(base.rise > 3.5);
 });

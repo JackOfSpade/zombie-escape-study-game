@@ -232,3 +232,39 @@ for (const kind of ["chair", "desk", "sofa", "fridge", "shelf"] as const)
     );
     assert.ok(Math.abs(o.angle ?? 0) > 0.1);
   });
+
+test("Space jumps in force-field play, releases a held object and lands without repeated input", () => {
+  const { g, f, a, o } = scene();
+  g.rules = "force-fields";
+  assert.ok(toggleGrip(g, a, o.id));
+  step(g, 1 / 30, { x: 0, y: 0, grab: false, jump: true });
+  assert.equal(a.grip, undefined);
+  assert.equal(a.handling, undefined);
+  assert.ok(a.elevated && a.elevated.feet > 0);
+  let peak = a.elevated.feet;
+  for (let i = 0; i < 60; i++) {
+    step(g, 1 / 30, { x: 0, y: 0, grab: false });
+    peak = Math.max(peak, a.elevated?.feet ?? 0);
+  }
+  assert.ok(peak > 1 && peak <= 1.11, `jump peak ${peak}`);
+  assert.equal(a.elevated, undefined);
+  assert.equal(a.hp, 100);
+  assert.ok(!solid(f, a));
+});
+
+test("legacy Space prefers a faced vault and otherwise performs a free jump", () => {
+  const { g, a } = scene();
+  Object.assign(a, { x: 12, y: 10.85, heading: { x: 0, y: 1 } });
+  step(g, 1 / 30, { x: 0, y: 0, grab: false, jump: true });
+  assert.ok(
+    a.vault,
+    "the familiar barricade crossing remains the first choice",
+  );
+  assert.equal(a.elevated, undefined);
+  for (let i = 0; i < 60; i++) step(g, 1 / 30);
+  Object.assign(a, { x: 5, y: 5 });
+  step(g, 1 / 30, { x: 0, y: 0, grab: false, jump: true });
+  const jumped = g.survivors[0].elevated;
+  assert.ok(jumped && jumped.feet > 0, "a clear area uses the new jump");
+  assert.equal(a.vault, undefined);
+});
