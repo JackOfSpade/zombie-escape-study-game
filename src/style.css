@@ -441,6 +441,9 @@ body.spectating canvas {
 body.spectating canvas.dragging {
   cursor: grabbing;
 }
+#view3d.mouse-captured {
+  cursor: none;
+}
 /* Narrow viewports (terminal open, phones): stack the HUD rows. */
 .terminal-open .hud {
   flex-wrap: wrap;

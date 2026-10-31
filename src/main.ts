@@ -271,11 +271,16 @@ const firstPersonControls = new FirstPersonControls(canvas3d, {
   onRetry: () => {
     game.notice = "Click to capture the mouse and look around. Esc pauses.";
   },
+  onUnconfined: () => {
+    game.notice =
+      "This browser isn't locking the mouse, so the view keeps turning while the cursor is at the screen edge. For full mouse capture, open the game in Chrome, Edge, or Safari.";
+  },
   onLook: () => {
     savedLook = { id: game.id, ...firstPersonControls.look() };
   },
   onError: () => {
-    game.notice = "Mouse capture is unavailable. Use ←/→ to look around.";
+    game.notice =
+      "Mouse capture is unavailable. Use the arrow keys to look around.";
   },
 });
 // Initialize from the recovered survivor before any input or agent hook can
@@ -353,7 +358,7 @@ function syncGameView() {
   );
   document.body.classList.toggle("first-person", firstPerson);
   $("#arrow-hint").innerHTML = firstPerson
-    ? "<kbd>←/→</kbd> turn · <kbd>↑/↓</kbd> walk"
+    ? "<kbd>←/→</kbd> turn · <kbd>↑/↓</kbd> look"
     : "<kbd>↑↓←→</kbd> move";
 }
 function focusWorld(captureMouse = false) {
