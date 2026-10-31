@@ -296,6 +296,19 @@ export class FirstPersonView {
       this.exterior.group,
       this.atmosphere.group,
     );
+    // Interior surfaces and bodies receive every powered lamp's baked light.
+    for (const material of [
+      this.materials.box,
+      this.materials.head,
+      this.materials.screen,
+      this.materials.wall,
+      this.materials.ceiling,
+      this.materials.stairs,
+    ])
+      this.atmosphere.lightmap.patch(material);
+    const lm = this.atmosphere.lightmap.uniforms;
+    lm.interiorLmSky.value = this.fill.color;
+    lm.interiorLmGround.value = this.fill.groundColor;
     this.scene.background = new Color(normal.sky);
     this.scene.fog = new Fog(normal.sky, 2, 12);
     for (const finish of FINISHES)
@@ -307,6 +320,8 @@ export class FirstPersonView {
           roughness: 0.98,
         }),
       );
+    for (const material of this.floorMaterials.values())
+      this.atmosphere.lightmap.patch(material);
   }
 
   render(game: Game, yaw: number, pitch: number, dt: number, stalled = false) {
@@ -374,6 +389,12 @@ export class FirstPersonView {
       if (!outside)
         this.fill.intensity = 0.22 + this.atmosphere.currentLight * 0.22;
     } else this.atmosphere.phone.visible = false;
+    // The global fill tracks the player's own zone; the lightmap corrects
+    // every other surface to its own zone's power and lamps.
+    const lm = this.atmosphere.lightmap.uniforms;
+    lm.interiorLmAmbient.value = floor.boundary && !outside ? 0.22 : 0;
+    lm.interiorLmPlayer.value = this.atmosphere.currentLight;
+    lm.interiorLmPool.value = game.surge.state === "active" ? 0.75 : 1;
     this.sync(game, a, floor, palette);
     this.syncPanels(game, a, floor);
     for (const pool of this.poolList) pool.flush();

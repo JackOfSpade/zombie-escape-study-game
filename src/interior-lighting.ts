@@ -269,3 +269,134 @@ export class PhoneLightState {
     return this.mix;
   }
 }
+
+/** Texels per tile in the baked interior lightmap. */
+export const LIGHTMAP_RES = 2;
+/** Practical point lights hang just below the 2.785 m fixture housing. */
+export const FIXTURE_HEIGHT = 2.59;
+export const FIXTURE_RANGE = 7;
+export const fixtureIntensity = (f: CeilingFixture) => (f.level > 0.5 ? 22 : 7);
+
+/** Irradiance on an upward-facing floor at horizontal distance `d` from a
+ * fixture, matching three.js PointLight(decay 2, distance FIXTURE_RANGE). */
+export function poolIrradiance(intensity: number, d: number) {
+  const r2 = d * d + FIXTURE_HEIGHT * FIXTURE_HEIGHT,
+    r = Math.sqrt(r2),
+    cutoff = Math.max(0, 1 - (r / FIXTURE_RANGE) ** 4);
+  return ((intensity * FIXTURE_HEIGHT) / r / Math.max(r2, 0.01)) * cutoff ** 2;
+}
+
+/** One fixture's light on the floor grid, occluded by real walls. Values are
+ * a dense window of lightmap texels starting at (x0, y0). */
+export interface FixturePool {
+  fixture: CeilingFixture;
+  warm: boolean;
+  x0: number;
+  y0: number;
+  w: number;
+  h: number;
+  values: Float32Array;
+}
+
+const solidTile = (floor: Floor, x: number, y: number) =>
+  floor.tiles[y]?.[x] !== 0;
+
+/** Wall tiles block light; the target's own tile never occludes itself. */
+function litFrom(floor: Floor, from: Point, to: Point) {
+  const tx = Math.floor(to.x),
+    ty = Math.floor(to.y),
+    d = Math.hypot(to.x - from.x, to.y - from.y),
+    steps = Math.ceil(d / 0.2);
+  for (let i = 1; i < steps; i++) {
+    const x = Math.floor(from.x + ((to.x - from.x) * i) / steps),
+      y = Math.floor(from.y + ((to.y - from.y) * i) / steps);
+    if ((x !== tx || y !== ty) && solidTile(floor, x, y)) return false;
+  }
+  return true;
+}
+
+/** Texels inside wall tiles take the mean of their open 4-neighbours, so a
+ * thin wall's two faces each see only their own room. */
+function fillSolidTexels(
+  floor: Floor,
+  values: Float32Array,
+  w: number,
+  h: number,
+  x0 = 0,
+  y0 = 0,
+) {
+  const R = LIGHTMAP_RES,
+    source = values.slice();
+  for (let y = 0; y < h; y++)
+    for (let x = 0; x < w; x++) {
+      const gx = x0 + x,
+        gy = y0 + y;
+      if (!solidTile(floor, Math.floor(gx / R), Math.floor(gy / R))) continue;
+      let sum = 0,
+        n = 0;
+      for (const [dx, dy] of [
+        [1, 0],
+        [-1, 0],
+        [0, 1],
+        [0, -1],
+      ]) {
+        const nx = x + dx,
+          ny = y + dy;
+        if (nx < 0 || ny < 0 || nx >= w || ny >= h) continue;
+        if (
+          solidTile(floor, Math.floor((gx + dx) / R), Math.floor((gy + dy) / R))
+        )
+          continue;
+        sum += source[ny * w + nx];
+        n++;
+      }
+      values[y * w + x] = n ? sum / n : 0;
+    }
+}
+
+export function fixturePools(plan: InteriorLighting): FixturePool[] {
+  const { floor } = plan,
+    R = LIGHTMAP_RES,
+    reach = Math.ceil(FIXTURE_RANGE * R);
+  return plan.fixtures
+    .filter((f) => f.level > 0.2)
+    .map((fixture) => {
+      const x0 = Math.max(0, Math.floor(fixture.x * R) - reach),
+        y0 = Math.max(0, Math.floor(fixture.y * R) - reach),
+        x1 = Math.min(W * R, Math.floor(fixture.x * R) + reach + 1),
+        y1 = Math.min(H * R, Math.floor(fixture.y * R) + reach + 1),
+        w = x1 - x0,
+        h = y1 - y0,
+        values = new Float32Array(w * h),
+        intensity = fixtureIntensity(fixture);
+      for (let y = 0; y < h; y++)
+        for (let x = 0; x < w; x++) {
+          const p = { x: (x0 + x + 0.5) / R, y: (y0 + y + 0.5) / R };
+          if (solidTile(floor, Math.floor(p.x), Math.floor(p.y))) continue;
+          if (!inside(floor, p)) continue;
+          const d = Math.hypot(p.x - fixture.x, p.y - fixture.y);
+          if (d >= FIXTURE_RANGE || !litFrom(floor, fixture, p)) continue;
+          values[y * w + x] = poolIrradiance(intensity, d);
+        }
+      fillSolidTexels(floor, values, w, h, x0, y0);
+      return { fixture, warm: fixture.level > 0.5, x0, y0, w, h, values };
+    });
+}
+
+/** Zone power level per lightmap texel; 0 outside the occupied footprint. */
+export function ambientTexels(plan: InteriorLighting) {
+  const R = LIGHTMAP_RES,
+    w = W * R,
+    h = H * R,
+    values = new Float32Array(w * h),
+    covered = new Uint8Array(w * h);
+  for (let y = 0; y < h; y++)
+    for (let x = 0; x < w; x++) {
+      const p = { x: (x + 0.5) / R, y: (y + 0.5) / R };
+      if (!inside(plan.floor, p)) continue;
+      covered[y * w + x] = 1;
+      values[y * w + x] = lightAt(plan, p);
+    }
+  fillSolidTexels(plan.floor, values, w, h);
+  return { values, covered };
+}
