@@ -1,6 +1,5 @@
 import { createStudyWorkspaceView } from "./study-workspace-view";
 import { NpcVoiceDirector } from "./npc-voice";
-import { studyTrackSummary } from "./study-progress";
 import {
   beginDirectStudy,
   pauseDirectStudy,
@@ -3057,19 +3056,6 @@ function ui() {
         useItem(game, a, b.dataset.use!);
         persist();
       };
-  }
-  for (const track of ["PY", "PE"] as const) {
-    const progress = studyTrackSummary(roadmap, game.study, track);
-    const state = game.study.learner?.tracks[track];
-    const phase =
-      game.study.profile === "live" ? state?.phase : game.study.phases[track];
-    $(`#${track.toLowerCase()}-phase`).textContent =
-      `Tier ${progress.tier} · ${(phase ?? "").toLowerCase().replaceAll("_", " ")}`;
-    $(`#${track.toLowerCase()}-total`).textContent = String(
-      progress.passed,
-    ).padStart(2, "0");
-    $(`#${track.toLowerCase()}-count`).textContent =
-      `${progress.passed} / ${progress.total} Tier ${progress.tier} checkpoints verified`;
   }
   const c = eligibleForUI();
   $("#schedule").textContent = c
