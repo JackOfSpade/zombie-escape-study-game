@@ -328,6 +328,7 @@ test("restart saves learning before the new run; save and quit shows the saved r
   await page.keyboard.press("Escape");
   await page.keyboard.press("Escape");
   await page.locator("#save-quit").click();
+  await expect(page.locator("#start-card")).toBeVisible();
   await page.keyboard.press("Escape");
   await expect(page.locator("#start-card")).toBeHidden();
   await expect
