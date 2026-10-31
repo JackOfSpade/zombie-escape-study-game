@@ -1,5 +1,7 @@
 import type { Point } from "../model";
-import { arrowTurn, clampPitch } from "./math";
+import { arrowPitch, arrowTurn, clampPitch, edgeTurnRate } from "./math";
+
+const unconfinedPages = new WeakSet<Document>();
 
 /** A docked study question is HUD; only visible modal UI blocks game look. */
 export function canLookInGame(state: {
@@ -18,6 +20,7 @@ interface ControlHooks {
   onLook?(facing: Point): void;
   onError(): void;
   onRetry?(): void;
+  onUnconfined?(): void;
 }
 
 /** Pointer lock provides continuous mouse look until pause or interactive UI.
@@ -29,6 +32,10 @@ export class FirstPersonControls {
   private releasing = false;
   private requesting = false;
   private disposed = false;
+  private unconfined = false;
+  private firstCursor: Point | undefined;
+  private cursor: Point | undefined;
+  private movedEvents = 0;
   private unlockedAt = -Infinity;
   private events = new AbortController();
 
@@ -75,18 +82,46 @@ export class FirstPersonControls {
   }
 
   turn(keys: ReadonlySet<string>, dt: number) {
-    if (!this.canLook()) return;
-    const yaw = arrowTurn(
+    if (!this.canLook() || !Number.isFinite(dt) || dt <= 0) return;
+    let yaw = arrowTurn(
       this.yaw,
       keys.has("ArrowLeft"),
       keys.has("ArrowRight"),
       dt,
     );
-    if (yaw !== this.yaw) this.setLook(yaw, this.pitch);
+    let pitch = arrowPitch(
+      this.pitch,
+      keys.has("ArrowUp"),
+      keys.has("ArrowDown"),
+      dt,
+    );
+    if (
+      this.isLocked &&
+      this.unconfined &&
+      this.cursor &&
+      this.canvas.getBoundingClientRect
+    ) {
+      const rate = edgeTurnRate(
+        this.cursor.x,
+        this.cursor.y,
+        this.canvas.getBoundingClientRect(),
+      );
+      yaw += rate.yaw * dt;
+      pitch += rate.pitch * dt;
+    }
+    if (yaw !== this.yaw || pitch !== this.pitch) this.setLook(yaw, pitch);
+  }
+
+  private resetCapture() {
+    this.unconfined = false;
+    this.firstCursor = this.cursor = undefined;
+    this.movedEvents = 0;
+    this.canvas.classList?.remove("mouse-captured");
   }
 
   release() {
     if (this.isLocked || this.locked || this.requesting) this.releasing = true;
+    this.resetCapture();
     if (this.isLocked) document.exitPointerLock();
   }
 
@@ -95,6 +130,7 @@ export class FirstPersonControls {
   unlock() {
     const intentional = this.releasing;
     this.locked = this.requesting = this.releasing = false;
+    this.resetCapture();
     this.unlockedAt = performance.now();
     if (this.isLocked) document.exitPointerLock();
     if (!intentional && !this.disposed) this.hooks.onUnlock();
@@ -113,13 +149,33 @@ export class FirstPersonControls {
     if (this.isLocked || this.requesting || this.releasing || !this.canLook())
       return;
     this.requesting = true;
-    try {
-      const request = this.canvas.requestPointerLock();
-      // Older browsers return void from requestPointerLock.
-      if (request) void request.catch((error) => this.failed(error));
-    } catch (error) {
-      this.failed(error);
-    }
+    const request = (raw: boolean) => {
+      const failed = (error: unknown) => {
+        if (
+          raw &&
+          error instanceof DOMException &&
+          error.name === "NotSupportedError"
+        ) {
+          request(false);
+        } else this.failed(error);
+      };
+      try {
+        const result = raw
+          ? (
+              this.canvas.requestPointerLock as (options: {
+                unadjustedMovement: boolean;
+              }) => Promise<void> | void
+            ).call(this.canvas, {
+              unadjustedMovement: true,
+            })
+          : this.canvas.requestPointerLock();
+        // Older browsers return void from requestPointerLock.
+        if (result) void result.catch(failed);
+      } catch (error) {
+        failed(error);
+      }
+    };
+    request(true);
   }
 
   private failed(error?: unknown) {
@@ -134,7 +190,8 @@ export class FirstPersonControls {
       performance.now() - this.unlockedAt < 2000 ||
       error === undefined ||
       name === "SecurityError" ||
-      name === "NotAllowedError";
+      name === "NotAllowedError" ||
+      name === "WrongDocumentError";
     if (transient) this.hooks.onRetry?.();
     else this.hooks.onError();
   }
@@ -143,6 +200,7 @@ export class FirstPersonControls {
     const wasLocked = this.locked;
     this.locked = this.isLocked;
     if (this.locked) {
+      this.canvas.classList?.add("mouse-captured");
       this.requesting = false;
       if (this.releasing || !this.canLook()) this.release();
     } else if (wasLocked || this.requesting) {
@@ -152,7 +210,26 @@ export class FirstPersonControls {
   }
 
   private mouseLook(event: MouseEvent) {
-    if (!this.isLocked || !this.canLook()) return;
+    if (!this.isLocked || this.disposed || this.releasing) return;
+    if (Number.isFinite(event.clientX) && Number.isFinite(event.clientY)) {
+      this.cursor = { x: event.clientX, y: event.clientY };
+      this.firstCursor ??= this.cursor;
+      if (
+        !this.unconfined &&
+        Math.hypot(
+          this.cursor.x - this.firstCursor.x,
+          this.cursor.y - this.firstCursor.y,
+        ) > 4 &&
+        ++this.movedEvents >= 3
+      ) {
+        this.unconfined = true;
+        if (!unconfinedPages.has(document)) {
+          unconfinedPages.add(document);
+          this.hooks.onUnconfined?.();
+        }
+      }
+    }
+    if (!this.canLook()) return;
     this.setLook(
       this.yaw + event.movementX * 0.0022,
       this.pitch - event.movementY * 0.0022,

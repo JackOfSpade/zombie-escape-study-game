@@ -33,6 +33,7 @@ export function movementInput(
 }
 
 export const ARROW_TURN_SPEED = 2.6;
+export const ARROW_PITCH_SPEED = 1.4;
 
 /** Arrow turning is separate from translation; positive yaw turns right. */
 export function arrowTurn(
@@ -48,7 +49,50 @@ export function arrowTurn(
   );
 }
 
-/** First-person arrows turn or move longitudinally; A/D always strafe. */
+/** Vertical arrows tilt the camera; positive pitch looks up. */
+export function arrowPitch(
+  pitch: number,
+  up: boolean,
+  down: boolean,
+  dt: number,
+) {
+  if (!Number.isFinite(dt) || dt <= 0) return pitch;
+  return clampPitch(
+    pitch + (Number(up) - Number(down)) * ARROW_PITCH_SPEED * dt,
+  );
+}
+
+/** Unconfined cursor edges turn at rad/s, with the same signs as mouse look. */
+export function edgeTurnRate(
+  x: number,
+  y: number,
+  rect: { left: number; top: number; width: number; height: number },
+) {
+  if (
+    ![x, y, rect.left, rect.top, rect.width, rect.height].every(
+      Number.isFinite,
+    ) ||
+    rect.width <= 0 ||
+    rect.height <= 0
+  )
+    return { yaw: 0, pitch: 0 };
+  const horizontal = Math.max(24, 0.06 * rect.width),
+    vertical = Math.max(24, 0.06 * rect.height),
+    strength = (distance: number, band: number) =>
+      Math.max(0, Math.min(1, 1 - distance / band));
+  return {
+    yaw:
+      (strength(rect.left + rect.width - x, horizontal) -
+        strength(x - rect.left, horizontal)) *
+      2.4,
+    pitch:
+      (strength(y - rect.top, vertical) -
+        strength(rect.top + rect.height - y, vertical)) *
+      1.2,
+  };
+}
+
+/** First-person WASD moves on the floor; arrows control only the camera. */
 export function firstPersonInput(
   yaw: number,
   keys: ReadonlySet<string>,
@@ -56,7 +100,6 @@ export function firstPersonInput(
   return movementInput(
     yaw,
     Number(keys.has("KeyD")) - Number(keys.has("KeyA")),
-    Number(keys.has("KeyW") || keys.has("ArrowUp")) -
-      Number(keys.has("KeyS") || keys.has("ArrowDown")),
+    Number(keys.has("KeyW")) - Number(keys.has("KeyS")),
   );
 }

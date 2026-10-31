@@ -5,7 +5,13 @@ import { human, step, vault, type Input } from "../src/engine";
 import { TestRunner, TEST_DT } from "../src/gametest/runner";
 import { emptyScenario } from "../src/gametest/schema";
 import type { Game, Point, Roadmap } from "../src/model";
-import { arrowTurn, firstPersonInput } from "../src/view3d/math";
+import {
+  ARROW_PITCH_SPEED,
+  arrowPitch,
+  arrowTurn,
+  firstPersonInput,
+  MAX_PITCH,
+} from "../src/view3d/math";
 
 const roadmap: Roadmap = JSON.parse(
   readFileSync("public/curriculum.json", "utf8"),
@@ -46,18 +52,39 @@ test("arrow turn rate is independent of refresh interval and ignores invalid dur
   for (const dt of [0, -1, NaN, Infinity])
     near(arrowTurn(0.3, false, true, dt), 0.3);
 });
-test("first-person vertical arrows move forward/back and WASD preserves strafing", () => {
-  point(firstPersonInput(0, keys("ArrowUp")), { x: 1, y: 0 });
-  point(firstPersonInput(0, keys("ArrowDown")), { x: -1, y: 0 });
-  point(firstPersonInput(Math.PI / 2, keys("ArrowUp")), { x: 0, y: 1 });
+test("first-person vertical arrows only look and WASD preserves movement", () => {
+  point(firstPersonInput(0, keys("ArrowUp")), { x: 0, y: 0 });
+  point(firstPersonInput(0, keys("ArrowDown")), { x: 0, y: 0 });
+  point(firstPersonInput(Math.PI / 2, keys("ArrowUp")), { x: 0, y: 0 });
   point(firstPersonInput(Math.PI / 2, keys("KeyA")), { x: 1, y: 0 });
   point(firstPersonInput(Math.PI / 2, keys("KeyD")), { x: -1, y: 0 });
   point(firstPersonInput(0, keys("KeyW", "ArrowUp")), { x: 1, y: 0 });
-  point(firstPersonInput(0, keys("KeyW", "ArrowDown")), { x: 0, y: 0 });
-  point(firstPersonInput(0, keys("KeyD", "ArrowUp")), {
-    x: Math.SQRT1_2,
-    y: Math.SQRT1_2,
-  });
+  point(firstPersonInput(0, keys("KeyW", "ArrowDown")), { x: 1, y: 0 });
+  point(firstPersonInput(0, keys("KeyD", "ArrowUp")), { x: 0, y: 1 });
+});
+test("vertical arrows raise and lower pitch at 1.4 rad/s", () => {
+  assert.equal(ARROW_PITCH_SPEED, 1.4);
+  near(arrowPitch(0.2, true, false, 0.5), 0.9);
+  near(arrowPitch(0.2, false, true, 0.5), -0.5);
+  near(arrowPitch(0.2, true, true, 1), 0.2);
+  near(arrowPitch(0.2, false, false, 1), 0.2);
+});
+test("arrow pitch clamps at both vertical limits", () => {
+  assert.equal(arrowPitch(MAX_PITCH - 0.01, true, false, 1), MAX_PITCH);
+  assert.equal(arrowPitch(-MAX_PITCH + 0.01, false, true, 1), -MAX_PITCH);
+  assert.equal(arrowPitch(MAX_PITCH, true, false, 1), MAX_PITCH);
+  assert.equal(arrowPitch(-MAX_PITCH, false, true, 1), -MAX_PITCH);
+});
+test("arrow pitch rate is independent of refresh interval and ignores invalid durations", () => {
+  for (const hz of [30, 60, 120]) {
+    let pitch = 0;
+    for (let i = 0; i < hz; i++) pitch = arrowPitch(pitch, true, false, 1 / hz);
+    near(pitch, 1.4);
+  }
+  for (const dt of [0, -1, NaN, Infinity, -Infinity]) {
+    assert.equal(arrowPitch(0.3, true, false, dt), 0.3);
+    assert.equal(arrowPitch(0.3, false, true, dt), 0.3);
+  }
 });
 test("first-person strafing keeps traffic heading aligned with actual walking direction", () => {
   const game = fixture(),
