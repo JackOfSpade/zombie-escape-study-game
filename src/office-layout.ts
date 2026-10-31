@@ -17,6 +17,7 @@ import { boxesOverlap } from "./furniture-geometry";
 import { canPlace, inFurniture, wall } from "./spatial";
 import { stairwellApproach } from "./stairwell";
 import { floorSectors, inRect, type Rect } from "./floor-plan";
+import { realizeAuthoredScene } from "./authored-scene";
 
 /** Office rooms for freshly generated floors. Each room gets a function
  * (break room, open-plan cubicles, meeting room, storage, reception or
@@ -382,7 +383,7 @@ function terminalBays(
 }
 
 /** Cells a walking body cannot enter: walls and solid furniture (doors pass). */
-function blockedGrid(f: Floor) {
+export function blockedGrid(f: Floor) {
   const grid = new Uint8Array(W * H);
   for (let y = 0; y < H; y++)
     for (let x = 0; x < W; x++)
@@ -390,7 +391,7 @@ function blockedGrid(f: Floor) {
   for (const o of f.furniture) markObject(grid, o);
   return grid;
 }
-function markObject(grid: Uint8Array, o: Furniture) {
+export function markObject(grid: Uint8Array, o: Furniture) {
   if (o.kind === "door" || o.field) return;
   const r = Math.hypot(o.w, o.h) / 2 + 0.3;
   for (
@@ -407,7 +408,7 @@ function markObject(grid: Uint8Array, o: Furniture) {
       if (inFurniture({ x: x + 0.5, y: y + 0.5 }, o, 0.4)) grid[y * W + x] = 1;
 }
 /** Open cells connected to `from`. */
-function reachable(grid: Uint8Array, from: Point) {
+export function reachable(grid: Uint8Array, from: Point) {
   const seen = new Uint8Array(W * H),
     queue = [Math.floor(from.y) * W + Math.floor(from.x)];
   while (queue.length) {
@@ -489,6 +490,9 @@ export function furnishOffice(
   /** Entrance fields: every terminal must still reach the stairs with these sealed. */
   sealed: Furniture[] = [],
 ) {
+  // Authored objects reserve real physical space before optional seeded filler.
+  // The v1/legacy path performs no new work and consumes no additional RNG.
+  if (f.design?.scene) realizeAuthoredScene(f, keepClear, from, sealed);
   const r: Rng = {
     rng:
       (Math.imul(seed ^ 0x51f15e, 0x2c1b3c6d) ^

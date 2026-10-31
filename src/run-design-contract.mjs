@@ -1,4 +1,5 @@
 // Shared by the browser and relay. Design replies are bounded JSON data only.
+import { parseSceneDesign } from "./scene-catalog.mjs";
 const record = (v) => v !== null && typeof v === "object" && !Array.isArray(v);
 function requireThat(ok, message) {
   if (!ok) throw Error(`Run design: ${message}`);
@@ -65,7 +66,7 @@ const uint = (v, p) => number(v, 0, 4294967295, p, true);
 const clone = (v) => JSON.parse(JSON.stringify(v));
 
 export function parseRunDesign(v) {
-  bounded(v, 24000);
+  bounded(v, v?.version === 2 ? 100000 : 24000);
   object(
     v,
     [
@@ -83,7 +84,7 @@ export function parseRunDesign(v) {
     ],
     "design",
   );
-  requireThat(v.version === 1, "unsupported design version");
+  requireThat(v.version === 1 || v.version === 2, "unsupported design version");
   text(v.title, 64, "title");
   text(v.premise, 240, "premise");
   text(v.opening, 200, "opening");
@@ -121,6 +122,7 @@ export function parseRunDesign(v) {
         "power",
         "stories",
         "brokenGuard",
+        ...(v.version === 2 ? ["scene"] : []),
       ],
       p,
     );
@@ -178,6 +180,14 @@ export function parseRunDesign(v) {
     new Set(names).size === 19 && !names.includes("you"),
     "roster needs 19 unique names distinct from You",
   );
+  if (v.version === 2)
+    v.floors.forEach((floor, index) =>
+      parseSceneDesign(
+        floor.scene,
+        v.roster.map((a) => a.name),
+        `floors[${index}].scene`,
+      ),
+    );
   const c = v.city;
   object(
     c,
@@ -269,21 +279,67 @@ export function summarizeRunDesign(d) {
     b.shape === "stepped" ? b.mirrored : null,
     b.shape === "stepped" || b.shape === "waisted" ? b.shoulder : null,
   ];
+  const atmosphere = [
+    d.floors.map((f) => [f.roomTypes, f.furnitureDensity, f.power]),
+    d.city.palette,
+    d.exterior.skyline,
+  ];
+  const spatial = [
+    footprint,
+    d.floors.map((f) => [f.family, f.roomOrder]),
+    d.city.roadWidth,
+    d.city.boulevardOffset,
+    d.city.districtSize,
+  ];
+  if (d.version === 2) {
+    const rooms = d.floors.flatMap((f) => f.scene.rooms),
+      furniture = rooms.flatMap((r) => r.furniture),
+      props = furniture.flatMap((o) => o.props),
+      counts = (items) => {
+        const result = {};
+        for (const item of items)
+          result[item.kind] = (result[item.kind] ?? 0) + 1;
+        return result;
+      };
+    // IDs, labels, tabletop decoration and tiny nudges cannot disguise the same
+    // physical plan. Compare room-relative fifths and 30-degree heading bins.
+    spatial.push(
+      runDesignFingerprint(
+        d.floors.map((f) =>
+          [...f.scene.rooms]
+            .sort((a, b) => a.room - b.room)
+            .map((r) => [
+              r.room,
+              r.furniture
+                .map((o) => [
+                  o.kind,
+                  Math.round(o.at.x * 5),
+                  Math.round(o.at.y * 5),
+                  Math.round((o.angle < 0 ? o.angle + 360 : o.angle) / 30) % 12,
+                ])
+                .sort((a, b) => {
+                  const left = canonical(a),
+                    right = canonical(b);
+                  return left < right ? -1 : left > right ? 1 : 0;
+                }),
+            ]),
+        ),
+      ),
+    );
+    // Keep history bounded while exposing useful palette/catalog choices.
+    // The signature also covers individual owners, arrangements and text.
+    atmosphere.push({
+      scene: runDesignFingerprint(d.floors.map((f) => f.scene)),
+      rooms: rooms.map((r) => [r.room, r.condition, r.palette]),
+      furniture: counts(furniture),
+      props: counts(props),
+    });
+  }
   return {
     title: d.title,
     premise: d.premise,
-    spatial: canonical([
-      footprint,
-      d.floors.map((f) => [f.family, f.roomOrder]),
-      d.city.roadWidth,
-      d.city.boulevardOffset,
-      d.city.districtSize,
-    ]),
-    atmosphere: canonical([
-      d.floors.map((f) => [f.roomTypes, f.furnitureDensity, f.power]),
-      d.city.palette,
-      d.exterior.skyline,
-    ]),
+    spatial: canonical(spatial),
+    atmosphere: canonical(atmosphere),
     cast: canonical(d.roster),
     tempo: canonical(d.pacing),
   };
@@ -317,7 +373,7 @@ export function runDesignNoveltyErrors(design, recent) {
 export function parseRunDesignRequest(v) {
   // Composable maximum: five summaries, one valid candidate and repair errors.
   // Native handoff chunks large packets; 40 KB is only its inline threshold.
-  bounded(v, 512000);
+  bounded(v, v?.designVersion === 2 ? 640000 : 512000);
   requireThat(record(v), "request must be an object");
   object(
     v,
@@ -327,11 +383,14 @@ export function parseRunDesignRequest(v) {
       "generationId",
       "seed",
       "recent",
+      ...(Object.hasOwn(v, "designVersion") ? ["designVersion"] : []),
       ...(Object.hasOwn(v, "repair") ? ["repair"] : []),
     ],
     "request",
   );
   requireThat(v.version === 1, "unsupported request version");
+  if (Object.hasOwn(v, "designVersion"))
+    requireThat(v.designVersion === 2, "designVersion must be 2 when supplied");
   for (const k of ["requestId", "generationId"]) {
     text(v[k], 128, k);
     requireThat(
@@ -353,7 +412,11 @@ export function parseRunDesignRequest(v) {
   });
   if (v.repair) {
     object(v.repair, ["candidate", "errors"], "repair");
-    parseRunDesign(v.repair.candidate);
+    const candidate = parseRunDesign(v.repair.candidate);
+    requireThat(
+      candidate.version === (v.designVersion ?? 1),
+      "repair candidate version does not match the requested design version",
+    );
     array(v.repair.errors, 1, 20, "repair.errors", (s, p) => text(s, 400, p));
   }
   return clone(v);
@@ -364,7 +427,12 @@ export function parseRunDesignReply(v, request) {
     v.requestId === request.requestId,
     "reply requestId does not match",
   );
-  return { requestId: v.requestId, design: parseRunDesign(v.design) };
+  const design = parseRunDesign(v.design);
+  requireThat(
+    design.version === (request.designVersion ?? 1),
+    "reply design version does not match the requested design version",
+  );
+  return { requestId: v.requestId, design };
 }
 function canonical(v) {
   return JSON.stringify(v, (_key, x) =>
@@ -407,11 +475,19 @@ export function parseSavedRunDesign(v) {
 
 export const RUN_DESIGN_GUIDANCE = `Design a distinctive fictional zombie-escape office building as JSON, not a study question. Return exactly {requestId: the captured requestId, design: {...}}. Do not output code, HTML, URLs, learner claims or mechanical rule changes. The engine realizes your choices as collision-tested geometry. Give every floor its own coherent purpose and story; tie signs and notes to this cast and premise. Vary actual spatial choices, furnishing, cast, atmosphere and tempo, not only names or random seeds. Recent fictional summaries identify designs to avoid. If repair is supplied, correct all listed failures while retaining the intended theme. Do not conceal an invalid plan or claim validation was performed.
 
-The required design fields and bounds are:
-version:1; title(1-64 characters), premise(1-240), opening(1-200), roofName(1-48).
+The captured payload selects the design version. If payload.designVersion is 2, return design.version:2 and include the scene objects below. If designVersion is absent, this is a retained version 1 request: return design.version:1 and OMIT scene on every floor. Never upgrade a retained request or downgrade a version 2 request.
+
+The common required design fields and bounds are:
+version:as requested above; title(1-64 characters), premise(1-240), opening(1-200), roofName(1-48).
 footprint:{shape:rectangle|chamfered|stepped|waisted,width:36|38|40,top:integer2..4,inset:integer2..4,mirrored:boolean,shoulder:integer top+8..top+14}.
 floors:exactly4 entries in ascending order, each {name(1-48),family:stack|columns|serpentine,roomOrder:permutation[0,1,3],layoutSeed:uint32,roomTypes:4 entries indexed rooms0..3 each break|cubicles|meeting|storage|reception|manager,subroomKinds:1..4 unique entries office|meeting|storage|break,furnitureDensity:0.5..1.5,fieldQuotas:4 integers2..6 indexed rooms0..3 (the public entrance to room2 is always free; its outgoing field uses quota2),power:4 entries lit|dim|outage indexed rooms0..3 with room2 lit,stories:exactly6 {title(1-36),lines:1..4 strings each1-50},brokenGuard:{segment:3|4,bay:1|2}}. The six story cards are three wall posters, a whiteboard, a desk photo caption and a desk note. These are actual visible words, not instructions to a renderer. layoutSeed fills smaller geometrical details; family/order are your direct choices. Each ordinary floor keeps all four study rooms along the route; no bypasses. Free hall and entry remain readable.
 roster:exactly19 {name:unique1-20 characters distinct from You,role:builder|analyst|rusher|medic|skeptic,skill:0.4..0.9,risk:0.2..0.8,social:0.2..0.8}. Build a varied ensemble; names referenced in stories must belong to it.
 city:{roadWidth:integer7..9,boulevardOffset:integer15..19,districtSize:integer18..25,buildingHeightMin:9..18,buildingHeightMax:25..45,damageRate:0..0.7,palette:3..6 six-digit hex colors}.
 exterior:{buildingName,buildingSubtitle,quarantineTitle,quarantineSubtitle:each1-48 characters,streetLabels:exactly8 strings1-28 characters,skyline:{minHeight:24..60,maxHeight:72..140,damageRate:0..0.7}}. All heights are metres.
-pacing:{swarmInterval:2.5..4,swarmBatch:integer1..2,swarmCap:integer120..220,npcThinkingScale:0.2..0.35,firstHelicopter:420..600,helicopterInterval:150..210}. Times are seconds. The engine always preserves the 180-second opening, safe terminal capacity, force-field access, climb credentials, real physics and curriculum rules. Avoid signs that contradict these rules. No additional fields. Strings must be printable single lines. Response must be below24000 UTF-8 bytes.`;
+pacing:{swarmInterval:2.5..4,swarmBatch:integer1..2,swarmCap:integer120..220,npcThinkingScale:0.2..0.35,firstHelicopter:420..600,helicopterInterval:150..210}. Times are seconds.
+
+Version 2 additionally requires scene:{version:1,rooms:[exactly4 RoomScene objects]} on EVERY floor. Author distinct, coherent room scenes connected to the premise and survivors. These are actual placed objects, not prose instructions. RoomScene:{room:integer0..3 unique,title:1..40,description:1..160,owner:exact roster name|null,palette:{surface,metal,accent:each six-digit hex color},condition:kept|worn|ransacked,furniture:1..6 SceneFurniture}. Room conditions are visual atmosphere, not permission to invent hazards or mechanical rules. Across each floor allow at most16 authored furniture items and48 props, and every room needs at least one prop.
+SceneFurniture:{id:lowercase slug1..24 unique within its floor,kind:chair|desk|sofa|fridge|shelf|officeChair|table|cabinet|cooler|plant|printer|whiteboard|partition|coffeeMaker|microwave|vending|cafeTable|coffeeTable|reception|screen|box|drawers|armchair,at:{x:0..1,y:0..1},angle:-180..180 degrees,color:hex,condition:intact|worn|damaged,owner:exact roster name|null,label:0..40,props:0..8 SceneProp}. Furniture at is the intended normalized point within its study room. The engine finds the nearest valid room position with your angle, keeping terminals, doorways, stairs and credentialed egress clear. It rejects impossible scenes for repair; it never silently removes an authored item. Intact furniture starts at full health, worn at85%, damaged at45%; dimensions, weight and behavior come from the engine's catalog. Use modest groups of meaningful furniture, varying real arrangements and routes as well as their stories.
+SceneProp:{id:lowercase slug1..24 unique within its floor,kind:mug|book|papers|pen|photo|note|plant|bottle|phone|box|lamp|trophy,at:{x:-1..1,y:-1..1},angle:-180..180 degrees,scale:0.65..1.25,color:hex,accent:hex,condition:intact|worn|damaged,owner:exact roster name|null,label:0..32,text:0..160}. Labels and text are printed on the object; do not repeat the same caption everywhere. Match objects and notes to their owner and room story. Props may only be hosted by desk,table,cafeTable,coffeeTable,reception,cabinet,shelf,drawers; all other furniture must have props:[]. Prop at is relative to its host's top:0 is centered,-1/+1 approach the edges. The engine fits the complete rotated object on that surface and performs bounded nearby packing if needed. Small props are attached cosmetic details; they move with the furniture and do not create separate invisible collision boxes. Their conditions are visual. Every furniture and prop id shares one floor-local namespace. IDs start with a letter and otherwise use lowercase letters,digits,hyphens. Owners must match the supplied roster exactly, or be null. Palette and object colors must be six-digit hex values.
+
+The engine always preserves the 180-second opening, safe terminal capacity, force-field access, climb credentials, real physics and curriculum rules. Avoid signs that contradict these rules. No additional fields. Strings must be printable single lines. Version 1 design must be below24000 UTF-8 bytes; version 2 below100000. Vary physical furniture kinds and visibly different normalized arrangements, not merely ids, colors, tiny position/angle nudges or tabletop props, when a recent spatial plan needs to change.`;

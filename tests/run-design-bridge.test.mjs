@@ -10,11 +10,24 @@ import {
 } from "../scripts/chatgpt-handoff-queue.mjs";
 import { createHandoffRoutes } from "../scripts/chatgpt-handoff-routes.mjs";
 import { createStudyBridgeServer } from "../scripts/study-bridge-server.mjs";
-import { createTerminalRelayApp } from "../scripts/terminal-relay-app.mjs";
+import {
+  createTerminalRelayApp,
+  PROMPT_LIMIT,
+} from "../scripts/terminal-relay-app.mjs";
+import {
+  RUN_DESIGN_GUIDANCE,
+  summarizeRunDesign,
+} from "../src/run-design-contract.mjs";
 
 const design = JSON.parse(
   readFileSync(
     new URL("./fixtures/run-designs/harbor-archive.json", import.meta.url),
+    "utf8",
+  ),
+);
+const sceneDesign = JSON.parse(
+  readFileSync(
+    new URL("./fixtures/run-designs/botanical-office.json", import.meta.url),
     "utf8",
   ),
 );
@@ -249,6 +262,139 @@ test("large Unicode design repairs preserve every recent design through required
     assert.equal(finish(app, turn, answer(p)).completion.status, "sent");
     assert.deepEqual(queue.result(receipt.id, receipt.hash).answer, answer(p));
   }
+});
+
+test("native design handoffs enforce version 2 scenes and retain the same claim for corrections", () => {
+  const queue = createHandoffQueue(),
+    app = createTerminalRelayApp({ queue });
+  queue.enable(true);
+  const p = { ...request("design-scene-request"), designVersion: 2 };
+  const receipt = queue.enqueue("design-run", p, scope, chat),
+    turn = get(app);
+  assert.equal(turn.status, "prepare");
+  assert.match(turn.prompt, /SceneFurniture/);
+  assert.match(turn.prompt, /Small props are attached cosmetic details/);
+  assert.throws(() => finish(app, turn, answer(p)), /requested design version/);
+  const missing = structuredClone(sceneDesign);
+  delete missing.floors[2].scene;
+  assert.throws(
+    () => finish(app, turn, { requestId: p.requestId, design: missing }),
+    /missing a field/,
+  );
+  const injected = structuredClone(sceneDesign);
+  injected.floors[0].scene.rooms[0].furniture[0].props[0].script = "run()";
+  assert.throws(
+    () => finish(app, turn, { requestId: p.requestId, design: injected }),
+    /unknown field/,
+  );
+  assert.equal(queue.result(receipt.id, receipt.hash).status, "pending");
+  const response = { requestId: p.requestId, design: sceneDesign };
+  assert.equal(finish(app, turn, response).completion.status, "sent");
+  assert.deepEqual(queue.result(receipt.id, receipt.hash).answer, response);
+});
+
+test("a large version 2 repair carries complete object scenes through exact native chunks", () => {
+  const character = "\ud800",
+    candidate = structuredClone(sceneDesign);
+  for (const floor of candidate.floors)
+    for (const room of floor.scene.rooms) {
+      room.title = character.repeat(40);
+      room.description = character.repeat(160);
+      for (const item of room.furniture) {
+        item.label = character.repeat(40);
+        for (const prop of item.props) {
+          prop.label = character.repeat(32);
+          prop.text = character.repeat(160);
+        }
+      }
+    }
+  assert.ok(Buffer.byteLength(JSON.stringify(candidate)) > 80_000);
+  assert.ok(Buffer.byteLength(JSON.stringify(candidate)) <= 100_000);
+  const summary = {
+    title: character.repeat(64),
+    premise: character.repeat(240),
+    spatial: character.repeat(3500),
+    atmosphere: character.repeat(3500),
+    cast: character.repeat(3500),
+    tempo: character.repeat(3500),
+  };
+  const p = {
+    ...request("design-large-scene"),
+    designVersion: 2,
+    recent: Array.from({ length: 5 }, () => ({ ...summary })),
+    repair: {
+      candidate,
+      errors: Array.from({ length: 20 }, () => character.repeat(400)),
+    },
+  };
+  const serialized = JSON.stringify(p);
+  assert.ok(Buffer.byteLength(serialized) > 512_000);
+  assert.ok(Buffer.byteLength(serialized) <= 640_000);
+  const queue = createHandoffQueue(),
+    app = createTerminalRelayApp({ queue });
+  queue.enable(true);
+  const receipt = queue.enqueue("design-run", p, scope, chat),
+    turn = get(app);
+  assert.equal(turn.status, "prepare");
+  assert.ok(turn.prompt.length < 40_000);
+  const response = { requestId: p.requestId, design: candidate };
+  assert.throws(() => finish(app, turn, response), /Read every/);
+  const read = (index) =>
+    app.call(
+      "read_study_terminal_context",
+      { relayId: turn.relayId, turnId: turn.turnId, part: "payload", index },
+      owner,
+    ).structuredContent;
+  const first = read(0),
+    parts = [first.text];
+  assert.ok(first.parts > 1);
+  for (let index = 1; index < first.parts; index++)
+    parts.push(read(index).text);
+  assert.equal(parts.join(""), serialized);
+  assert.equal(
+    first.sha256,
+    createHash("sha256").update(serialized).digest("hex"),
+  );
+  assert.equal(finish(app, turn, response).completion.status, "sent");
+  assert.deepEqual(queue.result(receipt.id, receipt.hash).answer, response);
+});
+
+test("a near-limit scene repair chunks the payload when its complete instruction would exceed the prompt budget", () => {
+  const p = {
+    ...request("design-scene-near-limit"),
+    designVersion: 2,
+    recent: Array.from({ length: 3 }, () => summarizeRunDesign(sceneDesign)),
+    repair: { candidate: sceneDesign, errors: ["Move the crowded desk"] },
+  };
+  const serialized = JSON.stringify(p);
+  assert.ok(serialized.length < PROMPT_LIMIT, "the payload alone fits inline");
+  assert.ok(
+    serialized.length + RUN_DESIGN_GUIDANCE.length > PROMPT_LIMIT,
+    "the complete design instruction does not fit beside the payload",
+  );
+  const queue = createHandoffQueue(),
+    app = createTerminalRelayApp({ queue });
+  queue.enable(true);
+  const receipt = queue.enqueue("design-run", p, scope, chat),
+    turn = get(app);
+  assert.equal(turn.status, "prepare");
+  assert.ok(turn.prompt.length <= PROMPT_LIMIT);
+  assert.match(turn.prompt, /"omitted":\["payload"\]/);
+  const response = { requestId: p.requestId, design: sceneDesign };
+  assert.throws(() => finish(app, turn, response), /Read every/);
+  const part = app.call(
+    "read_study_terminal_context",
+    { relayId: turn.relayId, turnId: turn.turnId, part: "payload", index: 0 },
+    owner,
+  ).structuredContent;
+  assert.equal(part.parts, 1);
+  assert.equal(part.text, serialized);
+  assert.equal(
+    part.sha256,
+    createHash("sha256").update(serialized).digest("hex"),
+  );
+  assert.equal(finish(app, turn, response).completion.status, "sent");
+  assert.deepEqual(queue.result(receipt.id, receipt.hash).answer, response);
 });
 
 test("design cancellation persists and rejects late answers without discarding study requests", () => {

@@ -14,6 +14,15 @@ export function runDesignFixture(
   );
 }
 
+/** Synthetic object-by-object scenes; no live AI or real save data. */
+export function sceneDesignFixture(
+  name: "botanical-office" | "observatory-records" = "botanical-office",
+) {
+  return parseRunDesign(
+    JSON.parse(readFileSync(`tests/fixtures/run-designs/${name}.json`, "utf8")),
+  );
+}
+
 export function savedRunDesign(
   design: RunDesign = runDesignFixture(),
 ): SavedRunDesign {

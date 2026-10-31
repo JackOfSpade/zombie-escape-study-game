@@ -10,6 +10,7 @@ import { surfacePoint } from "../furniture-geometry";
 import { distance, type Game } from "../model";
 import { objectName } from "../render";
 import { lookTarget, lookTargetPrompt } from "./targeting";
+import { sceneLookDescription } from "../scene-observations";
 
 /** Use the same reach queries and priority as E; the prompt never grants reach. */
 export function interactionPrompt(game: Game, yaw?: number) {
@@ -53,6 +54,7 @@ export class FirstPersonHud {
   private hp = 100;
   private damageUntil = 0;
   private lastPrompt = -Infinity;
+  private sceneDescription: HTMLElement;
 
   constructor(
     private root: HTMLElement,
@@ -62,6 +64,10 @@ export class FirstPersonHud {
   ) {
     this.hint.textContent =
       "Click to capture mouse · Move mouse to look · WASD move · Esc pauses";
+    this.sceneDescription = document.createElement("div");
+    this.sceneDescription.id = "scene-description";
+    this.sceneDescription.hidden = true;
+    this.root.append(this.sceneDescription);
   }
 
   update(
@@ -71,6 +77,7 @@ export class FirstPersonHud {
     typing: boolean,
     now: number,
     yaw?: number,
+    pitch = 0,
   ) {
     const a = human(game);
     if (this.run !== game.id) {
@@ -88,6 +95,13 @@ export class FirstPersonHud {
       const text = showPrompt ? interactionPrompt(game, yaw) : "";
       if (this.prompt.textContent !== text) this.prompt.textContent = text;
       this.prompt.hidden = !text;
+      const description =
+        showPrompt && yaw !== undefined
+          ? sceneLookDescription(game, yaw, pitch)
+          : "";
+      if (this.sceneDescription.textContent !== description)
+        this.sceneDescription.textContent = description;
+      this.sceneDescription.hidden = !description;
       this.lastPrompt = showPrompt ? now : -Infinity;
     }
     this.hint.hidden = locked || typing || !!game.paused;

@@ -6,6 +6,8 @@ export interface RunStory {
   lines: string[];
 }
 export interface RunFloorDesign {
+  /** Required for version 2 designs; absent from historical version 1 data. */
+  scene?: SceneFloorDesign;
   name: string;
   family: "stack" | "columns" | "serpentine";
   roomOrder: number[];
@@ -27,7 +29,7 @@ export interface RunExteriorDesign {
   skyline: { minHeight: number; maxHeight: number; damageRate: number };
 }
 export interface RunDesign {
-  version: 1;
+  version: 1 | 2;
   title: string;
   premise: string;
   opening: string;
@@ -85,6 +87,8 @@ export interface RunDesignSummary {
 }
 export interface RunDesignRequest {
   version: 1;
+  /** Absent on retained version 1 requests; never inserted during retry. */
+  designVersion?: 2;
   requestId: string;
   generationId: string;
   seed: number;
@@ -109,3 +113,4 @@ export function runDesignNoveltyErrors(
 ): string[];
 export function runDesignFingerprint(design: RunDesign): string;
 export function parseSavedRunDesign(value: unknown): SavedRunDesign;
+import type { SceneFloorDesign } from "./scene-catalog.mjs";

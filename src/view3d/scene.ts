@@ -947,6 +947,12 @@ export class FirstPersonView {
 
   private furniture(o: Furniture, a: Actor, palette: Palette) {
     const visual = this.visual(o, o.kind),
+      appearance = o.appearance,
+      roomPalette = appearance
+        ? this.run?.floors[o.floor].scene?.rooms.find(
+            (room) => room.room === appearance.room,
+          )?.palette
+        : undefined,
       health = Math.max(0, Math.min(1, o.hp / Math.max(1, o.maxHp))),
       damageStage = health < 0.35 ? 2 : health < 0.65 ? 1 : 0;
     if (
@@ -987,9 +993,21 @@ export class FirstPersonView {
               : broken && (p.role === "leg" || p.tint === "edge")
                 ? 0.12
                 : 0;
-      this.tint.copy(
-        o.field ? fieldColor : this.color(p.tint, palette, o.kind),
-      );
+      const authoredColor =
+        !o.field && appearance
+          ? p.tint === "body"
+            ? appearance.color
+            : p.tint === "metal"
+              ? roomPalette?.metal
+              : p.tint === "edge"
+                ? roomPalette?.accent
+                : undefined
+          : undefined;
+      if (authoredColor) this.tint.set(authoredColor);
+      else
+        this.tint.copy(
+          o.field ? fieldColor : this.color(p.tint, palette, o.kind),
+        );
       if (p.tint === "body" && !o.field)
         this.tint.multiplyScalar(0.45 + 0.55 * health);
       this.pools[p.batch].set(

@@ -32,3 +32,21 @@ const HEIGHT: Partial<Record<FurnitureKind, number>> = {
 export function furnitureHeight(kind: FurnitureKind) {
   return HEIGHT[kind] ?? 0.8;
 }
+
+/** Actual rendered top face for surface dressing, including tabletop thickness. */
+export function furnitureSurfaceHeight(kind: FurnitureKind) {
+  const height = furnitureHeight(kind);
+  if (kind === "shelf") return height + 0.115;
+  if (["desk", "table", "cafeTable", "coffeeTable", "reception"].includes(kind))
+    return height + 0.05;
+  return height;
+}
+
+/** Shelves fit between side panels; their upper board does not span the full body. */
+export function furnitureSurfaceBounds(
+  kind: FurnitureKind,
+  w: number,
+  d: number,
+) {
+  return { w: kind === "shelf" ? w * 0.84 : w, d };
+}

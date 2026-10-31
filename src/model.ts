@@ -317,6 +317,15 @@ export type FurnitureKind =
   | "drawers"
   | "armchair";
 export interface Furniture extends Point {
+  /** Immutable authored presentation; pose, damage and destruction stay native. */
+  appearance?: {
+    color: string;
+    condition: import("./scene-catalog.mjs").SceneCondition;
+    label: string;
+    owner: string | null;
+    room: number;
+    designId: string;
+  };
   field?: {
     publicEntry?: boolean;
     touchVersion?: 1;
@@ -370,6 +379,8 @@ export interface BuildingFootprint {
   rows: { left: number; right: number }[];
 }
 export interface Floor {
+  /** Resolved object anchors, retained with the run rather than rerolled on load. */
+  scene?: import("./authored-scene").ResolvedScene;
   /** Frozen authored choices; shared by rendering, collisions and NPC facts. */
   design?: import("./run-design-contract.mjs").RunFloorDesign;
   /** Authored neighbourhood signs and skyline, stored on the ground floor. */

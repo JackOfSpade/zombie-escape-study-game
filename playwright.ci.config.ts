@@ -9,6 +9,7 @@ export default defineConfig({
     "pause-controls.spec.ts",
     "run-designer.spec.ts",
     "run-design-dressing.spec.ts",
+    "authored-scene.spec.ts",
   ],
   workers: 1,
   retries: 0,

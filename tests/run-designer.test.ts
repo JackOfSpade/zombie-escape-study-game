@@ -16,7 +16,11 @@ import {
   runDesignNoveltyErrors,
   summarizeRunDesign,
 } from "../src/run-design-contract.mjs";
-import { runDesignFixture, savedRunDesign } from "./helpers/run-design";
+import {
+  runDesignFixture,
+  sceneDesignFixture,
+  savedRunDesign,
+} from "./helpers/run-design";
 import { createPlayableGame } from "../src/world";
 import { decode, encode } from "../src/persistence";
 import type { Roadmap } from "../src/model";
@@ -24,7 +28,7 @@ import type { Roadmap } from "../src/model";
 test("accepted AI design is correlated, fingerprinted and built before activation", async () => {
   const draft = newDesignDraft("synthetic-run", 42, []),
     captured: string[] = [];
-  const design = runDesignFixture();
+  const design = sceneDesignFixture();
   const result = await prepareDesignedRun(draft, {
     signal: new AbortController().signal,
     capture: (d) => {
@@ -41,12 +45,42 @@ test("accepted AI design is correlated, fingerprinted and built before activatio
   assert.equal(result.game, "validated candidate");
   assert.equal(captured.length, 1);
   assert.deepEqual(Object.keys(draft.request).sort(), [
+    "designVersion",
     "generationId",
     "recent",
     "requestId",
     "seed",
     "version",
   ]);
+});
+
+test("retained version 1 drafts resume exactly while fresh drafts cannot silently downgrade", async () => {
+  const retained = newDesignDraft("synthetic-run", 42, []);
+  delete retained.request.designVersion;
+  const original = JSON.stringify(retained.request);
+  const restored = parseDesignDraft(JSON.parse(JSON.stringify(retained)));
+  const result = await prepareDesignedRun(restored, {
+    signal: new AbortController().signal,
+    capture: (draft) => assert.equal(JSON.stringify(draft.request), original),
+    send: async (request) => {
+      assert.equal(JSON.stringify(request), original);
+      return { requestId: request.requestId, design: runDesignFixture() };
+    },
+    build: (_seed, saved) => saved.design.version,
+  });
+  assert.equal(result.game, 1);
+  await assert.rejects(
+    prepareDesignedRun(newDesignDraft("fresh-run", 42, []), {
+      signal: new AbortController().signal,
+      capture: () => {},
+      send: async (request) => ({
+        requestId: request.requestId,
+        design: runDesignFixture(),
+      }),
+      build: () => assert.fail("A downgraded reply must never create a world"),
+    }),
+    /requested design version/,
+  );
 });
 
 test("seed-only rerolls and reordered object keys do not bypass variety checks", () => {
@@ -76,8 +110,8 @@ test("seed-only rerolls and reordered object keys do not bypass variety checks",
 });
 
 test("repetitive candidate requests a bound repair before building", async () => {
-  const harbor = runDesignFixture(),
-    orchard = runDesignFixture("glass-orchard");
+  const harbor = sceneDesignFixture(),
+    orchard = sceneDesignFixture("observatory-records");
   const draft = newDesignDraft("synthetic-run", 42, [
     summarizeRunDesign(harbor),
   ]);
@@ -123,7 +157,7 @@ test("geometry rejection repairs the candidate, with only three calls per attemp
         ids.push(request.requestId);
         if (ids.length > 1)
           assert.match(request.repair!.errors[0], /no terminal route/);
-        return { requestId: request.requestId, design: runDesignFixture() };
+        return { requestId: request.requestId, design: sceneDesignFixture() };
       },
       build: () => {
         throw Error("no terminal route");
@@ -163,7 +197,7 @@ test("a transport retry reuses the exact captured request and independent chat c
     send: async (request, current) => {
       assert.deepEqual(request, first);
       assert.equal(current.chatCode, draft.chatCode);
-      return { requestId: request.requestId, design: runDesignFixture() };
+      return { requestId: request.requestId, design: sceneDesignFixture() };
     },
   });
 });
@@ -177,7 +211,7 @@ test("cancellation rejects late results before building and failed capture relea
       capture: () => {},
       send: async (request) => {
         controller.abort();
-        return { requestId: request.requestId, design: runDesignFixture() };
+        return { requestId: request.requestId, design: sceneDesignFixture() };
       },
       build: () => {
         built = true;
