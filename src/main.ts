@@ -91,6 +91,7 @@ import {
   type Game,
   type Roadmap,
   CONFIG,
+  DEV,
   distance,
   H,
   W,
@@ -2640,6 +2641,8 @@ $("#settings-toggle").onclick = () => {
   $<HTMLInputElement>("#npc-voices").checked =
     game.settings.npcVoices !== false;
   $<HTMLInputElement>("#reduced").checked = game.settings.reducedFlash;
+  $<HTMLInputElement>("#pass-all-doors").checked =
+    game.settings.passAllDoors === true;
   $<HTMLSelectElement>("#game-view").value =
     game.settings.view ?? "first-person";
   $("#bridge-detail").textContent = status().detail;
@@ -2665,6 +2668,11 @@ $("#npc-voices").onchange = () => {
 };
 $("#reduced").onchange = () => {
   game.settings.reducedFlash = $<HTMLInputElement>("#reduced").checked;
+};
+$("#pass-all-doors").onchange = () => {
+  game.settings.passAllDoors = $<HTMLInputElement>("#pass-all-doors").checked;
+  DEV.passAllDoors = game.settings.passAllDoors;
+  void persist();
 };
 $("#game-view").onchange = () => {
   game.settings.view =
@@ -3136,6 +3144,7 @@ function frame(time: number) {
     steps = 0;
   const elapsed = Math.min((time - last) / 1000, 0.2);
   last = time;
+  DEV.passAllDoors = game.settings.passAllDoors === true;
   syncGameView();
   if (firstPersonPlaying()) {
     if (lookUiVisible()) firstPersonControls.release();
