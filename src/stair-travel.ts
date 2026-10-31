@@ -3,6 +3,7 @@ import {
   type Game,
   type Point,
   CONFIG,
+  devPass,
   distance,
   event,
 } from "./model";
@@ -83,7 +84,7 @@ export function enterCityStairBase(g: Game, a: Actor, input: Point) {
       },
     };
   if (!walkSegment(approach, a, base.start)) return false;
-  if (!a.access.includes(0)) {
+  if (!a.access.includes(0) && !devPass(a)) {
     if (!refusedCityBase.has(a)) refuseStairs(g, a);
     refusedCityBase.add(a);
     return false;
@@ -142,7 +143,7 @@ export function beginStairs(g: Game, a: Actor, down = false, walking = false) {
     !walkSegment(source, a, marker)
   )
     return false;
-  if (!down && !a.access.includes(a.floor)) {
+  if (!down && !a.access.includes(a.floor) && !devPass(a)) {
     refuseStairs(g, a);
     return false;
   }

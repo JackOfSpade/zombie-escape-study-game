@@ -642,6 +642,15 @@ export interface Game {
 }
 export const W = 44,
   H = 34;
+/** Developer switches for manual playtesting. Keep false in commits that ship. */
+export const DEV = {
+  /** The player passes every red force field and climbs every staircase
+   * without a key or terminal credential. NPCs and zombies are unaffected. */
+  passAllDoors: false,
+};
+/** Whether DEV mode lets this actor through any locked door or staircase. */
+export const devPass = (a: Pick<Actor, "id">) =>
+  DEV.passAllDoors && a.id === "human";
 export const CONFIG = {
   floors: 4,
   npcs: 19,
