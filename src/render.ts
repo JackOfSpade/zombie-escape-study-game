@@ -3,7 +3,15 @@ import { drawBlood } from "./blood";
 import { camera } from "./camera";
 import { displayScale } from "./display-scale";
 import { human, nearestGrip } from "./engine";
-import { CONFIG, distance, type Game, H, type Point, W } from "./model";
+import {
+  CONFIG,
+  HELIPAD,
+  distance,
+  type Game,
+  H,
+  type Point,
+  W,
+} from "./model";
 import { BODY_RADIUS } from "./physics";
 import {
   drawDebris,
@@ -19,7 +27,7 @@ import { npcSpeechBubble, speechLines } from "./speech-bubbles";
 
 const tileMemory = new WeakMap<
   Game["survivors"][number],
-  { source: string[]; ids: Set<string>; length: number }
+  { source: string[]; masks: Map<number, Uint8Array>; length: number }
 >();
 /** Sample sight independently of canvas drawing, including between minimap draws. */
 export function rememberVisibleTiles(g: Game) {
@@ -29,19 +37,31 @@ export function rememberVisibleTiles(g: Game) {
     radius = sightRadius(floor);
   let memory = tileMemory.get(a);
   if (!memory || memory.source !== a.seen || memory.length !== a.seen.length) {
-    memory = { source: a.seen, ids: new Set(a.seen), length: a.seen.length };
+    const masks = new Map<number, Uint8Array>();
+    for (const id of a.seen) {
+      const m = /^tile-(\d+)-(\d+)-(\d+)$/.exec(id);
+      if (!m) continue;
+      const f = Number(m[1]);
+      let mask = masks.get(f);
+      if (!mask) masks.set(f, (mask = new Uint8Array(W * H)));
+      const tx = Number(m[2]),
+        ty = Number(m[3]);
+      if (tx < W && ty < H) mask[ty * W + tx] = 1;
+    }
+    memory = { source: a.seen, masks, length: a.seen.length };
     tileMemory.set(a, memory);
   }
+  let mask = memory.masks.get(a.floor);
+  if (!mask) memory.masks.set(a.floor, (mask = new Uint8Array(W * H)));
   const pt = { x: 0, y: 0 };
   for (let y = 0; y < H; y++)
     for (let x = 0; x < W; x++) {
-      const id = `tile-${a.floor}-${x}-${y}`;
-      if (memory.ids.has(id)) continue;
+      if (mask[y * W + x]) continue;
       pt.x = x + 0.5;
       pt.y = y + 0.5;
       if (playerCanSee(floor, a, pt, radius)) {
-        a.seen.push(id);
-        memory.ids.add(id);
+        a.seen.push(`tile-${a.floor}-${x}-${y}`);
+        mask[y * W + x] = 1;
       }
     }
   memory.length = a.seen.length;
@@ -111,7 +131,6 @@ export function render(
   const visible = spectator
     ? () => true
     : (pt: Point) => playerCanSee(f, a, pt, radius);
-  const sees = (pt: Point) => spectator || playerCanSee(f, a, pt, radius);
   // The player's sight polygon clips the world and lights it; the spectator
   // view has neither.
   const polygon = spectator ? [] : visibilityPolygon(f, a, radius);
@@ -218,19 +237,19 @@ export function render(
   const wellVisible = (well: Stairwell) =>
     visible(well.mouth) || visible(well.marker);
   if (floorIndex === CONFIG.floors) {
-    if (visible({ x: 21.5, y: 10.5 })) {
+    if (visible(HELIPAD)) {
       ctx.strokeStyle = p.accent;
       ctx.lineWidth = 0.15;
       ctx.beginPath();
-      ctx.arc(21.5, 10.5, 3.8, 0, Math.PI * 2);
+      ctx.arc(HELIPAD.x, HELIPAD.y, 3.8, 0, Math.PI * 2);
       ctx.stroke();
-      label("H", 21.5, 11.4, p.accent, 2.5);
+      label("H", HELIPAD.x, 11.4, p.accent, 2.5);
       if (g.time < g.helicopter.until) {
         ctx.fillStyle = p.edge;
         ctx.fillRect(17.8, 8.5, 7.4, 1.5);
         ctx.fillStyle = p.ink;
         ctx.fillRect(21, 5.5, 0.3, 8);
-        label(`${4 - g.helicopter.passengers.length} SEATS`, 21.5, 14.7);
+        label(`${4 - g.helicopter.passengers.length} SEATS`, HELIPAD.x, 14.7);
       }
     }
   } else {
@@ -287,7 +306,7 @@ export function render(
       );
   }
   for (const o of f.furniture) {
-    if (!sees(o)) continue;
+    if (!visible(o)) continue;
     if (o.kind === "gate" && o.turning < 0) continue;
     const x = o.x - o.w / 2,
       y = o.y - o.h / 2;
@@ -296,7 +315,6 @@ export function render(
       continue;
     }
     if (o.field) {
-      if (o.destroyed) continue;
       const green = fieldAllows(o, a),
         color = green ? "#55ef9b" : "#ff6274",
         health = Math.max(0, Math.min(1, o.hp / Math.max(1, o.maxHp))),

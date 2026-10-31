@@ -10,7 +10,7 @@ import {
 import { carveStairwells } from "./stairwell";
 import { layoutRandom } from "./building-layout";
 import { inRect, sizeFits, type Sector } from "./floor-plan";
-import { planOfficeFloor, wideFlood } from "./office-plan";
+import { fieldDoor, planOfficeFloor, wideFlood } from "./office-plan";
 
 /** The first free hall has an independent one-use terminal for everyone, plus spares. */
 function topUpHall(g: Game, f: Floor) {
@@ -101,54 +101,7 @@ export function pursuitLayout(g: Game, f: Floor) {
     h: number,
     kind: "public" | "forward" | "gate",
     room = 0,
-  ) => {
-    for (
-      let y = Math.floor(point.y - h / 2);
-      y < Math.ceil(point.y + h / 2);
-      y++
-    )
-      for (
-        let x = Math.floor(point.x - w / 2);
-        x < Math.ceil(point.x + w / 2);
-        x++
-      )
-        f.tiles[y][x] = 0;
-    const hp = kind === "gate" ? 900 : 1200;
-    const o: Furniture = {
-      id,
-      floor: f.index,
-      kind: "door",
-      ...point,
-      w,
-      h,
-      hp,
-      maxHp: hp,
-      speed: 0,
-      rotation: 0,
-      destroyed: false,
-      movers: [],
-      moved: 0,
-      credited: [],
-      turning: 0,
-      open: false,
-      angle: 0,
-      initial: { ...point, w, h },
-      field: {
-        authorized: [],
-        crossing: [],
-        sides: {},
-        used: 0,
-        exit: kind === "forward",
-        ...(kind === "public"
-          ? { publicEntry: true }
-          : kind === "forward"
-            ? { limit: 3 + ((g.seed + f.index + room) % 3), direction: -1 }
-            : {}),
-      },
-    };
-    f.furniture.push(o);
-    return o;
-  };
+  ) => fieldDoor(g, f, id, point, w, h, kind, room);
   // One opening per shared wall: each stage's single forward field is green
   // with floor access, admits a few first-touch visitors from the rear, and
   // otherwise needs a personal key. A red field cannot be walked around.

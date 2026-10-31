@@ -1,3 +1,4 @@
+import { fnv1a } from "./hash";
 import { QUESTION_DESIGN_GUIDANCE } from "../scripts/lib/study-question-policy.mjs";
 import { devProblem } from "./practice-problem";
 import { adoptQuestionPacing, validSolveEstimate } from "./field-pacing";
@@ -39,9 +40,10 @@ import { recordSpawn, spawnContract } from "./topic-spawn";
 import { reviewEnvironment } from "./environment-review";
 import { executionEvidence, runWorkspace } from "./execution";
 import { groupSnapshot, validateGroupReply } from "./group-grounding";
-import { adoptedSourceText } from "./imported-proof";
+import { trackProgressContext } from "./imported-proof";
 import { encounterKey, initialLearner, registerScopes } from "./learner";
 import {
+  type Actor,
   type Provider,
   type Contract,
   type Encounter,
@@ -78,14 +80,17 @@ const completionConnected = (g: Game, e: Encounter) =>
   (g.study.profile === "development" &&
     e.problem?.provenance === "development" &&
     status().mode !== "development");
+const activeProvider = (): Provider =>
+  status().mode === "chatgpt-handoff" ? "chatgpt-handoff" : "study-mode";
+export const isNativeProvenance = (p?: string): p is Provider =>
+  p === "study-mode" || p === "chatgpt-handoff";
 const autonomousAllowed = (g: Game) =>
   status().capabilities.includes("autonomous-work") &&
   (status().mode !== "chatgpt-handoff" ||
     g.settings.handoffAutonomous === true);
 export function materializeObservedWork(g: Game, e: Encounter, retry = false) {
   if (!live(g) || !status().capabilities.includes("materialize-work")) return;
-  const provider =
-    status().mode === "chatgpt-handoff" ? "chatgpt-handoff" : "study-mode";
+  const provider = activeProvider();
   return materializeNpcWork(
     g,
     e,
@@ -116,8 +121,7 @@ export function inspectCompletedNpcWork(
       "Exact survivor solutions require the connected outcome-inspection capability. The simulated world result is preserved.";
     return;
   }
-  const provider =
-    status().mode === "chatgpt-handoff" ? "chatgpt-handoff" : "study-mode";
+  const provider = activeProvider();
   return inspectNpcOutcome(
     g,
     e,
@@ -133,7 +137,7 @@ export function inspectCompletedNpcWork(
           "materialize-outcome",
         ),
       validate(p, c) {
-        if (!["study-mode", "chatgpt-handoff"].includes(p.provenance))
+        if (!isNativeProvenance(p.provenance))
           throw Error(
             "Reconstructed problem must retain its saved provider provenance",
           );
@@ -307,11 +311,7 @@ function refreshUnissuedPractice(g: Game, e: Encounter, r: Roadmap) {
   )
     return;
   const contract = e.studyOnly ? formal : spawnContract(r, g.study, formal);
-  const rng =
-    Array.from(e.id).reduce(
-      (hash, char) => Math.imul(hash ^ char.charCodeAt(0), 16777619),
-      g.seed,
-    ) >>> 0;
+  const rng = fnv1a(e.id, g.seed);
   e.problem = devProblem({ ...g, rng }, r, contract);
   e.workspace = e.problem.starter;
   delete e.error;
@@ -365,15 +365,14 @@ async function ensureIndividualProblem(g: Game, e: Encounter, r: Roadmap) {
         },
         existingScopeDefinitions: g.study.learner?.scopes,
         probeRecords: probeRecordsForTrack(g, contract.track, contract),
-        progressContext:
-          adoptedSourceText(study.learner!)
-            ?.split(`<!-- BEGIN ${contract.track}_PROGRESS -->`)[1]
-            ?.split(`<!-- END ${contract.track}_PROGRESS -->`)[0] ??
-          r.tracks[contract.track].progress,
+        progressContext: trackProgressContext(
+          study.learner!,
+          r,
+          contract.track,
+        ),
         curriculum: r.tracks[contract.track].curriculum,
       };
-      const provider =
-        status().mode === "chatgpt-handoff" ? "chatgpt-handoff" : "study-mode";
+      const provider = activeProvider();
       e.pendingGeneration = {
         provider,
         requestId: generation,
@@ -382,8 +381,7 @@ async function ensureIndividualProblem(g: Game, e: Encounter, r: Roadmap) {
       p = await request<Problem>("generate", payload, undefined, {
         nativeScope: nativeStudyScope(g, e),
       });
-      p.provenance =
-        provider === "chatgpt-handoff" ? "chatgpt-handoff" : "study-mode";
+      p.provenance = provider;
     } else
       p = devProblem(
         e.studyOnly ? { ...g, rng: g.seed ^ study.version } : g,
@@ -490,7 +488,7 @@ export function presentProblem(g: Game, e: Encounter, r?: Roadmap) {
   if (
     r &&
     g.study.profile === "live" &&
-    ["study-mode", "chatgpt-handoff"].includes(e.problem?.provenance ?? "") &&
+    isNativeProvenance(e.problem?.provenance) &&
     e.state !== "consumed" &&
     !g.study.learner?.attempts.some((a) => a.encounter === encounterKey(e))
   ) {
@@ -657,8 +655,7 @@ export function openChat(g: Game, e: Encounter) {
   return undefined;
 }
 function nativeCatchup(g: Game, e: Encounter) {
-  const provider =
-    status().mode === "chatgpt-handoff" ? "chatgpt-handoff" : "study-mode";
+  const provider = activeProvider();
   return generateCatchup(g, e, {
     provider,
     request: async (payload) => {
@@ -703,11 +700,7 @@ export function closeChat(_g: Game, e: Encounter) {
   // Work while open remains work history, never invented timestamped dialogue.
 }
 
-export function npcCanRespond(
-  g: Game,
-  e: Encounter,
-  a: import("./model").Actor,
-) {
+export function npcCanRespond(g: Game, e: Encounter, a: Actor) {
   return (
     a.id !== "human" &&
     a.alive &&
@@ -1200,10 +1193,7 @@ export async function send(
         prompt: `@study\n${text}`,
         curriculum: r.tracks[problem.contract.track].curriculum,
         progressContext: [
-          adoptedSourceText(g.study.learner)
-            ?.split(`<!-- BEGIN ${problem.contract.track}_PROGRESS -->`)[1]
-            ?.split(`<!-- END ${problem.contract.track}_PROGRESS -->`)[0] ??
-            r.tracks[problem.contract.track].progress,
+          trackProgressContext(g.study.learner, r, problem.contract.track),
           knowledgeProbeContext(g, problem.contract.track),
         ]
           .filter(Boolean)
@@ -1416,6 +1406,13 @@ async function evaluateSubmission(
     }
     let result: { complete: boolean; feedback: string; qualified: string[] };
     if (!s.completionRequest) {
+      // Bind a disconnected capture to the provider that generated the problem.
+      const provider: Provider =
+        status().mode === "study-mode" ||
+        (status().mode === "development" &&
+          e.problem.provenance === "study-mode")
+          ? "study-mode"
+          : "chatgpt-handoff";
       const payload = {
         requestId: s.id,
         encounterId: e.id,
@@ -1431,10 +1428,7 @@ async function evaluateSubmission(
           "Judge the exact submitted answer against the question and rubric. Accept only a semantically correct, sufficiently supported answer. Headings, answer length and chat activity are not proof. Return only the structured completion JSON; gameplay acceptance does not certify individual mastery.",
         ...(author !== "human"
           ? {
-              provider:
-                status().mode === "chatgpt-handoff"
-                  ? "chatgpt-handoff"
-                  : "study-mode",
+              provider,
               autonomyAllowed: true,
             }
           : {}),
@@ -1450,12 +1444,7 @@ async function evaluateSubmission(
           .map(executionEvidence),
       };
       s.completionRequest = {
-        provider:
-          status().mode === "study-mode" ||
-          (status().mode === "development" &&
-            e.problem.provenance === "study-mode")
-            ? "study-mode"
-            : "chatgpt-handoff",
+        provider,
         payloadJson: JSON.stringify(payload),
       };
     }
@@ -1629,16 +1618,13 @@ export function autonomousNpcWork(
     g.status !== "playing"
   )
     return;
-  const provider =
-    status().mode === "chatgpt-handoff" ? "chatgpt-handoff" : "study-mode";
+  const provider = activeProvider();
   const running = autonomousRuns.get(g);
   if (running) return running;
   for (const e of Object.values(g.encounters)) {
     if (
       !hasHumanStudyContext(e) ||
-      !["study-mode", "chatgpt-handoff"].includes(
-        e.problem?.provenance ?? "",
-      ) ||
+      !isNativeProvenance(e.problem?.provenance) ||
       e.mode !== "shared" ||
       e.state === "consumed" ||
       humanUsingWorkspace(g, e) ||
@@ -1702,8 +1688,7 @@ export function reviewEnvironmentObservation(
     throw Error(
       "Environment review is unavailable. The saved packet remains downloadable for external review.",
     );
-  const provider =
-    status().mode === "chatgpt-handoff" ? "chatgpt-handoff" : "study-mode";
+  const provider = activeProvider();
   return reviewEnvironment(
     g,
     r,
@@ -1738,8 +1723,7 @@ export function reconcileUploadedRoadmap(
     throw Error(
       "Roadmap reconciliation is unavailable; comparison and files remain available without changing learning state",
     );
-  const provider =
-    status().mode === "chatgpt-handoff" ? "chatgpt-handoff" : "study-mode";
+  const provider = activeProvider();
   return reconcileRoadmap(
     g,
     r,

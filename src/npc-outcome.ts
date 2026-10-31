@@ -168,12 +168,12 @@ export function inspectNpcOutcome(
   const payloadText = snapshot(job.payload);
   const promise = (async () => {
     try {
-      if (!job.hash) job.hash = await sha256(snapshot(job.payload));
-      if ((await sha256(snapshot(job.payload))) !== job.hash)
+      if (!job.hash) job.hash = await sha256(payloadText);
+      else if ((await sha256(payloadText)) !== job.hash)
+        throw Error("Saved NPC outcome request changed");
+      if (snapshot(job.payload) !== payloadText)
         throw Error("Saved NPC outcome request changed");
       guard(g, e, r, job);
-      if ((await sha256(snapshot(job.payload))) !== job.hash)
-        throw Error("Saved NPC outcome request changed");
       job.state = "pending";
       delete job.error;
       if (!job.candidate) {

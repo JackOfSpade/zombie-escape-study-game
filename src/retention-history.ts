@@ -1,8 +1,10 @@
-import { isDelayedReview, localDate } from "./learner";
-import type {
-  LearnerLedger,
-  RetentionEvent,
-  ReviewRecord,
+import { addDays, isDelayedReview, localDate } from "./learner";
+import {
+  reviewSignature,
+  scopeKey,
+  type LearnerLedger,
+  type RetentionEvent,
+  type ReviewRecord,
 } from "./learning-model";
 import type { Roadmap } from "./model";
 import { observationInvalidated } from "./observation-validity";
@@ -10,17 +12,6 @@ import type { RoadmapReconciliation } from "./roadmap-adoption-types";
 
 export const retentionEventText = (event: RetentionEvent) =>
   `<!-- RETENTION_EVENT ${encodeURIComponent(JSON.stringify(event))} -->`;
-const signature = (record: ReviewRecord | undefined) =>
-  JSON.stringify(
-    Object.entries(record ?? {})
-      .filter(([, v]) => v !== undefined)
-      .sort(([a], [b]) => a.localeCompare(b)),
-  );
-const addDays = (day: string, n: number) => {
-  const d = new Date(`${day}T12:00:00Z`);
-  d.setUTCDate(d.getUTCDate() + n);
-  return d.toISOString().slice(0, 10);
-};
 function advance(
   previous: ReviewRecord,
   session: string,
@@ -94,8 +85,8 @@ export function replayRetention(r: Roadmap, l: LearnerLedger, scopeId: string) {
       !receipt.evidenceIds.some((ref) => event.evidenceIds.includes(ref)) ||
       !definition.facets.every((f) => evidence.some((e) => e.facet === f.id)) ||
       !isDelayedReview(event.before, event.at, attempt.session) ||
-      signature(advance(event.before, attempt.session, observedAt)) !==
-        signature(event.after)
+      reviewSignature(advance(event.before, attempt.session, observedAt)) !==
+        reviewSignature(event.after)
     )
       throw Error(
         "Retention history failed its exact assessment, scope or transaction validation",
@@ -134,7 +125,7 @@ export function reviewRetentionUpdates(
     throw Error("Invalid retention reassessment declarations");
   const changed = new Set<string>();
   for (const ev of before.evidence) {
-    const scope = `${ev.objectiveId}/D${ev.depth}`;
+    const scope = scopeKey(ev.objectiveId, ev.depth);
     if (
       ev.outcome === "independent" &&
       before.reviews[scope]?.verifiedReviews > 0 &&
@@ -174,13 +165,16 @@ export function reviewRetentionUpdates(
       );
     const previous = replayRetention(r, before, update.scopeId),
       expected = replayRetention(r, work, update.scopeId);
-    if (signature(previous) !== signature(before.reviews[update.scopeId]))
+    if (
+      reviewSignature(previous) !==
+      reviewSignature(before.reviews[update.scopeId])
+    )
       throw Error(
         "Current retention differs from its retained review history; dedicated reconciliation is required",
       );
     if (
-      signature(expected) !==
-      signature(parsed.resume?.reviews?.[update.scopeId])
+      reviewSignature(expected) !==
+      reviewSignature(parsed.resume?.reviews?.[update.scopeId])
     )
       throw Error(
         "Reviewed retention must exactly replay the remaining valid observations without invented dates or counts",

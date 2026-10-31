@@ -92,6 +92,7 @@ export async function parseRoadmapDocument(
   for (const t of ["PY", "PE"] as Track[]) {
     const progress = "\n" + parsed.blocks[`${t}_PROGRESS`],
       curriculum = "\n" + parsed.blocks[`${t}_CURRICULUM`];
+    const curriculumLines = curriculum.split("\n");
     const objectives: Objective[] = part(
       progress,
       "0.4 Objective checkpoint ledger",
@@ -113,12 +114,8 @@ export async function parseRoadmapDocument(
             )
         )
           throw Error(`Malformed objective checkpoint ${t}:${id}`);
-        const def = curriculum
-          .split("\n")
-          .find((l) => l.startsWith(`| ${id} |`));
-        const extension = curriculum
-          .split("\n")
-          .find((l) => l.includes(`**${id}**`));
+        const def = curriculumLines.find((l) => l.startsWith(`| ${id} |`));
+        const extension = curriculumLines.find((l) => l.includes(`**${id}**`));
         const scope =
           def?.split("|")[2].trim() ??
           extension
@@ -188,9 +185,7 @@ export async function parseRoadmapDocument(
         m[2],
       ]),
     );
-    for (const l of curriculum
-      .split("\n")
-      .filter((l) => /^\| X\d{2} /.test(l))) {
+    for (const l of curriculumLines.filter((l) => /^\| X\d{2} /.test(l))) {
       const c = cells(l),
         id = /^X\d{2}/.exec(c[0])?.[0];
       if (id) topics[id] = c[0].split(" — ").slice(1).join(" — ");

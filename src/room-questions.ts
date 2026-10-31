@@ -1,3 +1,4 @@
+import { fnv1a } from "./hash";
 import type { Encounter, Game, Problem, Roadmap } from "./model";
 import { devProblem } from "./practice-problem";
 import { recordSpawn, spawnContract } from "./topic-spawn";
@@ -34,11 +35,7 @@ export function preparePracticeRooms(g: Game, roadmap: Roadmap) {
     try {
       // Room questions have their own seeded stream; spawning and NPC decisions
       // must not change merely because a question was prepared.
-      const rng =
-        Array.from(e.questionRoom).reduce(
-          (hash, char) => Math.imul(hash ^ char.charCodeAt(0), 16777619),
-          g.seed,
-        ) >>> 0;
+      const rng = fnv1a(e.questionRoom, g.seed);
       // Rooms rotate topics: the formal visit stays reachable while other
       // rooms practise cooled topics, gaps first, for variety and recall.
       const contract = spawnContract(roadmap, g.study);

@@ -9,6 +9,7 @@ import {
   Vec2,
   World,
   type Body,
+  type Contact,
   type Joint,
 } from "planck";
 import { DOOR_SWING, doorPose, ensureDoor, latchDoor } from "./doors";
@@ -18,6 +19,7 @@ import {
   W,
   distance,
   type Actor,
+  type Floor,
   type Furniture,
   type Game,
   type Point,
@@ -81,8 +83,20 @@ interface FloorPhysics {
   world: World;
   ground: Body;
   walls: Body;
-  signature: string;
+  /** Copy of the tile grid the wall fixtures were built from. */
+  tiles: number[][];
   city?: Game["floors"][number]["city"];
+}
+/** Element-wise compare; exits on the first difference and builds no string. */
+function sameTiles(a: number[][], b: number[][]) {
+  if (a.length !== b.length) return false;
+  for (let y = 0; y < a.length; y++) {
+    const ra = a[y],
+      rb = b[y];
+    if (ra.length !== rb.length) return false;
+    for (let x = 0; x < ra.length; x++) if (ra[x] !== rb[x]) return false;
+  }
+  return true;
 }
 const layers = new WeakMap<Game, PhysicsLayer>();
 export function physicsActive(g: Game) {
@@ -128,14 +142,18 @@ export function physicsMove(
   layer.drive(e, dx, dy, steer);
   return true;
 }
+/** Furniture-less view of a floor, cached per physics step. */
 export function physicsFloor(g: Game, floor: number) {
-  const f = g.floors[floor];
-  return { ...f, furniture: [] };
+  const layer = layers.get(g);
+  return layer
+    ? layer.view(floor)
+    : { ...g.floors[floor], furniture: [] as Furniture[] };
 }
 
 class PhysicsLayer {
   running = false;
   private floors: FloorPhysics[] = [];
+  private views: Floor[] = [];
   private records = new Map<Entity, RecordBody>();
   private grips = new Map<
     Actor,
@@ -147,6 +165,50 @@ class PhysicsLayer {
   /** Running solver substep count, for the rest hysteresis in stickOrSlip. */
   private substep = 0;
   constructor(private g: Game) {}
+  private hinge(
+    p: FloorPhysics,
+    body: Body,
+    d: NonNullable<Furniture["door"]>,
+    lower: number,
+    upper: number,
+  ) {
+    return p.world.createJoint(
+      new RevoluteJoint({
+        bodyA: p.ground,
+        bodyB: body,
+        localAnchorA: d.hinge,
+        localAnchorB: { x: d.hinge.x - d.frame.x, y: d.hinge.y - d.frame.y },
+        referenceAngle: 0,
+        enableLimit: true,
+        lowerAngle: lower,
+        upperAngle: upper,
+      }),
+    )!;
+  }
+  private preSolvePair(contact: Contact, person: Entity, object: Entity) {
+    if (!actor(person) || !furniture(object)) return;
+    if (object.field && fieldAllows(object, person)) contact.setEnabled(false);
+    const vault = person.vault ?? this.records.get(person)?.start.vault;
+    if (vault?.obstacle === object.id || vault?.obstacles?.includes(object.id))
+      contact.setEnabled(false);
+  }
+  private addPush(e: Entity, total: number) {
+    const r = this.records.get(e);
+    if (r && furniture(e)) r.push = (r.push ?? 0) + total;
+  }
+  private postSolvePair(person: Entity, object: Entity) {
+    if (!actor(person) || !furniture(object) || !(object.speed > 0)) return;
+    const r = this.records.get(person),
+      v = r?.drive;
+    if (
+      person.grip?.object === object.id ||
+      (v && v.x * (object.x - person.x) + v.y * (object.y - person.y) > 0)
+    ) {
+      let movers = this.movedBy.get(object);
+      if (!movers) this.movedBy.set(object, (movers = new Set()));
+      movers.add(person.id);
+    }
+  }
   private floor(index: number, refresh = false) {
     const f = this.g.floors[index];
     let p = this.floors[index];
@@ -158,7 +220,7 @@ class PhysicsLayer {
       world.setWarmStarting(false);
       world.setContinuousPhysics(true);
       const ground = world.createBody();
-      p = { world, ground, walls: world.createBody(), signature: "" };
+      p = { world, ground, walls: world.createBody(), tiles: [] };
       this.floors[index] = p;
       world.on("pre-solve", (contact) => {
         const a = contact.getFixtureA().getBody().getUserData() as
@@ -166,20 +228,8 @@ class PhysicsLayer {
           b = contact.getFixtureB().getBody().getUserData() as
             Entity | undefined;
         if (!a || !b) return;
-        for (const [person, object] of [
-          [a, b],
-          [b, a],
-        ])
-          if (actor(person) && furniture(object)) {
-            if (object.field && fieldAllows(object, person))
-              contact.setEnabled(false);
-            const vault = person.vault ?? this.records.get(person)?.start.vault;
-            if (
-              vault?.obstacle === object.id ||
-              vault?.obstacles?.includes(object.id)
-            )
-              contact.setEnabled(false);
-          }
+        this.preSolvePair(contact, a, b);
+        this.preSolvePair(contact, b, a);
       });
       world.on("post-solve", (contact, impulse) => {
         const a = contact.getFixtureA().getBody().getUserData() as
@@ -187,35 +237,18 @@ class PhysicsLayer {
           b = contact.getFixtureB().getBody().getUserData() as
             Entity | undefined;
         if (!a || !b) return;
-        const total = impulse.normalImpulses.reduce((n, i) => n + i, 0);
-        for (const e of [a, b]) {
-          const r = this.records.get(e);
-          if (r && furniture(e)) r.push = (r.push ?? 0) + total;
-        }
-        for (const [person, object] of [
-          [a, b],
-          [b, a],
-        ])
-          if (actor(person) && furniture(object) && object.speed > 0) {
-            const r = this.records.get(person),
-              v = r?.drive;
-            if (
-              person.grip?.object === object.id ||
-              (v &&
-                v.x * (object.x - person.x) + v.y * (object.y - person.y) > 0)
-            ) {
-              let movers = this.movedBy.get(object);
-              if (!movers) this.movedBy.set(object, (movers = new Set()));
-              movers.add(person.id);
-            }
-          }
+        let total = 0;
+        for (const n of impulse.normalImpulses) total += n;
+        this.addPush(a, total);
+        this.addPush(b, total);
+        this.postSolvePair(a, b);
+        this.postSolvePair(b, a);
       });
     }
-    const signature = f.tiles.map((row) => row.join("")).join(";");
-    if (signature !== p.signature || p.city !== f.city) {
+    if (!sameTiles(p.tiles, f.tiles) || p.city !== f.city) {
       p.world.destroyBody(p.walls);
       p.walls = p.world.createBody();
-      p.signature = signature;
+      p.tiles = f.tiles.map((row) => row.slice());
       p.city = f.city;
       // The city supplies actual urban obstacle footprints. Retain authored
       // office masonry, while removing the old square grid's outdoor walls.
@@ -341,21 +374,13 @@ class PhysicsLayer {
       this.records.set(e, r);
       if (furniture(e) && e.door) {
         const d = e.door;
-        r.hinge = p.world.createJoint(
-          new RevoluteJoint({
-            bodyA: p.ground,
-            bodyB: body,
-            localAnchorA: d.hinge,
-            localAnchorB: {
-              x: d.hinge.x - d.frame.x,
-              y: d.hinge.y - d.frame.y,
-            },
-            referenceAngle: 0,
-            enableLimit: true,
-            lowerAngle: d.latched ? 0 : -DOOR_SWING,
-            upperAngle: d.latched ? 0 : DOOR_SWING,
-          }),
-        )!;
+        r.hinge = this.hinge(
+          p,
+          body,
+          d,
+          d.latched ? 0 : -DOOR_SWING,
+          d.latched ? 0 : DOOR_SWING,
+        );
       } else if (furniture(e) && e.speed > 0) {
         r.friction = p.world.createJoint(
           new FrictionJoint(
@@ -384,8 +409,17 @@ class PhysicsLayer {
     }
     return r;
   }
+  view(index: number): Floor {
+    const f = this.g.floors[index];
+    let v = this.views[index];
+    // Rebuilt every begin(); also when tiles or the city were reassigned.
+    if (!v || v.tiles !== f.tiles || v.city !== f.city)
+      v = this.views[index] = { ...f, furniture: [] };
+    return v;
+  }
   begin() {
     this.running = true;
+    this.views.length = 0;
     this.movedBy.clear();
     for (let i = 0; i < this.g.floors.length; i++) this.floor(i, true);
     const entities: Entity[] = [
@@ -780,21 +814,7 @@ class PhysicsLayer {
             r.body.setTransform(Vec2(r.start.x, r.start.y), r.start.angle);
             r.body.setLinearVelocity(Vec2(0, 0));
             r.body.setAngularVelocity(0);
-            r.hinge = world.world.createJoint(
-              new RevoluteJoint({
-                bodyA: world.ground,
-                bodyB: r.body,
-                localAnchorA: d.hinge,
-                localAnchorB: {
-                  x: d.hinge.x - d.frame.x,
-                  y: d.hinge.y - d.frame.y,
-                },
-                referenceAngle: 0,
-                enableLimit: true,
-                lowerAngle: -DOOR_SWING,
-                upperAngle: DOOR_SWING,
-              }),
-            )!;
+            r.hinge = this.hinge(world, r.body, d, -DOOR_SWING, DOOR_SWING);
           } else r.body.setType(d.latched ? "static" : "dynamic");
           r.hinge.setLimits(
             d.latched ? 0 : d.side > 0 ? 0 : -DOOR_SWING,

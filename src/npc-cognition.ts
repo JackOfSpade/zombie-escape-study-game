@@ -1,3 +1,4 @@
+import { fnv1a } from "./hash";
 import { type Actor, type Encounter, type Game, event } from "./model";
 export type TechnicalFocus =
   "reasoning" | "implementation" | "testing" | "debugging";
@@ -23,11 +24,6 @@ export interface NpcWork {
   validated: false;
   execution: "not-run";
 }
-const hash = (value: string) => {
-  let n = 2166136261;
-  for (const c of value) n = Math.imul(n ^ c.charCodeAt(0), 16777619);
-  return n >>> 0;
-};
 const clamp = (n: number) => Math.max(0.15, Math.min(0.97, n));
 export function makeNpcProfile(
   id: string,
@@ -35,7 +31,7 @@ export function makeNpcProfile(
   role: string,
 ): NpcProfile {
   const rating = (key: string) =>
-    clamp(baseline * 0.35 + 0.12 + (hash(`${id}/${key}`) % 1000) / 1500);
+    clamp(baseline * 0.35 + 0.12 + (fnv1a(`${id}/${key}`) % 1000) / 1500);
   const topics: Record<string, number> = {};
   for (const track of ["PY", "PE"])
     for (let i = 1; i <= (track === "PY" ? 16 : 20); i++) {
@@ -88,7 +84,7 @@ function workRhythm(a: Actor, e: Encounter) {
     focus = workFocus(e, a, stage),
     strength = npcProfile(a).strengths[focus],
     personal =
-      hash(`${a.id}/${e.questionRoom ?? e.id}/${a.milestone}/pace`) /
+      fnv1a(`${a.id}/${e.questionRoom ?? e.id}/${a.milestone}/pace`) /
       0xffffffff,
     // Some steps click immediately; others need more reflection.
     stepPace = 0.85 + personal * 0.3,
@@ -239,7 +235,7 @@ export function recordNpcWork(
 ) {
   const stage: NpcWork["stage"] = mistake
     ? "revision"
-    : reasoningStages[(a.milestone - 1) % 4];
+    : reasoningStages[(a.milestone - 1) % reasoningStages.length];
   const focus = workFocus(e, a, stage),
     contextKey = npcWorkContext(e);
   const previous = e.npcWork ?? [];
@@ -256,7 +252,7 @@ export function recordNpcWork(
       ),
   );
   if (!remaining.length) return 0;
-  const facet = remaining[hash(`${a.id}/${a.milestone}`) % remaining.length];
+  const facet = remaining[fnv1a(`${a.id}/${a.milestone}`) % remaining.length];
   const overlap = previous.filter(
     (w) =>
       w.actor !== a.id &&
@@ -289,7 +285,7 @@ export function recordNpcWork(
     scopeIds: [...(e.problem?.contract.objectiveIds ?? [])],
     sourceRevision: e.revision,
     sourceSequence,
-    seed: hash(`${g.id}/${e.id}/${a.id}/${a.milestone}`),
+    seed: fnv1a(`${g.id}/${e.id}/${a.id}/${a.milestone}`),
     provenance: "simulated-conceptual-work",
     validated: false,
     execution: "not-run",

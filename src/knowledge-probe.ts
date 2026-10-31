@@ -1,6 +1,7 @@
 import { QUESTION_ADAPTATION_GUIDANCE } from "../scripts/lib/study-question-policy.mjs";
 import { scopeKey } from "./learning-model";
 import type { Contract, Encounter, Game, Problem } from "./model";
+import { isRecord as object } from "./records";
 
 /**
  * Knowledge probing for the private Terminal AI conversation.
@@ -242,8 +243,6 @@ const FLUENCY = new Set<string>([
   "guessing",
   "declared-gap",
 ]);
-const object = (v: unknown): v is Record<string, unknown> =>
-  v !== null && typeof v === "object" && !Array.isArray(v);
 const shortText = (v: unknown, limit: number) =>
   typeof v === "string" && v.trim() ? v.trim().slice(0, limit) : undefined;
 

@@ -202,20 +202,12 @@ function own(
   return Object.hasOwn(bank, objectiveId) ? bank[objectiveId] : undefined;
 }
 
-/** True when a concrete development question exists for this exact objective. */
-export function hasProductPractice(objectiveId: string): boolean {
-  return banks.some((bank) => own(bank, objectiveId) !== undefined);
-}
-
 /**
  * Returns a fresh copy of the objective's own question. Rubric arrays are
  * cloned so a caller's edits cannot change the shared bank. Unknown, missing
  * or prototype ids throw instead of inventing a feature.
  */
-export function productPractice(
-  contract: Contract,
-  _dailyUsers?: number,
-): ProductQuestion {
+export function productPractice(contract: Contract): ProductQuestion {
   const objectiveId = contract.objectiveIds[0];
   if (typeof objectiveId !== "string" || !objectiveId)
     throw new Error(

@@ -399,6 +399,24 @@ export class ExteriorDressing {
     this.streetLight.intensity = lights ? 10 : 0;
   }
 
+  /** One continuous asphalt mesh under the whole city; patches share a UV
+   * mapping so adjoining rectangles never show a seam. */
+  private buildGround(floor: Floor) {
+    const patches = cityGroundRectangles(floor).map((r) => {
+      const geometry = new PlaneGeometry(r.w, r.d)
+          .rotateX(-Math.PI / 2)
+          .translate(r.x, -0.035, r.z),
+        uv = geometry.getAttribute("uv"),
+        p = geometry.getAttribute("position");
+      for (let i = 0; i < uv.count; i++)
+        uv.setXY(i, (p.getX(i) + 118) / 280, (p.getZ(i) + 124) / 280);
+      return geometry;
+    });
+    const ground = new Mesh(mergeGeometries(patches)!, this.asphalt);
+    for (const part of patches) part.dispose();
+    ground.name = "continuous-city-ground";
+    this.world.add(ground);
+  }
   private buildCity(
     floor: Floor,
     opaque: BufferGeometry[],
@@ -423,25 +441,7 @@ export class ExteriorDressing {
         new BoxGeometry(w, h, d).rotateY(angle).translate(x, y, z),
         color,
       );
-    const groundParts = cityGroundRectangles(floor).map((r) => {
-      const plane = new PlaneGeometry(r.w, r.d)
-        .rotateX(-Math.PI / 2)
-        .translate(r.x, -0.035, r.z);
-      // Every patch samples one continuous asphalt texture across shared edges.
-      const uv = plane.getAttribute("uv"),
-        position = plane.getAttribute("position");
-      for (let i = 0; i < uv.count; i++)
-        uv.setXY(
-          i,
-          (position.getX(i) + 118) / 280,
-          (position.getZ(i) + 124) / 280,
-        );
-      return plane;
-    });
-    const ground = new Mesh(mergeGeometries(groundParts)!, this.asphalt);
-    for (const part of groundParts) part.dispose();
-    ground.name = "continuous-city-ground";
-    this.world.add(ground);
+    this.buildGround(floor);
 
     const westRoad = city.left - 9,
       eastRoad = city.right + 9,
@@ -900,20 +900,7 @@ export class ExteriorDressing {
       d: number,
       color: string,
     ) => this.part(out, new BoxGeometry(w, h, d).translate(x, y, z), color);
-    const patches = cityGroundRectangles(floor).map((r) => {
-      const geometry = new PlaneGeometry(r.w, r.d)
-          .rotateX(-Math.PI / 2)
-          .translate(r.x, -0.035, r.z),
-        uv = geometry.getAttribute("uv"),
-        p = geometry.getAttribute("position");
-      for (let i = 0; i < uv.count; i++)
-        uv.setXY(i, (p.getX(i) + 118) / 280, (p.getZ(i) + 124) / 280);
-      return geometry;
-    });
-    const ground = new Mesh(mergeGeometries(patches)!, this.asphalt);
-    for (const part of patches) part.dispose();
-    ground.name = "continuous-city-ground";
-    this.world.add(ground);
+    this.buildGround(floor);
     const hash = (value: number) => {
       let v = Math.imul(value ^ plan.seed, 0x45d9f3b);
       v = Math.imul(v ^ (v >>> 16), 0x45d9f3b);

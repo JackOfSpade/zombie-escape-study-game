@@ -1,9 +1,10 @@
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import {
   HANDOFF_REQUESTER_LIVE_MS,
   validDirectKnowledge,
   validDirectTranscript,
+  nativeJob,
   nativeJobScope,
   nativePreparationJob,
   nativePreparationContract,
@@ -690,9 +691,7 @@ export function createTerminalRelayApp({
     }
     claim(s);
   };
-  const nativeSelect = (job) =>
-    nativePreparationJob(job) ||
-    (job.operation === "tutor" && isDirect(job.payload));
+  const nativeSelect = nativeJob;
   const nativeValue = (s) => {
     const turn = s.turn;
     if (

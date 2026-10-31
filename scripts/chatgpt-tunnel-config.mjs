@@ -1,4 +1,4 @@
-import { createHash, randomBytes } from "node:crypto";
+import { randomBytes } from "node:crypto";
 import {
   mkdirSync,
   lstatSync,
@@ -13,7 +13,8 @@ import { homedir } from "node:os";
 import { isIP } from "node:net";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath, pathToFileURL } from "node:url";
-const sha = (value) => createHash("sha256").update(value).digest("hex");
+import { sha256 as sha } from "./lib/digest.mjs";
+import { assertOwnerOnly } from "./lib/private-fs.mjs";
 const uuid = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/;
 export const tunnelDirectory = fileURLToPath(
   new URL("../.local/chatgpt-public/", import.meta.url),
@@ -21,15 +22,10 @@ export const tunnelDirectory = fileURLToPath(
 export function privateDirectory(directory) {
   mkdirSync(directory, { recursive: true, mode: 0o700 });
   const s = lstatSync(directory);
-  if (
-    s.isSymbolicLink() ||
-    !s.isDirectory() ||
-    s.uid !== process.getuid?.() ||
-    s.mode & 0o077
-  )
-    throw Error(
-      "Bridge directory must be private, owner-owned and not a symlink",
-    );
+  assertOwnerOnly(s, {
+    kind: "directory",
+    message: "Bridge directory must be private, owner-owned and not a symlink",
+  });
 }
 export function writePrivate(file, data) {
   privateDirectory(dirname(file));
@@ -39,14 +35,11 @@ export function writePrivate(file, data) {
 }
 function readPrivate(file, max = 500_000) {
   const s = lstatSync(file);
-  if (
-    s.isSymbolicLink() ||
-    !s.isFile() ||
-    s.uid !== process.getuid?.() ||
-    s.mode & 0o077 ||
-    s.size > max
-  )
-    throw Error("Unsafe bridge configuration file");
+  assertOwnerOnly(s, {
+    kind: "file",
+    maxBytes: max,
+    message: "Unsafe bridge configuration file",
+  });
   return readFileSync(file, "utf8");
 }
 function binaryIdentity(binary) {

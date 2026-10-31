@@ -1,3 +1,4 @@
+import { fnv1a } from "./hash";
 import { H, W, distance, type Game, type Point, type Zombie } from "./model";
 import { furnitureNear, inFurniture, wall } from "./spatial";
 import { blocksSight, canSee, sightRadius } from "./visibility";
@@ -10,16 +11,10 @@ const point = (n: number): Point => ({
   x: (n % W) + 0.5,
   y: Math.floor(n / W) + 0.5,
 });
-function hash(text: string) {
-  let n = 2166136261;
-  for (let i = 0; i < text.length; i++)
-    n = Math.imul(n ^ text.charCodeAt(i), 16777619);
-  return n >>> 0;
-}
 /** A zombie's choices do not consume another zombie's random sequence. */
 export function zombieSearchRandom(g: Game, z: Zombie, salt: number) {
   return (
-    hash(`${g.seed}/${z.id}/${z.floor}/${z.search?.decisions ?? 0}/${salt}`) /
+    fnv1a(`${g.seed}/${z.id}/${z.floor}/${z.search?.decisions ?? 0}/${salt}`) /
     4294967296
   );
 }
@@ -53,6 +48,7 @@ export function planZombieRoute(g: Game, z: Zombie, cue?: Point): Point[] {
   if (search.trail.length > ZOMBIE_SEARCH.trail)
     search.trail.splice(0, search.trail.length - ZOMBIE_SEARCH.trail);
   search.decisions++;
+  const trailPoints = search.trail.map(point);
   for (
     let y = Math.max(1, Math.floor(z.y - radius));
     y <= Math.min(H - 2, Math.floor(z.y + radius));
@@ -117,8 +113,8 @@ export function planZombieRoute(g: Game, z: Zombie, cue?: Point): Point[] {
       d = distance(z, p);
     if (d < 0.7 && n !== cueCell) continue;
     let revisit = 0;
-    for (const visited of search.trail) {
-      const gap = distance(p, point(visited));
+    for (const q of trailPoints) {
+      const gap = distance(p, q);
       if (gap < 2) revisit += (2 - gap) * 1.5;
     }
     const forward =

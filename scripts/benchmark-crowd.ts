@@ -1,10 +1,10 @@
-import { createHash } from "node:crypto";
 import { readFileSync, writeFileSync } from "node:fs";
 import { step } from "../src/engine";
 import type { Roadmap } from "../src/model";
 import { solid } from "../src/spatial";
 import { createGame } from "../src/world";
 import { gameFingerprint } from "./lib/game-fingerprint";
+import { sha256 } from "./lib/digest.mjs";
 const r = JSON.parse(readFileSync("public/curriculum.json", "utf8")) as Roadmap;
 const source = gameFingerprint(),
   reports = [];
@@ -68,9 +68,7 @@ writeFileSync(
   JSON.stringify(
     {
       source,
-      driverSha256: createHash("sha256")
-        .update(readFileSync("scripts/benchmark-crowd.ts"))
-        .digest("hex"),
+      driverSha256: sha256(readFileSync("scripts/benchmark-crowd.ts")),
       mode: "synthetic physically clear rooftop crowd transport, calm, no NPC cognition/rendering; retained actors, no game-balance or actual outdoor spawning certificate",
       stepSeconds: 1 / 30,
       warmupFrames,

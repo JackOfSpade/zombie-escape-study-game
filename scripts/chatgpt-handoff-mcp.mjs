@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import { readFileSync, lstatSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { createInterface } from "node:readline";
+import { assertOwnerOnly } from "./lib/private-fs.mjs";
 const endpoint = new URL(
   process.env.DEAD_AIR_RELAY_URL ?? "http://127.0.0.1:4318",
 );
@@ -23,14 +24,11 @@ import { handoffTools } from "./chatgpt-handoff-tools.mjs";
 const tools = handoffTools();
 async function call(action, args = {}) {
   const stat = lstatSync(tokenFile);
-  if (
-    stat.isSymbolicLink() ||
-    !stat.isFile() ||
-    stat.uid !== process.getuid?.() ||
-    stat.mode & 0o077 ||
-    stat.size > 200
-  )
-    throw Error("Worker authorization unavailable; open game settings");
+  assertOwnerOnly(stat, {
+    kind: "file",
+    maxBytes: 200,
+    message: "Worker authorization unavailable; open game settings",
+  });
   const token = readFileSync(tokenFile, "utf8");
   const response = await fetch(new URL("/api/handoff/worker", endpoint), {
     method: "POST",

@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { edit, ensureProblem } from "../src/ai";
 import { claimStation, human, releaseStation, toggleDoor } from "../src/engine";
@@ -11,6 +10,7 @@ import {
   walkTo,
 } from "./lib/defense-scenario";
 import { gameFingerprint } from "./lib/game-fingerprint";
+import { sha256 as digest } from "./lib/digest.mjs";
 const roadmap = JSON.parse(
   readFileSync("public/curriculum.json", "utf8"),
 ) as Roadmap;
@@ -19,8 +19,6 @@ const files = [
   "scripts/benchmark-full-study.ts",
   "scripts/lib/defense-scenario.ts",
 ];
-const digest = (s: string | Buffer) =>
-  createHash("sha256").update(s).digest("hex");
 mkdirSync("docs/evidence/driver-snapshots", { recursive: true });
 const driver = files.map((path) => {
   const content = readFileSync(path),

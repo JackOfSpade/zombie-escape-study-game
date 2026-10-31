@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { sha256 } from "./lib/digest.mjs";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 export const browserLimits = Object.freeze({
@@ -20,10 +20,7 @@ export function browserContainerOptions(name) {
         "utf8",
       ),
     );
-  if (
-    createHash("sha256").update(readFileSync(profile)).digest("hex") !==
-    provenance.derivedProfile.sha256
-  )
+  if (sha256(readFileSync(profile)) !== provenance.derivedProfile.sha256)
     throw Error("Pinned Chromium sandbox profile changed");
   return [
     "--rm",

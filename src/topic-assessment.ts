@@ -3,6 +3,7 @@ import {
   TOPIC_ASSESSMENT_TEXT_LIMIT,
   validateTopicAssessments as validateTopicAssessmentValues,
 } from "../scripts/lib/topic-assessment.mjs";
+import { isRecord } from "./records";
 import type { ScopeDefinition } from "./learning-model";
 import type {
   Contract,
@@ -44,8 +45,8 @@ export interface TopicAssessmentMetadata {
 function validTopicAssessmentRecord(
   value: unknown,
 ): value is TopicAssessmentRecord {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
-  const row = value as Record<string, unknown>;
+  if (!isRecord(value)) return false;
+  const row = value;
   return (
     typeof row.topicId === "string" &&
     /^(PY|PE):[TXI]\d{2}$/.test(row.topicId) &&
@@ -69,7 +70,7 @@ function validTopicAssessmentRecord(
 
 function savedTopicAssessmentRecords(s: StudyState): TopicAssessmentRecord[] {
   const cache: unknown = s.topicAssessments;
-  if (!cache || typeof cache !== "object" || Array.isArray(cache)) return [];
+  if (!isRecord(cache)) return [];
   return Object.entries(cache).flatMap(([key, value]) =>
     validTopicAssessmentRecord(value) &&
     key === `${value.topicId}/D${value.depth}`
@@ -85,8 +86,7 @@ export function latestTopicAssessment(
   sourceHash?: string,
 ): TopicAssessmentRecord | undefined {
   const cache = s.topicAssessments;
-  if (!cache || typeof cache !== "object" || Array.isArray(cache))
-    return undefined;
+  if (!isRecord(cache)) return undefined;
   // Each topic has four possible depths. Reading those keys directly avoids
   // rescanning every topic's prose whenever an expanded panel is refreshed.
   let records = [1, 2, 3, 4].flatMap((depth) => {

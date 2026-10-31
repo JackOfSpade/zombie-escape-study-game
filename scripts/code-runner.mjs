@@ -6,7 +6,8 @@ import {
 import { docker, boundedText, maxOutput } from "./runner-process.mjs";
 import { executeReact } from "./browser-runner.mjs";
 import { browserSpec } from "./browser-runner/spec.mjs";
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
+import { sha256 } from "./lib/digest.mjs";
 
 const images = {
   python: process.env.CODE_RUNNER_PYTHON_IMAGE ?? "python:3.12-alpine",
@@ -123,7 +124,7 @@ export async function executeCode(input) {
       language: input.language,
       imageId,
       startedAt,
-      codeHash: createHash("sha256").update(input.code).digest("hex"),
+      codeHash: sha256(input.code),
       durationMs: Math.round(performance.now() - start),
       status: !executed
         ? "unavailable"

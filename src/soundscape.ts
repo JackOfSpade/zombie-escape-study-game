@@ -1,6 +1,12 @@
 import { soundConnectivity } from "./acoustics";
 import { type SoundSample } from "./sfx";
-import { type Game, type WorldEvent, type Zombie, distance } from "./model";
+import {
+  type Game,
+  type WorldEvent,
+  type Zombie,
+  HELIPAD,
+  distance,
+} from "./model";
 import { line } from "./spatial";
 import { listenerPose, soundPose, type SoundOrigin } from "./spatial-audio";
 import { outsideBuilding } from "./view3d/exterior-layout";
@@ -235,7 +241,7 @@ export function soundEvents(g: Game, after: number): SoundCue[] {
         : e.type === "completion"
           ? g.floors[e.floor]?.stations.find((s) => s.encounter === e.encounter)
           : e.type === "helicopter"
-            ? { x: 21.5, y: 10.5 }
+            ? HELIPAD
             : g.survivors[0];
       if (position)
         cue.origin = {

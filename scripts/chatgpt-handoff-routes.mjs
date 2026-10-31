@@ -1,6 +1,7 @@
 import { HttpInputError, readJsonBody } from "./http-json.mjs";
-import { randomBytes, timingSafeEqual } from "node:crypto";
+import { randomBytes } from "node:crypto";
 import { writeFileSync, renameSync } from "node:fs";
+import { safeEqual } from "./lib/safe-equal.mjs";
 import {
   HANDOFF_OPERATIONS,
   legacyWorkerJob,
@@ -20,14 +21,8 @@ export function createHandoffRoutes(
     writeFileSync(tmp, token, { mode: 0o600, flag: "wx" });
     renameSync(tmp, tokenFile);
   }
-  const sameToken = (req) => {
-    const supplied = String(req.headers.authorization ?? "");
-    const expected = `Bearer ${token}`;
-    return (
-      Buffer.byteLength(supplied) === Buffer.byteLength(expected) &&
-      timingSafeEqual(Buffer.from(supplied), Buffer.from(expected))
-    );
-  };
+  const sameToken = (req) =>
+    safeEqual(String(req.headers.authorization ?? ""), `Bearer ${token}`);
   const send = (res, code, value) => {
     res.writeHead(code);
     res.end(JSON.stringify(value));

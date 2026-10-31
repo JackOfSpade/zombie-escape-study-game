@@ -1,6 +1,7 @@
 import { ensureDoor } from "./doors";
 import { displayScale } from "./display-scale";
 import { createCheckpointQueue } from "./checkpoint-queue";
+import { fnv1a } from "./hash";
 import { reconcileKnowledgeGaps } from "./knowledge-probe";
 import { type Game } from "./model";
 import { checkpointPhysics } from "./physics";
@@ -16,19 +17,13 @@ interface Envelope {
   payload: string;
   checksum: number;
 }
-function checksum(s: string) {
-  let h = 2166136261;
-  for (let i = 0; i < s.length; i++)
-    h = Math.imul(h ^ s.charCodeAt(i), 16777619);
-  return h >>> 0;
-}
 export function encode(g: Game) {
   checkpointPhysics(g);
   const payload = JSON.stringify(g);
   return JSON.stringify({
     schema: 1,
     payload,
-    checksum: checksum(payload),
+    checksum: fnv1a(payload),
   } satisfies Envelope);
 }
 export function decode(text: string): Game {
@@ -36,7 +31,7 @@ export function decode(text: string): Game {
   if (
     e.schema !== 1 ||
     typeof e.payload !== "string" ||
-    checksum(e.payload) !== e.checksum
+    fnv1a(e.payload) !== e.checksum
   )
     throw Error("Save integrity check failed");
   const g = JSON.parse(e.payload) as Game;
@@ -196,19 +191,28 @@ export function download(
   a.click();
   setTimeout(() => URL.revokeObjectURL(a.href), 1000);
 }
+function interruptPending(
+  jobs: { state?: string; status?: string; error?: string }[] | undefined,
+  message: string,
+  field: "state" | "status" = "state",
+) {
+  for (const job of jobs ?? []) {
+    if (job[field] === "pending") {
+      job[field] = "interrupted";
+      job.error = message;
+    }
+  }
+}
 export function recover(g: Game) {
   g.settings.displayScale = displayScale(g.settings.displayScale);
-  for (const job of g.study.roadmapReconciliations ?? [])
-    if (job.state === "pending") {
-      job.state = "interrupted";
-      job.error =
-        "Roadmap review interrupted; explicit retry retains its exact snapshot.";
-    }
-  for (const job of g.study.environmentReviews ?? [])
-    if (job.state === "pending") {
-      job.state = "interrupted";
-      job.error = "Review interrupted; retry the captured packet explicitly.";
-    }
+  interruptPending(
+    g.study.roadmapReconciliations,
+    "Roadmap review interrupted; explicit retry retains its exact snapshot.",
+  );
+  interruptPending(
+    g.study.environmentReviews,
+    "Review interrupted; retry the captured packet explicitly.",
+  );
   g.study.profile ??= "development";
   if (g.study.profile === "live" && !g.study.learner)
     throw Error(
@@ -224,33 +228,26 @@ export function recover(g: Game) {
   ])) {
     e.chatOpen = false;
     delete e.groupRequest;
-    for (const job of e.groupRequests ?? [])
-      if (job.state === "pending") {
-        job.state = "interrupted";
-        job.error =
-          "Application restarted; retry the exact saved group question.";
-      }
-    for (const job of e.tutorRequests ?? [])
-      if (job.state === "pending") {
-        job.state = "interrupted";
-        job.error =
-          "Application restarted; retry the exact saved private question.";
-      }
+    interruptPending(
+      e.groupRequests,
+      "Application restarted; retry the exact saved group question.",
+    );
+    interruptPending(
+      e.tutorRequests,
+      "Application restarted; retry the exact saved private question.",
+    );
     // Older saves could carry a previous run's open question into a fresh run.
     // Preserve its artifacts while removing the obsolete completion obligation.
     if (g.study.archives.includes(e)) closeDirectStudy(e);
     recoverDirectStudy(e);
-    for (const job of e.materializations ?? [])
-      if (job.state === "pending") {
-        job.state = "interrupted";
-        job.error = "Team-work request interrupted; retry the saved context.";
-      }
-    for (const job of e.catchups ?? [])
-      if (job.state === "pending") {
-        job.state = "interrupted";
-        job.error =
-          "Application restarted; the captured interval is retained for explicit retry.";
-      }
+    interruptPending(
+      e.materializations,
+      "Team-work request interrupted; retry the saved context.",
+    );
+    interruptPending(
+      e.catchups,
+      "Application restarted; the captured interval is retained for explicit retry.",
+    );
     delete e.generation;
     for (const s of e.submissions)
       if (s.status === "pending") {
@@ -265,12 +262,11 @@ export function recover(g: Game) {
       e.outcomeInspection.error =
         "Outcome inspection interrupted; retry its saved request and candidate.";
     }
-    for (const job of e.executions ?? [])
-      if (job.status === "pending") {
-        job.status = "interrupted";
-        job.error =
-          "Application restarted during execution. Captured code retained; run again to retry.";
-      }
+    interruptPending(
+      e.executions,
+      "Application restarted during execution. Captured code retained; run again to retry.",
+      "status",
+    );
   }
   for (const e of Object.values(g.encounters)) releaseSettledRequests(e);
   for (const e of g.study.archives) releaseSettledRequests(e, true);

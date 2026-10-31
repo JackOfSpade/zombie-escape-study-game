@@ -76,7 +76,7 @@ export function renderRoadmapAdoption(host: HTMLElement, options: Options) {
             : ""
         }${j.proposal?.retentionUpdates?.length ? `<p>Reviewed retention correction for ${escape(j.proposal.retentionUpdates.map((u) => u.scopeId).join(", "))}. Dates and verification counts are recomputed from the remaining valid recorded reviews. Original review transactions remain in the complete file audit; this creates no new study visit or observation.</p>` : ""}${j.proposal?.branchConflicts?.length ? `<details><summary>${j.proposal.branchConflicts.length} unresolved source-qualified branch conflict(s)</summary><p>Both histories are preserved under their original IDs. Incoming conflicting records and dependent observations are retained in the complete file's portable audit and excluded from imported learning and practical proof. No IDs are renumbered.</p><p>${escape(j.proposal.branchRationale ?? "")}</p><pre>${escape(j.proposal.branchConflicts.map((c) => `${c.track}:${c.id}`).join("\n"))}</pre></details>` : ""}<p>Local ${escape(j.payload.localHash)} · incoming ${escape(j.payload.candidateHash)}</p>${
           j.review
-            ? `<details><summary>Proposed progress differences</summary><p>Complete proposed SHA-256: ${escape(j.review.candidateHash)}</p>${j.review.changes
+            ? `<details data-review-diff="${escape(j.id)}"><summary>Proposed progress differences</summary><p>Complete proposed SHA-256: ${escape(j.review.candidateHash)}</p>${j.review.changes
                 .filter((c) => c.local !== c.incoming)
                 .map(
                   (c) =>
@@ -96,15 +96,13 @@ export function renderRoadmapAdoption(host: HTMLElement, options: Options) {
           j.proposal.rationale,
         );
   }
-  for (const [index, detail] of [
-    ...host.querySelectorAll<HTMLDetailsElement>("details"),
-  ].entries())
+  for (const detail of host.querySelectorAll<HTMLDetailsElement>(
+    "details[data-review-diff]",
+  ))
     detail.ontoggle = () => {
       if (detail.open) {
-        const j = [...jobs]
-          .reverse()
-          .slice(0, 10)
-          .filter((j) => j.review)[index];
+        const id = detail.dataset.reviewDiff,
+          j = jobs.find((job) => job.id === id);
         if (j?.review)
           presentRoadmapReview(
             getGame(),

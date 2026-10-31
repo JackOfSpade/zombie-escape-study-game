@@ -47,11 +47,7 @@ async function validatePreview(value: unknown): Promise<ExecutionPreview> {
     atob(p.dataUrl.slice("data:image/jpeg;base64,".length)),
     (c) => c.charCodeAt(0),
   );
-  const digest = Array.from(
-    new Uint8Array(await crypto.subtle.digest("SHA-256", bytes)),
-  )
-    .map((n) => n.toString(16).padStart(2, "0"))
-    .join("");
+  const digest = await sha256(bytes);
   if (
     bytes[0] !== 255 ||
     bytes[1] !== 216 ||
@@ -184,10 +180,13 @@ export async function runWorkspace(
       }),
       signal: AbortSignal.timeout(job.environment === "react" ? 35000 : 20000),
     });
-    const packet = (await response.json()) as ExecutionReceipt & {
-      error?: string;
-      preview?: unknown;
-    };
+    const raw = await response.text();
+    let packet: ExecutionReceipt & { error?: string; preview?: unknown };
+    try {
+      packet = JSON.parse(raw);
+    } catch {
+      throw Error(`Runner unavailable (HTTP ${response.status})`);
+    }
     const { preview, ...receipt } = packet;
     if (!response.ok && receipt.status !== "unavailable")
       throw Error(receipt.error ?? "Runner request failed");

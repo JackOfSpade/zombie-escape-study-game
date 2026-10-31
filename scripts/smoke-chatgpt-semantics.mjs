@@ -1,9 +1,10 @@
 // Diagnostic orchestration only: answers must come from the real ChatGPT client.
 // Run start only after approval for these four packets and code transmission.
-import { randomUUID, createHash } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import { readFileSync, writeFileSync } from "node:fs";
 import { createDiagnosticState } from "./lib/diagnostic-state.mjs";
 import { fileURLToPath } from "node:url";
+import { sha256 } from "./lib/digest.mjs";
 import { validateGroupReply } from "../src/group-grounding.ts";
 const root = fileURLToPath(new URL("../", import.meta.url));
 const directory = root + ".local/chatgpt-handoff/";
@@ -13,7 +14,7 @@ const headers = {
   Origin: "http://127.0.0.1:5173",
   "Content-Type": "application/json",
 };
-const { save, load } = createDiagnosticState({ directory, file });
+const { ownerOnly, save, load } = createDiagnosticState({ directory, file });
 async function call(path, body) {
   const reply = await fetch("http://127.0.0.1:4318" + path, {
     ...(body === undefined
@@ -128,7 +129,7 @@ async function main() {
       throw Error("Require exactly four synthetic packets without effects");
     const state = {
       id: "semantic-smoke-" + randomUUID(),
-      planHash: createHash("sha256").update(source).digest("hex"),
+      planHash: sha256(source),
       phase: "preparing",
       tasks: [],
       createdAt: new Date().toISOString(),

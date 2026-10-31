@@ -1,7 +1,15 @@
 import { fieldAllows } from "./force-fields";
 import { citySolid, cityWall } from "./city-layout";
 import { boxBounds, boxesOverlap, localPoint } from "./furniture-geometry";
-import { type Floor, type Furniture, H, type Point, W } from "./model";
+import {
+  type Actor,
+  type Floor,
+  type Furniture,
+  H,
+  type Point,
+  W,
+} from "./model";
+import { MinHeap } from "./heap";
 export function inFurniture(p: Point, f: Furniture, pad = 0) {
   if (
     f.destroyed ||
@@ -148,10 +156,21 @@ export function move(
   dy: number,
   ignore?: string,
 ) {
-  const nx = { ...p, x: p.x + dx, y: p.y };
-  if (!solid(f, nx, 0.22, ignore)) p.x = nx.x;
-  const ny = { ...p, x: p.x, y: p.y + dy };
-  if (!solid(f, ny, 0.22, ignore)) p.y = ny.y;
+  // solid() only reads x/y, plus id/access for actors' force-field checks.
+  const probe: Point =
+    "access" in p
+      ? ({
+          x: p.x,
+          y: p.y,
+          id: (p as Actor).id,
+          access: (p as Actor).access,
+        } as Point)
+      : { x: p.x, y: p.y };
+  probe.x = p.x + dx;
+  if (!solid(f, probe, 0.22, ignore)) p.x = probe.x;
+  probe.x = p.x;
+  probe.y = p.y + dy;
+  if (!solid(f, probe, 0.22, ignore)) p.y = probe.y;
 }
 export function line(
   f: Floor,
@@ -306,37 +325,10 @@ function computePath(
     prev = new Int32Array(W * H).fill(-1),
     closed = new Uint8Array(W * H);
   dist[start] = 0;
-  const heap: [number, number][] = [];
-  const push = (id: number, cost: number) => {
-    heap.push([id, cost]);
-    let i = heap.length - 1;
-    while (i > 0) {
-      const j = (i - 1) >> 1;
-      if (heap[j][1] <= cost) break;
-      [heap[i], heap[j]] = [heap[j], heap[i]];
-      i = j;
-    }
-  };
-  const pop = () => {
-    const first = heap[0],
-      last = heap.pop()!;
-    if (heap.length) {
-      heap[0] = last;
-      let i = 0;
-      while (true) {
-        let j = i * 2 + 1;
-        if (j >= heap.length) break;
-        if (j + 1 < heap.length && heap[j + 1][1] < heap[j][1]) j++;
-        if (heap[i][1] <= heap[j][1]) break;
-        [heap[i], heap[j]] = [heap[j], heap[i]];
-        i = j;
-      }
-    }
-    return first;
-  };
-  push(start, 0);
+  const heap = new MinHeap();
+  heap.push(start, 0);
   while (heap.length) {
-    const [v, cost] = pop();
+    const [v, cost] = heap.pop();
     if (closed[v]) continue;
     closed[v] = 1;
     if (v === end) break;
@@ -360,7 +352,7 @@ function computePath(
       if (nd < dist[id]) {
         dist[id] = nd;
         prev[id] = v;
-        push(id, nd);
+        heap.push(id, nd);
       }
     }
   }

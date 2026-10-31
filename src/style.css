@@ -381,7 +381,7 @@ kbd {
   display: flex;
   flex-wrap: wrap;
   justify-content: flex-end;
-  gap: 8px;
+  gap: 6px;
   align-items: center;
   max-width: 50%;
   will-change: transform;
@@ -459,81 +459,9 @@ body.spectating canvas.dragging {
     width: 50px;
   }
 }
-.dashboard > section {
-  border-bottom: 1px solid var(--line);
-  padding: 20px 0;
-}
-.dashboard > section:first-child {
-  padding-top: 0;
-}
-.vital-row {
-  display: flex;
-  align-items: baseline;
-  gap: 10px;
-  margin: 10px 0;
-}
-.vital-row > strong {
-  font:
-    500 38px "Space Grotesk",
-    sans-serif;
-}
-.vital-row > span {
-  font-size: 9px;
-  color: var(--muted);
-}
-.health-track {
-  height: 3px;
-  background: var(--line);
-}
-#health-fill {
-  height: 100%;
-  background: var(--accent);
-}
-.population {
-  display: flex;
-  justify-content: space-between;
-  margin-top: 20px;
-}
-.population > div {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-.population strong {
-  font:
-    500 23px "Space Grotesk",
-    sans-serif;
-}
-.population span {
-  font-size: 8px;
-  letter-spacing: 1px;
-  color: var(--muted);
-}
-.objective h2 {
-  font-size: 21px;
-}
-.objective p {
-  font-size: 12px;
-  color: var(--muted);
-}
-#pickup {
-  font: 12px monospace;
-  color: var(--accent);
-}
-.section-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-bottom: 14px;
-}
 .muted {
   font-size: 11px;
   color: var(--muted);
-}
-#inventory {
-  display: flex;
-  gap: 6px;
-  flex-wrap: wrap;
 }
 .item {
   padding: 10px 8px;
@@ -552,52 +480,6 @@ body.spectating canvas.dragging {
   font-size: 9px;
   color: var(--muted);
   margin-top: 8px;
-}
-.track {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  margin: 17px 0;
-}
-.track > span:first-child {
-  font: 11px monospace;
-  border: 1px solid var(--line);
-  padding: 9px 6px;
-}
-.track strong {
-  font-size: 11px;
-  font-weight: 500;
-}
-.track small {
-  display: block;
-  color: var(--muted);
-  font-size: 10px;
-  margin-top: 4px;
-}
-.track-count {
-  margin-left: auto;
-  font:
-    22px "Space Grotesk",
-    sans-serif;
-  color: var(--muted);
-}
-.integrity {
-  border: 1px solid var(--line);
-  padding: 9px;
-  font-size: 9px;
-  color: var(--muted);
-  border-radius: 4px;
-}
-.feed p {
-  font-size: 10px;
-  color: var(--muted);
-  border-bottom: 1px solid var(--line);
-  padding-bottom: 10px;
-}
-.feed p span {
-  font: 9px monospace;
-  color: var(--accent);
-  margin-right: 5px;
 }
 .overlay {
   position: absolute;
@@ -906,9 +788,6 @@ body.reduced * {
     max-width: calc(100% - 24px);
   }
   .controls span:last-child {
-    display: none;
-  }
-  .feed {
     display: none;
   }
   .overlay {
@@ -1371,7 +1250,7 @@ body.reduced * {
   max-width: 100%;
   padding: 8px;
 }
-@media (max-width: 600px) {
+@container (max-width: 600px) {
   .native-study {
     bottom: 106px;
   }

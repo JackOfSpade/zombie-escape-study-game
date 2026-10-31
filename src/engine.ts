@@ -49,6 +49,8 @@ import {
   type Zombie,
   CONFIG,
   FURNITURE,
+  HELIPAD,
+  HELIPAD_RADIUS,
   distance,
   event,
   rand,
@@ -121,6 +123,8 @@ export interface Input {
   /** First-person walking follows the physical stair/gallery instead of a timer. */
   stairWalk?: boolean;
 }
+/** Zombie walking speed multiplier while the Surge is active. */
+const SURGE_SPEED_MULTIPLIER = 1.35;
 export const human = (g: Game) => g.survivors[0];
 export function nearestFurniture(g: Game, a: Actor, grip = false) {
   return g.floors[a.floor].furniture
@@ -292,17 +296,19 @@ export function tickSurge(g: Game) {
 export function stairs(g: Game, a: Actor, down = false) {
   return beginStairs(g, a, down);
 }
+export function canBoard(g: Game, a: Actor) {
+  return (
+    !a.stairTravel &&
+    a.floor === CONFIG.floors &&
+    a.alive &&
+    !a.escaped &&
+    distance(a, HELIPAD) <= HELIPAD_RADIUS &&
+    g.time < g.helicopter.until &&
+    g.helicopter.passengers.length < 4
+  );
+}
 export function board(g: Game, a: Actor) {
-  if (
-    a.stairTravel ||
-    a.floor !== CONFIG.floors ||
-    !a.alive ||
-    a.escaped ||
-    distance(a, { x: 21.5, y: 10.5 }) > 2.8 ||
-    g.time >= g.helicopter.until ||
-    g.helicopter.passengers.length >= 4
-  )
-    return false;
+  if (!canBoard(g, a)) return false;
   g.helicopter.passengers.push(a.id);
   a.escaped = true;
   delete a.handling;
@@ -1550,7 +1556,7 @@ function npc(g: Game, a: Actor, dt: number) {
   } else if (a.floor === CONFIG.floors) {
     a.activity = "climbing";
     delete a.station;
-    follow(g, a, { x: 21.5, y: 10.5 }, dt);
+    follow(g, a, HELIPAD, dt);
     board(g, a);
   } else if (a.access.includes(a.floor)) {
     a.activity = "climbing";
@@ -2289,6 +2295,10 @@ function zombie(
     return;
   }
   const surge = g.surge.state === "active";
+  const zombieStep =
+    (g.rules === "force-fields"
+      ? CONFIG.playerSpeed * SWARM.speedRatio
+      : CONFIG.zombieSpeed * (surge ? SURGE_SPEED_MULTIPLIER : 1)) * dt;
   if (
     prey &&
     distance(z, prey) < 0.78 &&
@@ -2396,18 +2406,7 @@ function zombie(
         inFurniture(probe, o, 0.23),
       );
     if (ob?.door && !ob.door.latched) {
-      moveZombie(
-        g,
-        z,
-        p,
-        Math.min(
-          (g.rules === "force-fields"
-            ? CONFIG.playerSpeed * SWARM.speedRatio
-            : CONFIG.zombieSpeed * (surge ? 1.35 : 1)) * dt,
-          d,
-        ),
-        crowd,
-      );
+      moveZombie(g, z, p, Math.min(zombieStep, d), crowd);
       return;
     }
     if (ob) {
@@ -2419,18 +2418,7 @@ function zombie(
       if (shove && distance(z, surface) <= 0.42 && z.cooldown <= 0)
         strikeFurniture(g, z, ob, z.floor, z);
       if (shove || distance(z, surface) > 0.42) {
-        moveZombie(
-          g,
-          z,
-          p,
-          Math.min(
-            (g.rules === "force-fields"
-              ? CONFIG.playerSpeed * SWARM.speedRatio
-              : CONFIG.zombieSpeed * (surge ? 1.35 : 1)) * dt,
-            d,
-          ),
-          crowd,
-        );
+        moveZombie(g, z, p, Math.min(zombieStep, d), crowd);
         return;
       }
       // A contacting attacker occupies its face slot throughout its cooldown.
@@ -2438,11 +2426,7 @@ function zombie(
       contactFurniture(g, z, ob, contacts);
       return;
     }
-    const step =
-      (g.rules === "force-fields"
-        ? CONFIG.playerSpeed * SWARM.speedRatio
-        : CONFIG.zombieSpeed * (surge ? 1.35 : 1)) * dt;
-    moveZombie(g, z, p, Math.min(step, d), crowd);
+    moveZombie(g, z, p, Math.min(zombieStep, d), crowd);
   }
   if (
     z.floor < CONFIG.floors &&
@@ -2466,49 +2450,33 @@ export function useItem(g: Game, a: Actor, id: string) {
     return false;
   }
   if (!it) return false;
+  const placeEffect = (
+    kind: "bubble" | "flare" | "decoy",
+    spec: "bubble" | "flare" | "decoy" | "battery",
+  ) =>
+    g.effects.push({
+      kind,
+      floor: a.floor,
+      x: a.x,
+      y: a.y,
+      radius: EQUIPMENT[spec].radius,
+      until: g.time + EQUIPMENT[spec].seconds,
+    });
   switch (it.kind) {
     case "medkit":
       a.hp = Math.min(100, a.hp + EQUIPMENT.medkit.heal);
       break;
     case "bubble":
-      g.effects.push({
-        kind: "bubble",
-        floor: a.floor,
-        x: a.x,
-        y: a.y,
-        radius: EQUIPMENT.bubble.radius,
-        until: g.time + EQUIPMENT.bubble.seconds,
-      });
+      placeEffect("bubble", "bubble");
       break;
     case "flare":
-      g.effects.push({
-        kind: "flare",
-        floor: a.floor,
-        x: a.x,
-        y: a.y,
-        radius: EQUIPMENT.flare.radius,
-        until: g.time + EQUIPMENT.flare.seconds,
-      });
+      placeEffect("flare", "flare");
       break;
     case "decoy":
-      g.effects.push({
-        kind: "decoy",
-        floor: a.floor,
-        x: a.x,
-        y: a.y,
-        radius: EQUIPMENT.decoy.radius,
-        until: g.time + EQUIPMENT.decoy.seconds,
-      });
+      placeEffect("decoy", "decoy");
       break;
     case "battery":
-      g.effects.push({
-        kind: "flare",
-        floor: a.floor,
-        x: a.x,
-        y: a.y,
-        radius: EQUIPMENT.battery.radius,
-        until: g.time + EQUIPMENT.battery.seconds,
-      });
+      placeEffect("flare", "battery");
       break;
     case "repulsor":
     case "weapon":

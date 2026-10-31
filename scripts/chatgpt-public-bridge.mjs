@@ -1,6 +1,6 @@
 import { preparePrivateSocket } from "./private-socket.mjs";
 import { createServer } from "node:http";
-import { randomBytes, timingSafeEqual } from "node:crypto";
+import { randomBytes } from "node:crypto";
 import { mkdirSync, lstatSync, unlinkSync, chmodSync } from "node:fs";
 import { join } from "node:path";
 import { createOAuthServer } from "./chatgpt-security/oauth.mjs";
@@ -18,19 +18,15 @@ import {
 import { handoffTools } from "./chatgpt-handoff-tools.mjs";
 import { legacyWorkerJob } from "./chatgpt-handoff-queue.mjs";
 import { sha256 as hash } from "./lib/digest.mjs";
+import { safeEqual as same } from "./lib/safe-equal.mjs";
+import { isRecord as object } from "./lib/is-record.mjs";
+import { assertOwnerOnly } from "./lib/private-fs.mjs";
 const protocols = new Set([
   "2025-11-25",
   "2025-06-18",
   "2025-03-26",
   "2024-11-05",
 ]);
-const same = (a, b) =>
-  typeof a === "string" &&
-  typeof b === "string" &&
-  Buffer.byteLength(a) === Buffer.byteLength(b) &&
-  timingSafeEqual(Buffer.from(a), Buffer.from(b));
-const object = (value) =>
-  value !== null && typeof value === "object" && !Array.isArray(value);
 
 // Fixed classifications only: no response text, question bindings or evidence.
 function relayOutcome(reply) {
@@ -80,12 +76,9 @@ export function createPublicHandoffBridge({
     );
   mkdirSync(directory, { recursive: true, mode: 0o700 });
   const parent = lstatSync(directory);
-  if (
-    parent.isSymbolicLink() ||
-    parent.uid !== process.getuid?.() ||
-    parent.mode & 0o077
-  )
-    throw Error("Public bridge directory must be owner-only and not a symlink");
+  assertOwnerOnly(parent, {
+    message: "Public bridge directory must be owner-only and not a symlink",
+  });
   let session = null,
     workerRequestPrefix = null,
     closed = false;

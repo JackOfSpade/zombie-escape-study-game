@@ -1,6 +1,5 @@
 import { createStudyWorkspaceView } from "./study-workspace-view";
 import { NpcVoiceDirector } from "./npc-voice";
-import { studyTrackSummary } from "./study-progress";
 import {
   beginDirectStudy,
   pauseDirectStudy,
@@ -395,6 +394,9 @@ async function persist() {
         : `Save failed: ${String(err)}. Export a run backup.`;
     return false;
   }
+}
+async function persistOrThrow(context = "Local save failed") {
+  if (!(await persist())) throw Error(saveError || context);
 }
 function currentNativeQuestion() {
   const last = lastQuestion && game.encounters[lastQuestion];
@@ -954,19 +956,22 @@ function begin() {
   focusWorld(true);
   persist();
 }
+const HUMAN_EVIDENCE_KINDS = [
+  "edit",
+  "reasoning",
+  "test",
+  "defense",
+  "execution",
+];
+function hasHumanEvidence(e: Encounter) {
+  return e.history.some(
+    (h) => h.author === "human" && HUMAN_EVIDENCE_KINDS.includes(h.kind),
+  );
+}
 function preserveRunLearning(g: Game, archive = false) {
   const retained = retainRunLearning(g, archive);
   for (const e of retained)
-    if (
-      !unfinishedDirectStudy(e) &&
-      e.history.some(
-        (h) =>
-          h.author === "human" &&
-          ["edit", "reasoning", "test", "defense", "execution"].includes(
-            h.kind,
-          ),
-      )
-    )
+    if (!unfinishedDirectStudy(e) && hasHumanEvidence(e))
       void assess(g, e, roadmap).then(persist);
   if (retained.length) void persist();
 }
@@ -1000,15 +1005,7 @@ async function fresh(statusLine?: HTMLElement) {
   say("Saving learning progress…");
   const assessing = Promise.allSettled(
     retainRunLearning(previous, true)
-      .filter((e) =>
-        e.history.some(
-          (h) =>
-            h.author === "human" &&
-            ["edit", "reasoning", "test", "defense", "execution"].includes(
-              h.kind,
-            ),
-        ),
-      )
+      .filter(hasHumanEvidence)
       .map((e) => assess(previous, e, roadmap).then(persist)),
   );
   // Requests are captured synchronously. Save them before waiting on a model,
@@ -2019,10 +2016,13 @@ for (const id of ["career-focus", "settings-career-focus"])
     syncLearningView(game.study);
     renderCareerControls();
     void persist();
-    if (!$("#inspector").hidden) $("#curriculum-button").click();
+    if (!$("#inspector").hidden) renderInspector();
   };
 $("#curriculum-button").onclick = () => {
   openPanel("inspector", "#inspector-title");
+  renderInspector();
+};
+function renderInspector() {
   renderCareerControls();
   const c = eligibleForUI();
   const readiness = (["PY", "PE"] as const)
@@ -2056,9 +2056,7 @@ $("#curriculum-button").onclick = () => {
     $("#inspector-content"),
     game,
     roadmap,
-    async () => {
-      if (!(await persist())) throw Error(saveError || "Local save failed");
-    },
+    persistOrThrow,
     game.study.profile === "live" &&
       status().capabilities.includes("review-environment")
       ? (id, retry) => reviewEnvironmentObservation(game, roadmap, id, retry)
@@ -2085,23 +2083,23 @@ $("#curriculum-button").onclick = () => {
       candidate,
       provider:
         status().mode === "chatgpt-handoff" ? "chatgpt-handoff" : "study-mode",
-      persist: async () => {
-        if (!(await persist())) throw Error(saveError || "Local save failed");
-      },
+      persist: persistOrThrow,
       reconcile:
         game.study.profile === "live" &&
         status().capabilities.includes("reconcile-roadmap")
           ? (text, id, captured) =>
               reconcileUploadedRoadmap(game, roadmap, text, id, async () => {
-                if (!(await persist()))
-                  throw Error(
-                    saveError ||
-                      "Local save failed before roadmap reconciliation",
-                  );
+                await persistOrThrow(
+                  "Local save failed before roadmap reconciliation",
+                );
                 captured?.();
               })
           : undefined,
-      onAdopted: () => $("#curriculum-button").click(),
+      onAdopted: () => {
+        // The adopt button is rebuilt away, so focus a stable target.
+        renderInspector();
+        $("#inspector-title").focus();
+      },
     });
   renderAdoption();
   $<HTMLInputElement>("#roadmap-review-file").onchange = async () => {
@@ -2262,7 +2260,7 @@ $("#curriculum-button").onclick = () => {
         2,
       ),
     );
-};
+}
 $("#close-inspector").onclick = () => {
   closePanel("inspector");
 };
@@ -2306,16 +2304,28 @@ async function refreshHandoff() {
       $<HTMLButtonElement>(`#handoff-${id}`).disabled = !external?.configured;
     if (!external?.pairingOpen) setText("#handoff-pairing-code", "");
     const replies = $("#handoff-replies");
-    replies.replaceChildren();
-    for (const job of info.recent ?? []) {
-      if (job.status !== "done") continue;
-      const button = document.createElement("button");
-      button.className = "quiet";
-      setNodeText(button, `Request corrected ${job.operation} reply`);
-      button.onclick = () => {
-        void handoffControl("reopen", undefined, job.id);
-      };
-      replies.append(button);
+    const doneJobs = (info.recent ?? []).filter(
+      (job: { status: string }) => job.status === "done",
+    );
+    const repliesKey = doneJobs
+      .map(
+        (job: { id: string; operation: string }) =>
+          `${job.id}:${job.operation}`,
+      )
+      .join("|");
+    // Rebuild only when the done jobs change; this runs every 2 s.
+    if (replies.dataset.key !== repliesKey) {
+      replies.dataset.key = repliesKey;
+      replies.replaceChildren();
+      for (const job of doneJobs) {
+        const button = document.createElement("button");
+        button.className = "quiet";
+        setNodeText(button, `Request corrected ${job.operation} reply`);
+        button.onclick = () => {
+          void handoffControl("reopen", undefined, job.id);
+        };
+        replies.append(button);
+      }
     }
     setText(
       "#handoff-status",
@@ -2545,6 +2555,7 @@ async function reconnectChatGpt(tab: Window | null = null, fresh = false) {
       );
       return;
     }
+    let ready = false;
     for (let i = 0; i < 400 && game === requestGame; i++) {
       // A capability refresh can finish while this older connection attempt
       // is waiting for a legacy widget. Native chat does not need that widget.
@@ -2554,7 +2565,7 @@ async function reconnectChatGpt(tab: Window | null = null, fresh = false) {
         return;
       }
       info = await handoffStatus();
-      const ready = relayServes(info);
+      ready = relayServes(info);
       if (ready) break;
       if (i === 0) {
         // Point the reserved tab at a new, empty ChatGPT chat; if the browser
@@ -2579,6 +2590,15 @@ async function reconnectChatGpt(tab: Window | null = null, fresh = false) {
     reconnectChatUrl = null;
     // Already listening: the reserved tab isn't needed.
     closeUnusedTab();
+    // The run was replaced: stay quiet rather than confuse the new run.
+    if (game !== requestGame) {
+      reportReconnect(null);
+      return;
+    }
+    if (!ready)
+      throw Error(
+        "ChatGPT did not start your study terminal in time. Try Reconnect again.",
+      );
     reportReconnect(
       "Done. ChatGPT is connected and your study terminal is ready; send a message below.",
     );
@@ -2717,6 +2737,7 @@ async function restoreRunBackup(file: File) {
     );
     closeTerminal();
     game = next;
+    leaveSpectator();
     saveRecoveryError = "";
     lastQuestion = latestStudyEncounter(game);
     resumeNativeQuestions();
@@ -2724,6 +2745,16 @@ async function restoreRunBackup(file: File) {
     completionCursor = 0;
     await persist();
     startCard();
+    if (spectating(game)) {
+      enterSpectator();
+      if (
+        currentNativeQuestion() ||
+        unfinishedLastQuestion(game, lastQuestion)
+      ) {
+        $("#start-card").hidden = true;
+        syncSpectatorBar();
+      }
+    }
     closePanel("settings");
     setPaused(true);
   } catch (err) {
@@ -2731,6 +2762,17 @@ async function restoreRunBackup(file: File) {
     if (saveRecoveryError)
       setText("#save-recovery-status", `${saveRecoveryError} ${game.notice}`);
   }
+}
+/** WASD/arrow movement as a -1/0/1 vector (y grows downward). */
+function moveInput(held: ReadonlySet<string>) {
+  return {
+    x:
+      Number(held.has("KeyD") || held.has("ArrowRight")) -
+      Number(held.has("KeyA") || held.has("ArrowLeft")),
+    y:
+      Number(held.has("KeyS") || held.has("ArrowDown")) -
+      Number(held.has("KeyW") || held.has("ArrowUp")),
+  };
 }
 const PAN_KEYS = [
   "ArrowUp",
@@ -2805,12 +2847,7 @@ window.addEventListener("keydown", (ev) => {
   if (ev.code === "KeyE") void interact();
   if (ev.code === "Space" && game.rules !== "force-fields") {
     const a = human(game),
-      x =
-        Number(keys.has("KeyD") || keys.has("ArrowRight")) -
-        Number(keys.has("KeyA") || keys.has("ArrowLeft")),
-      y =
-        Number(keys.has("KeyS") || keys.has("ArrowDown")) -
-        Number(keys.has("KeyW") || keys.has("ArrowUp")),
+      { x, y } = moveInput(keys),
       n = Math.hypot(x, y);
     if (firstPersonPlaying()) a.heading = firstPersonControls.facing;
     else if (n) a.heading = { x: x / n, y: y / n };
@@ -3020,19 +3057,6 @@ function ui() {
         persist();
       };
   }
-  for (const track of ["PY", "PE"] as const) {
-    const progress = studyTrackSummary(roadmap, game.study, track);
-    const state = game.study.learner?.tracks[track];
-    const phase =
-      game.study.profile === "live" ? state?.phase : game.study.phases[track];
-    $(`#${track.toLowerCase()}-phase`).textContent =
-      `Tier ${progress.tier} · ${(phase ?? "").toLowerCase().replaceAll("_", " ")}`;
-    $(`#${track.toLowerCase()}-total`).textContent = String(
-      progress.passed,
-    ).padStart(2, "0");
-    $(`#${track.toLowerCase()}-count`).textContent =
-      `${progress.passed} / ${progress.total} Tier ${progress.tier} checkpoints verified`;
-  }
   const c = eligibleForUI();
   $("#schedule").textContent = c
     ? `1 PY : 2 PE · Next: ${c.track}${c.review ? " retention review" : ""} · D${c.depth}`
@@ -3123,14 +3147,7 @@ function frame(time: number) {
     while (acc >= 1 / 30 && count++ < 6) {
       const focused =
         game.status !== "playing" || ownsKeyboard(document.activeElement);
-      const x = focused
-          ? 0
-          : Number(keys.has("KeyD") || keys.has("ArrowRight")) -
-            Number(keys.has("KeyA") || keys.has("ArrowLeft")),
-        y = focused
-          ? 0
-          : Number(keys.has("KeyS") || keys.has("ArrowDown")) -
-            Number(keys.has("KeyW") || keys.has("ArrowUp"));
+      const { x, y } = focused ? { x: 0, y: 0 } : moveInput(keys);
       const stepStarted = performance.now();
       const input =
         firstPersonPlaying() && !focused
@@ -3174,12 +3191,7 @@ function frame(time: number) {
   if (view && spectating(game) && !game.paused) {
     // Held keys pan the free camera over the live floor.
     const pan = (16 * elapsed) / view.zoom,
-      x =
-        Number(keys.has("KeyD") || keys.has("ArrowRight")) -
-        Number(keys.has("KeyA") || keys.has("ArrowLeft")),
-      y =
-        Number(keys.has("KeyS") || keys.has("ArrowDown")) -
-        Number(keys.has("KeyW") || keys.has("ArrowUp"));
+      { x, y } = moveInput(keys);
     if (x || y)
       setView({
         ...view,

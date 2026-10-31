@@ -1,4 +1,5 @@
 import { sha256 } from "./digest.mjs";
+import { isRecord as isObject } from "./is-record.mjs";
 
 /** Boilerplate shared by the MCP App tool sets (live terminal relay and synthetic demo). */
 export const MCP_APP_MIME = "text/html;profile=mcp-app";
@@ -11,9 +12,7 @@ export const schema = (properties, required = Object.keys(properties)) => ({
   additionalProperties: false,
 });
 export const idSchema = { type: "string", minLength: 1, maxLength: 100 };
-export { sha256 };
-export const isObject = (value) =>
-  value !== null && typeof value === "object" && !Array.isArray(value);
+export { sha256, isObject };
 /** Non-empty text within the terminal reply bound. */
 export const boundedText = (value, limit = 8000) =>
   typeof value === "string" && value.trim().length > 0 && value.length <= limit;

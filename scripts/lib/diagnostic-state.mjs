@@ -6,6 +6,7 @@ import {
   renameSync,
   writeFileSync,
 } from "node:fs";
+import { assertOwnerOnly } from "./private-fs.mjs";
 
 /**
  * Owner-only JSON state for the ChatGPT diagnostic and smoke scripts under
@@ -20,12 +21,9 @@ export function createDiagnosticState({
 }) {
   const ownerOnly = (path) => {
     const entry = lstatSync(path.replace(/\/+$/, ""));
-    if (
-      entry.isSymbolicLink() ||
-      entry.uid !== process.getuid?.() ||
-      entry.mode & 0o077
-    )
-      throw Error(`${label} must be owner-only and not a symlink`);
+    assertOwnerOnly(entry, {
+      message: `${label} must be owner-only and not a symlink`,
+    });
   };
   const load = () => {
     ownerOnly(directory);

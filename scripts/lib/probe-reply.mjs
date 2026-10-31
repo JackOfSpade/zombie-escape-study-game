@@ -1,3 +1,5 @@
+import { isRecord as object } from "./is-record.mjs";
+
 /**
  * Knowledge-probe reply fields shared by the handoff queue, the live terminal
  * relay app and the synthetic demo app. The game validates the same shape
@@ -7,8 +9,6 @@
 export const FINDING_STATUSES = ["demonstrated", "implied", "gap"];
 export const FLUENCY = ["fluent", "partial", "guessing", "declared-gap"];
 export const OUTCOMES = ["solved", "gap"];
-const object = (value) =>
-  value !== null && typeof value === "object" && !Array.isArray(value);
 const optionalString = (value) =>
   value === undefined || typeof value === "string";
 

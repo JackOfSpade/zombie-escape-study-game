@@ -4,6 +4,7 @@ import { boxBounds, worldPoint } from "./furniture-geometry";
 import { H, W, distance, type Floor, type Point } from "./model";
 import { inFurniture, solid, wall } from "./spatial";
 import { rayBodyDistance } from "./visibility";
+import { MinHeap } from "./heap";
 import { cityWall } from "./city-layout";
 export interface NavStep extends Point {
   action?: "door" | "vault";
@@ -15,9 +16,68 @@ interface Edge {
   action?: NavStep["action"];
   obstacle?: string;
 }
+/** Exact geometry snapshot, compared without building strings per query. */
+interface Snapshot {
+  tiles: Float64Array;
+  ids: string[];
+  kinds: string[];
+  poses: Float64Array;
+}
+const POSE = 6;
+const poseFlags = (o: Floor["furniture"][number]) =>
+  (o.destroyed ? 1 : 0) | (o.open ? 2 : 0) | (o.turning < 0 ? 4 : 0);
+function tilesMatch(tiles: Float64Array, f: Floor) {
+  for (let y = 0; y < H; y++)
+    for (let x = 0; x < W; x++)
+      if (tiles[y * W + x] !== (f.tiles[y]?.[x] ?? 1)) return false;
+  return true;
+}
+function furnitureMatches(s: Snapshot, f: Floor) {
+  if (s.ids.length !== f.furniture.length) return false;
+  for (let i = 0; i < f.furniture.length; i++) {
+    const o = f.furniture[i],
+      j = i * POSE;
+    if (
+      s.ids[i] !== o.id ||
+      s.kinds[i] !== o.kind ||
+      s.poses[j] !== o.x ||
+      s.poses[j + 1] !== o.y ||
+      s.poses[j + 2] !== o.w ||
+      s.poses[j + 3] !== o.h ||
+      s.poses[j + 4] !== (o.angle ?? 0) ||
+      s.poses[j + 5] !== poseFlags(o)
+    )
+      return false;
+  }
+  return true;
+}
+function snapshotTiles(f: Floor) {
+  const tiles = new Float64Array(W * H);
+  for (let y = 0; y < H; y++)
+    for (let x = 0; x < W; x++) tiles[y * W + x] = f.tiles[y]?.[x] ?? 1;
+  return tiles;
+}
+function snapshotFurniture(f: Floor, tiles: Float64Array): Snapshot {
+  const poses = new Float64Array(f.furniture.length * POSE);
+  f.furniture.forEach((o, i) => {
+    const j = i * POSE;
+    poses[j] = o.x;
+    poses[j + 1] = o.y;
+    poses[j + 2] = o.w;
+    poses[j + 3] = o.h;
+    poses[j + 4] = o.angle ?? 0;
+    poses[j + 5] = poseFlags(o);
+  });
+  return {
+    tiles,
+    ids: f.furniture.map((o) => o.id),
+    kinds: f.furniture.map((o) => o.kind),
+    poses,
+  };
+}
 interface Graph {
   city?: Floor["city"];
-  signature: string;
+  signature: Snapshot;
   points: Point[];
   edges: Edge[][];
 }
@@ -25,7 +85,7 @@ const cache = new WeakMap<Floor, Graph>();
 // Furniture moves invalidate routes, but not the fixed grid's wall clearance.
 const wallEdgeCache = new WeakMap<
   Floor,
-  { signature: string; city?: Floor["city"]; edges: Map<string, boolean> }
+  { tiles: Float64Array; city?: Floor["city"]; edges: Map<string, boolean> }
 >();
 /** Continuous swept actor footprint, including shallow corner intersections. */
 export function walkSegment(f: Floor, a: Point, b: Point, ignore?: string) {
@@ -90,21 +150,7 @@ function segment(
       o.y - bounds.h / 2 > maxY
     )
       continue;
-    if (
-      rayBodyDistance(
-        a,
-        dx,
-        dy,
-        {
-          ...o,
-          w: o.w,
-          h: o.h,
-        },
-        pad - 1e-8,
-      ) <
-      d - 1e-7
-    )
-      return false;
+    if (rayBodyDistance(a, dx, dy, o, pad - 1e-8) < d - 1e-7) return false;
   }
   return true;
 }
@@ -165,15 +211,25 @@ function wallClearance(
 }
 
 function graph(f: Floor): Graph {
-  const walls = f.tiles.map((r) => r.join("")).join("");
-  const signature = `${walls};${f.furniture.map((o) => `${o.id},${o.kind},${o.x},${o.y},${o.w},${o.h},${o.angle ?? 0},${o.destroyed},${o.open},${o.turning < 0}`).join(";")}`;
   const saved = cache.get(f);
-  if (saved?.signature === signature && saved.city === f.city) return saved;
+  if (
+    saved &&
+    saved.city === f.city &&
+    tilesMatch(saved.signature.tiles, f) &&
+    furnitureMatches(saved.signature, f)
+  )
+    return saved;
+  // Wall clearance only depends on tiles, so a furniture move keeps this map.
   let wallEdges = wallEdgeCache.get(f);
-  if (wallEdges?.signature !== walls || wallEdges.city !== f.city) {
-    wallEdges = { signature: walls, city: f.city, edges: new Map() };
+  let tiles: Float64Array;
+  if (wallEdges && wallEdges.city === f.city && tilesMatch(wallEdges.tiles, f))
+    tiles = wallEdges.tiles;
+  else {
+    tiles = snapshotTiles(f);
+    wallEdges = { tiles, city: f.city, edges: new Map() };
     wallEdgeCache.set(f, wallEdges);
   }
+  const signature = snapshotFurniture(f, tiles);
   const points: Point[] = [],
     edges: Edge[][] = [],
     grid = new Map<number, number>();
@@ -385,37 +441,10 @@ export function survivorPath(f: Floor, start: Point, end: Point): NavStep[] {
     via: (Edge | undefined)[] = [],
     closed = new Uint8Array(points.length);
   costs[from] = 0;
-  const heap: [number, number][] = [[from, 0]];
-  const push = (node: number, cost: number) => {
-    heap.push([node, cost]);
-    let i = heap.length - 1;
-    while (i > 0) {
-      const p = (i - 1) >> 1;
-      if (heap[p][1] <= cost) break;
-      [heap[i], heap[p]] = [heap[p], heap[i]];
-      i = p;
-    }
-  };
-  const pop = () => {
-    const first = heap[0],
-      last = heap.pop()!;
-    if (heap.length) {
-      heap[0] = last;
-      let i = 0;
-      while (true) {
-        let child = i * 2 + 1;
-        if (child >= heap.length) break;
-        if (child + 1 < heap.length && heap[child + 1][1] < heap[child][1])
-          child++;
-        if (heap[i][1] <= heap[child][1]) break;
-        [heap[i], heap[child]] = [heap[child], heap[i]];
-        i = child;
-      }
-    }
-    return first;
-  };
+  const heap = new MinHeap();
+  heap.push(from, 0);
   while (heap.length) {
-    const [node, cost] = pop();
+    const [node, cost] = heap.pop();
     if (closed[node]) continue;
     closed[node] = 1;
     if (node === to) break;
@@ -431,7 +460,7 @@ export function survivorPath(f: Floor, start: Point, end: Point): NavStep[] {
         costs[e.to] = cost + e.cost;
         previous[e.to] = node;
         via[e.to] = e;
-        push(e.to, costs[e.to]);
+        heap.push(e.to, costs[e.to]);
       }
   }
   if (previous[to] < 0) return [];

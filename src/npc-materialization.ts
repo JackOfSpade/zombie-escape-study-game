@@ -45,7 +45,6 @@ export interface Materialization {
   error?: string;
 }
 const running = new WeakMap<Encounter, Promise<void>>();
-const available = npcAtWorkstation;
 export function observedSharedWork(g: Game, e: Encounter) {
   const a = human(g),
     station = g.floors[a.floor].stations.find(
@@ -98,9 +97,7 @@ export function materializeNpcWork(
   if (active) return active;
   if (!allowed(g, e, options.background)) return;
   const jobs = (e.materializations ??= []);
-  let job = jobs.find((j) =>
-    ["pending", "failed", "interrupted"].includes(j.state),
-  );
+  let job: Materialization | undefined = existing;
   if (job && !retry) return;
   const fresh = !job;
   if (!job) {
@@ -118,7 +115,7 @@ export function materializeNpcWork(
               h.author === w.actor &&
               h.kind === "npc-thought",
           ) &&
-          available(g, e, w.actor),
+          npcAtWorkstation(g, e, w.actor),
       )
       .reverse()
       .filter((w) => {
@@ -218,7 +215,7 @@ export function materializeNpcWork(
           "Team notes skipped because the workspace changed. Recorded milestones remain saved.";
         return;
       }
-      if (!payload.work.every((w) => available(g, e, w.actor)))
+      if (!payload.work.every((w) => npcAtWorkstation(g, e, w.actor)))
         throw Error(
           "Recorded contributor must return to a terminal before this materialization can continue",
         );
@@ -243,7 +240,7 @@ export function materializeNpcWork(
         e.revision !== payload.sourceRevision ||
         e.workspace !== payload.workspace ||
         JSON.stringify(e.problem) !== JSON.stringify(payload.problem) ||
-        !payload.work.every((w) => available(g, e, w.actor))
+        !payload.work.every((w) => npcAtWorkstation(g, e, w.actor))
       ) {
         batch.state = "superseded";
         delete batch.payload;

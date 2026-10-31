@@ -607,12 +607,5 @@ export class AudioDirector {
       this.cancel("warning");
       this.phase = g.surge.state;
     }
-    this.caption = [
-      surgeCaption(g),
-      g.time < this.eventCaptionUntil ? this.eventCaption : "",
-      mix.caption,
-    ]
-      .filter(Boolean)
-      .join(" · ");
   }
 }
