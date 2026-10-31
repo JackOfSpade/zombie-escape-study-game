@@ -61,7 +61,10 @@ function fixture() {
   });
   return { dir, config, binary, pidFile };
 }
-async function until(predicate: () => boolean, timeout = 5000) {
+// Owned processes normally settle well under a second (the watchdog escalates
+// to SIGKILL after 2.4 s). The fake tunnel otherwise sleeps for 600 s, so this
+// deadline only absorbs scheduling delay on a loaded CI runner.
+async function until(predicate: () => boolean, timeout = 15000) {
   const end = Date.now() + timeout;
   while (!predicate()) {
     if (Date.now() > end)
@@ -166,7 +169,7 @@ test("an abrupt owning-app crash disconnects the watchdog and terminates only it
     });
     assert.ok(exists(pid!));
     parent.kill("SIGKILL");
-    await until(() => !exists(pid!), 6000);
+    await until(() => !exists(pid!));
   } finally {
     parent.kill("SIGKILL");
     if (pid && exists(pid)) process.kill(pid, "SIGKILL");
