@@ -21,6 +21,7 @@ import {
 } from "./interior-lighting";
 import { isRecord } from "./records";
 import { canSee, sightRadius } from "./visibility";
+import { observableSceneDetails } from "./scene-observations";
 import { NPC_DIALOGUE_GENERATION_INSTRUCTION } from "../scripts/lib/npc-dialogue-policy.mjs";
 
 export const NPC_CHATTER_RANGE = 10;
@@ -822,6 +823,14 @@ function dialogueFacts(
       ],
     );
   }
+  // Optional environmental reading follows immediate survival/task facts.
+  for (const detail of observableSceneDetails(g, a, 3))
+    add(
+      detail.id,
+      "object",
+      `You can currently read "${detail.title}": ${detail.text}`,
+      [request.location.floor, detail.title, detail.text],
+    );
   return facts;
 }
 

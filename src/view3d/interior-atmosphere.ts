@@ -35,6 +35,7 @@ import { InstancePool } from "./instances";
 import { InteriorLightmap } from "./interior-lightmap";
 import { outsideBuilding } from "./exterior-layout";
 import type { RunStory } from "../run-design-contract.mjs";
+import { AuthoredScene } from "./authored-scene";
 
 interface Detail {
   slot: number;
@@ -60,6 +61,7 @@ interface FloorAtmosphere {
   cards: InstancePool[];
   /** Authored cards belong to this floor; legacy cards stay shared. */
   authoredMaterials?: MeshStandardMaterial[];
+  authoredScene?: AuthoredScene;
   furnishings: Furnishing[];
 }
 
@@ -525,7 +527,7 @@ export class InteriorAtmosphere {
       );
     }
     const desks = floor.furniture
-        .filter(hasDeskStory)
+        .filter((object) => !object.appearance && hasDeskStory(object))
         .sort(
           (a, b) =>
             interiorHash(seed, floor.index, a.id) -
@@ -533,13 +535,17 @@ export class InteriorAtmosphere {
         )
         .slice(0, MAX_DESKS),
       boards = floor.furniture
-        .filter((o) => o.kind === "whiteboard" && !o.destroyed)
+        .filter((o) => !o.appearance && o.kind === "whiteboard" && !o.destroyed)
         .slice(0, MAX_FURNISHINGS - desks.length);
     for (const object of [...desks, ...boards])
       context.furnishings.push({
         object,
         details: this.makeDetails(context, object),
       });
+    if (floor.scene) {
+      context.authoredScene = new AuthoredScene(floor, this.lightmap);
+      group.add(context.authoredScene.group);
+    }
     this.group.add(group);
     this.floors.set(floor, context);
     this.lightmap.build(floor.index, plan);
@@ -684,6 +690,7 @@ export class InteriorAtmosphere {
   }
 
   private syncFurnishings(context: FloorAtmosphere) {
+    context.authoredScene?.sync();
     for (const { object, details } of context.furnishings) {
       const angle = object.angle ?? 0,
         c = Math.cos(angle),
@@ -887,6 +894,7 @@ export class InteriorAtmosphere {
   }
 
   private releaseFloor(context: FloorAtmosphere) {
+    context.authoredScene?.dispose();
     this.lightmap.clear(context.plan.floor.index);
     for (const pool of [context.solids, context.tubes, ...context.cards])
       pool.dispose(false);

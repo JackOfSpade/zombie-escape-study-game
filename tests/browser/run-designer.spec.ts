@@ -2,10 +2,10 @@ import { readFileSync } from "node:fs";
 import { expect, test, type Page } from "./helpers/offline-test";
 
 const harbor = JSON.parse(
-  readFileSync("tests/fixtures/run-designs/harbor-archive.json", "utf8"),
+  readFileSync("tests/fixtures/run-designs/botanical-office.json", "utf8"),
 );
 const orchard = JSON.parse(
-  readFileSync("tests/fixtures/run-designs/glass-orchard.json", "utf8"),
+  readFileSync("tests/fixtures/run-designs/observatory-records.json", "utf8"),
 );
 
 async function designer(page: Page) {
@@ -149,6 +149,7 @@ async function state(page: Page) {
       design: g.design,
       floorNames: g.floors.map((f: any) => f.name),
       tiles: g.floors.map((f: any) => f.tiles),
+      scenes: g.floors.map((f: any) => f.scene),
       names: g.survivors.slice(1).map((a: any) => a.name),
     };
   });
@@ -177,6 +178,9 @@ test("new-game AI design reaches the full app and a saved reload keeps the exact
   const before = await state(page);
   expect(relay.calls).toHaveLength(1);
   expect(relay.calls[0].provider).toBe("chatgpt-handoff");
+  expect(relay.calls[0].payload.designVersion).toBe(2);
+  expect(before.design.design.version).toBe(2);
+  expect(before.scenes[0].props.length).toBeGreaterThan(0);
   expect(relay.calls[0].nativeScope.encounterId).toBe("run-design");
   expect(before.design.design.title).toBe(harbor.title);
   expect(before.floorNames).toEqual([
@@ -285,6 +289,7 @@ test("restart sends recent fictional designs and repairs a repeated design befor
   expect(repair.payload.requestId).not.toBe(repeat.payload.requestId);
   expect(repair.chatCode).toBe(repeat.chatCode);
   expect(Object.keys(repeat.payload).sort()).toEqual([
+    "designVersion",
     "generationId",
     "recent",
     "requestId",
@@ -388,4 +393,61 @@ test("settled design failures retain receipts until Cancel, Escape or explicit p
   const after = await state(page);
   expect(after.id).not.toBe(before.id);
   expect(after.design).toBeUndefined();
+});
+
+test("looking at an authored object reveals its readable caption without replacing furniture controls", async ({
+  page,
+}) => {
+  await designer(page);
+  await open(page);
+  await page.locator("#start").click();
+  await expect.poll(async () => (await state(page)).status).toBe("playing");
+  await page.evaluate(() => {
+    const g = (window as any).__deadAir.game;
+    g.settings.view = "first-person";
+    g.survivors = [g.survivors[0]];
+    g.zombies = [];
+    g.nextSpawn = Number.MAX_SAFE_INTEGER;
+  });
+  await expect(page.locator("#view3d")).toBeVisible();
+  const target = await page.evaluate(async () => {
+    const { propWorldPose } = await import("/src/authored-scene.ts" as string),
+      { sceneLookDescription } = await import(
+        "/src/scene-observations.ts" as string
+      ),
+      { solid } = await import("/src/spatial.ts" as string),
+      app = (window as any).__deadAir,
+      g = app.game,
+      f = g.floors[0],
+      a = g.survivors[0];
+    for (const prop of f.scene.props) {
+      const pose = propWorldPose(f, prop);
+      for (let i = 0; i < 16; i++) {
+        const angle = (i * Math.PI) / 8,
+          point = {
+            x: pose.parent.x + Math.cos(angle) * 1.15,
+            y: pose.parent.y + Math.sin(angle) * 1.15,
+          };
+        if (solid(f, point, 0.3)) continue;
+        Object.assign(a, point, { floor: 0 });
+        const yaw = Math.atan2(pose.y - a.y, pose.x - a.x),
+          pitch = Math.atan2(
+            pose.elevation + prop.h * 0.5 - 1.6,
+            Math.hypot(pose.x - a.x, pose.y - a.y),
+          );
+        if (!sceneLookDescription(g, yaw, pitch).includes(prop.text)) continue;
+        app.setLook(yaw, pitch);
+        return { parent: pose.parent.id, title: prop.label, text: prop.text };
+      }
+    }
+    throw Error("No reachable authored object to read");
+  });
+  await expect(page.locator("#scene-description")).toContainText(target.title);
+  await expect(page.locator("#scene-description")).toContainText(target.text);
+  await expect(page.locator("#interaction-prompt")).toContainText("Grip");
+  await page.evaluate((id) => {
+    const g = (window as any).__deadAir.game;
+    g.floors[0].furniture.find((o: any) => o.id === id).destroyed = true;
+  }, target.parent);
+  await expect(page.locator("#scene-description")).toBeHidden();
 });

@@ -12,6 +12,7 @@ import {
 } from "./run-learning";
 import { readDurable, writeDurable } from "./storage";
 import { parseSavedRunDesign } from "./run-design-contract.mjs";
+import { sceneSaveErrors } from "./authored-scene";
 const KEY = "dead-air-save-v1";
 interface Envelope {
   schema: 1;
@@ -60,6 +61,13 @@ export function decode(text: string): Game {
     throw Error(
       "Authored floor descriptors are missing their saved run design",
     );
+  }
+  for (const floor of g.floors) {
+    const errors = sceneSaveErrors(floor);
+    if (errors.length)
+      throw Error(
+        `Invalid saved scene on floor ${floor.index}: ${errors.join("; ")}`,
+      );
   }
   // Discard retired door-hacking state without changing earned keys or field access.
   for (const a of g.survivors) {

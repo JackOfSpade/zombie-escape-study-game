@@ -125,6 +125,7 @@ export function newDesignDraft(
     chatCode,
     request: parseRunDesignRequest({
       version: 1,
+      designVersion: 2,
       requestId: `${generationId}-1`,
       generationId,
       seed,
