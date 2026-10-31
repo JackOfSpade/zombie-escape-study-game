@@ -4,6 +4,8 @@ import { expect, test } from "./helpers/offline-test";
 test("individual authored props, colors, room plaques and text render through movement, destruction and reload", async ({
   page,
 }) => {
+  // Hosted Chromium uses software WebGL for several full-scene captures.
+  test.setTimeout(90_000);
   await page.routeWebSocket("**/*", () => {});
   await page.goto("/lab.html");
   await page.setViewportSize({ width: 1440, height: 1000 });

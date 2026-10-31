@@ -398,6 +398,8 @@ test("settled design failures retain receipts until Cancel, Escape or explicit p
 test("looking at an authored object reveals its readable caption without replacing furniture controls", async ({
   page,
 }) => {
+  // The full first-person scene compiles on software WebGL in hosted CI.
+  test.setTimeout(90_000);
   await designer(page);
   await open(page);
   await page.locator("#start").click();
