@@ -143,6 +143,9 @@ import {
   reviewWorkspaceProposal,
 } from "./workspace-proposals";
 import { createPlayableGame as createGame } from "./world";
+import { chooseRunDesign, type RunChoice } from "./run-design-ui";
+import { clearDesignDraft, rememberDesign } from "./run-designer";
+import type { SavedRunDesign } from "./run-design-contract.mjs";
 import {
   enterStudyWorkspace,
   exitStudyWorkspace,
@@ -178,23 +181,31 @@ const audio = new AudioDirector();
 const npcVoices = new NpcVoiceDirector(audio);
 window.addEventListener("pagehide", () => npcVoices.dispose());
 try {
+  const saved = await load();
   game = recover(
-    (await load()) ??
-      newPlayableGame(crypto.getRandomValues(new Uint32Array(1))[0]),
+    saved ?? newPlayableGame(crypto.getRandomValues(new Uint32Array(1))[0]),
   );
+  if (!saved) game.preparingRun = true;
+  // A design dialog pauses its preview temporarily; that is not a player pause
+  // menu that should cover the Start button after reloading a pending request.
+  if (game.preparingRun && game.status === "ready") game.paused = false;
 } catch (err) {
   game = newPlayableGame(123456);
   saveRecoveryError = `Saved progress could not be loaded: ${String(err)}. Existing checkpoints have been protected. Retry loading, or export recovery data before restoring a backup.`;
   saveError = saveRecoveryError;
 }
 // Apply the role profile before the factory prepares development questions.
-function newPlayableGame(seed: number, study = initialStudy(roadmap)) {
+function newPlayableGame(
+  seed: number,
+  study = initialStudy(roadmap),
+  design?: SavedRunDesign,
+) {
   activateCareerFocus(
     roadmap,
     study,
     study.careerFocus ?? study.learner?.careerFocus ?? "product-feature-owner",
   );
-  return createGame(seed, roadmap, study);
+  return createGame(seed, roadmap, study, design);
 }
 activateCareerFocus(
   roadmap,
@@ -950,8 +961,52 @@ window.addEventListener("unhandledrejection", () => {
   runLogs.record(game, "unhandled-rejection");
   void runLogs.flush();
 });
+let designingInitial = false;
+async function beginDesignedRun() {
+  if (designingInitial || saveRecoveryError) return;
+  designingInitial = true;
+  const previous = game;
+  try {
+    // Keep the preview identity durable so a reload can retry its exact request.
+    if (!(await persist())) throw Error(saveError);
+    firstPersonControls.release();
+    keys.clear();
+    jumpRequested = false;
+    const choice = await chooseRunDesign(previous, roadmap, () =>
+      reconnectChatGpt(),
+    );
+    if (!choice || game !== previous) return;
+    game = newPlayableGame(
+      choice.seed,
+      structuredClone(previous.study),
+      choice.saved,
+    );
+    game.settings = previous.settings;
+    if (await persist()) finishRunDesign(previous.id, choice);
+    begin();
+  } catch (error) {
+    game.notice = `Run could not start: ${String(error)}`;
+    const p = document.querySelector("#start-card p");
+    if (p) p.textContent = game.notice;
+  } finally {
+    designingInitial = false;
+  }
+}
+function finishRunDesign(previousId: string, choice: RunChoice) {
+  try {
+    if (choice.saved) rememberDesign(choice.saved);
+    clearDesignDraft(previousId);
+  } catch {
+    // The run itself is already durable; blocked optional history is not data loss.
+    game.notice += " Recent-design history could not be saved.";
+  }
+}
 function begin() {
   if (saveRecoveryError) return;
+  if (game.preparingRun) {
+    void beginDesignedRun();
+    return;
+  }
   document.body.classList.remove("agent-tools");
   game.status = "playing";
   game.paused = false;
@@ -991,12 +1046,25 @@ let restarting = false,
 /** A restart first archives this run's learning and writes it durably; a new
  * run starts only once that save succeeded, or on a second press after a
  * failed save. */
+let designingNextRun = false;
 async function fresh(statusLine?: HTMLElement) {
   if (saveRecoveryError) {
     if (statusLine) statusLine.textContent = saveRecoveryError;
     return false;
   }
-  if (restarting) return false;
+  if (restarting || designingNextRun) return false;
+  designingNextRun = true;
+  const beforeDesign = game;
+  let choice: RunChoice | undefined;
+  try {
+    firstPersonControls.release();
+    keys.clear();
+    jumpRequested = false;
+    choice = await chooseRunDesign(game, roadmap, () => reconnectChatGpt());
+  } finally {
+    designingNextRun = false;
+  }
+  if (!choice || game !== beforeDesign) return false;
   restarting = true;
   const previous = game;
   const say = (text: string) => {
@@ -1040,16 +1108,16 @@ async function fresh(statusLine?: HTMLElement) {
   runLogs.record(previous, "restart");
   // Encounter drafts are archived; a new run never inherits a nearly completed lock.
   delete previous.study.pending;
-  game = newPlayableGame(
-    crypto.getRandomValues(new Uint32Array(1))[0],
-    previous.study,
-  );
+  game = newPlayableGame(choice.seed, previous.study, choice.saved);
   game.settings = previous.settings;
-  game.notice = !saved
+  const learningNotice = !saved
     ? "New run started. The last run's learning could not be saved."
     : assessed
       ? "Learning progress saved. New run started."
       : "Learning progress saved; assessments finish in the background.";
+  game.notice = game.design
+    ? `${game.notice} ${learningNotice}`
+    : learningNotice;
   say("");
   $<HTMLDialogElement>("#pause-menu").close();
   active = undefined;
@@ -1058,6 +1126,7 @@ async function fresh(statusLine?: HTMLElement) {
   keys.clear();
   jumpRequested = false;
   closeTerminal();
+  if (await persist()) finishRunDesign(previous.id, choice);
   begin();
   return true;
 }
@@ -1100,7 +1169,7 @@ function startCard() {
     ? (currentNativeQuestion() ?? unfinishedLastQuestion(game, lastQuestion))
     : undefined;
   if (game.status === "ready")
-    card.innerHTML = `<span class="eyebrow">A REAL-TIME STUDY ESCAPE</span><h2>The dead are<br>on your heels.</h2><p>Twenty survivors. Four floors. Four seats.<br>Choose your route. Learn your way out.</p><button id="start">Enter the building ↗</button><small class="agent-only">${escape(status().detail)}</small>`;
+    card.innerHTML = `<span class="eyebrow">${game.design?.source === "chatgpt-handoff" ? "AN AI-DESIGNED ESCAPE" : game.design ? "AN AUTHORED ESCAPE" : "A REAL-TIME STUDY ESCAPE"}</span><h2>${game.design ? escape(game.design.design.title) : "The dead are<br>on your heels."}</h2><p>${game.design ? escape(game.design.design.premise) : "Twenty survivors. Four floors. Four seats.<br>Choose your route. Learn your way out."}${game.preparingRun ? "<br>AI will design your new run before play." : ""}</p><button id="start">Enter the building ↗</button><small class="agent-only">${escape(status().detail)}</small>`;
   else
     card.innerHTML = `<span class="eyebrow">${game.status === "escaped" ? "TRANSMISSION RECEIVED" : "SIGNAL LOST"}</span><h2>${game.status === "escaped" ? "You made it." : "Your work survives."}</h2><p>${escape(game.notice)}<br>${game.stats.rescued} extracted · ${game.stats.deaths} lost · ${Math.floor(game.endedAt ?? game.time)} seconds</p>${finishable ? '<button id="finish-question">Continue in ChatGPT ↗</button>' : ""}<button id="again">Begin another run ↗</button><button id="backup" class="quiet agent-only">Export work & evidence</button><button id="spectate" class="quiet">Watch the building ↗</button>`;
   document.getElementById("start")?.addEventListener("click", begin);

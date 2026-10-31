@@ -6,6 +6,7 @@ import {
   checkBridge,
   nativeStudyScope,
   status,
+  studyChatCode,
 } from "../src/bridge-client";
 const reply = (mode = "study-mode") =>
   Response.json({
@@ -653,4 +654,111 @@ test("a consumed ambient result is discarded while an ordinary study receipt is 
       operation === "generate" ? ["POST", "GET"] : ["POST", "GET", "DELETE"],
     );
   }
+});
+
+test("explicit run-design cancellation discards only its exact receipt", async (t) => {
+  const previous = globalThis.fetch;
+  t.after(() => {
+    globalThis.fetch = previous;
+  });
+  const calls: { url: string; method: string }[] = [];
+  globalThis.fetch = async (url, init) => {
+    if (url === "/api/status") return reply("chatgpt-handoff");
+    calls.push({ url: String(url), method: init?.method ?? "GET" });
+    if (url === "/api/bridge")
+      return Response.json(
+        { handoff: { id: "design-job", hash: "design-hash" } },
+        { status: 202 },
+      );
+    assert.equal(init?.method, "DELETE");
+    return Response.json({ status: "discarded" });
+  };
+  await checkBridge();
+  const controller = new AbortController();
+  await assert.rejects(
+    bridgeRequest(
+      "design-run",
+      { requestId: "design-request" },
+      () => controller.abort(),
+      {
+        signal: controller.signal,
+        nativeScope: { runId: "generation-one", encounterId: "run-design" },
+      },
+    ),
+  );
+  assert.deepEqual(calls, [
+    { url: "/api/bridge", method: "POST" },
+    {
+      url: "/api/bridge/result?id=design-job&hash=design-hash&operation=design-run",
+      method: "DELETE",
+    },
+  ]);
+});
+
+test("a design generation routes through its captured chat without rotating the study chat", async (t) => {
+  const previous = globalThis.fetch;
+  t.after(() => {
+    globalThis.fetch = previous;
+  });
+  const studyCode = studyChatCode(),
+    sent: Record<string, unknown>[] = [];
+  globalThis.fetch = async (url, init) => {
+    if (url === "/api/status") return reply("chatgpt-handoff");
+    sent.push(JSON.parse(String(init?.body)));
+    return Response.json({ accepted: true });
+  };
+  await checkBridge();
+  await bridgeRequest("design-run", { requestId: "design-one" }, undefined, {
+    nativeScope: { runId: "generation-one", encounterId: "run-design" },
+    chatCode: "DESIGN01",
+  });
+  assert.equal(sent[0].chatCode, "DESIGN01");
+  assert.equal(studyChatCode(), studyCode);
+  await bridgeRequest("generate", { requestId: "study-one" }, undefined, {
+    nativeScope: { runId: "run-one", encounterId: "terminal-one" },
+  });
+  assert.equal(sent[1].chatCode, studyCode);
+  await assert.rejects(
+    bridgeRequest("design-run", { requestId: "invalid" }, undefined, {
+      nativeScope: { runId: "generation-one", encounterId: "run-design" },
+      chatCode: "invalid chat code",
+    }),
+    /Invalid captured handoff chat code/,
+  );
+  assert.equal(sent.length, 2);
+});
+
+test("run-design deadlines retain the exact queued request and completed designs are retained", async (t) => {
+  holdEventLoop(t);
+  const previous = globalThis.fetch;
+  t.after(() => {
+    globalThis.fetch = previous;
+  });
+  const methods: string[] = [];
+  globalThis.fetch = async (url, init) => {
+    if (url === "/api/status") return reply("chatgpt-handoff");
+    methods.push(init?.method ?? "GET");
+    if (url === "/api/bridge")
+      return Response.json(
+        { handoff: { id: "retained-design", hash: "retained-hash" } },
+        { status: 202 },
+      );
+    return Response.json({ requestId: "retained", design: { version: 1 } });
+  };
+  await checkBridge();
+  const controller = new AbortController();
+  await assert.rejects(
+    bridgeRequest("design-run", { requestId: "retained" }, undefined, {
+      signal: controller.signal,
+      timeoutMs: 20,
+    }),
+  );
+  assert.equal(controller.signal.aborted, false);
+  assert.deepEqual(methods, ["POST"]);
+  methods.length = 0;
+  assert.deepEqual(
+    await bridgeRequest("design-run", { requestId: "retained" }),
+    { requestId: "retained", design: { version: 1 } },
+  );
+  assert.deepEqual(methods, ["POST", "GET"]);
 });

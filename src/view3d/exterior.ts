@@ -82,10 +82,10 @@ function messageTexture(title: string, subtitle: string, warning = false) {
   c.fillStyle = "#e1cb92";
   c.font = "600 30px sans-serif";
   c.textAlign = "center";
-  c.fillText(title, 192, 38);
+  c.fillText(title, 192, 38, 360);
   c.font = "16px sans-serif";
   c.fillStyle = "#98a69a";
-  c.fillText(subtitle, 192, 62);
+  c.fillText(subtitle, 192, 62, 360);
   const texture = new CanvasTexture(canvas);
   texture.colorSpace = SRGBColorSpace;
   return texture;
@@ -188,6 +188,7 @@ export class ExteriorDressing {
   private fireLight = new PointLight("#f28b43", 0, 15, 2);
   private shopSigns?: Mesh<BufferGeometry, MeshBasicMaterial>;
   private lightPools?: Mesh<BufferGeometry, MeshBasicMaterial>;
+  private signKey = "";
 
   constructor() {
     this.group.name = "street-exterior";
@@ -222,6 +223,7 @@ export class ExteriorDressing {
       city = cityLayout(ground);
     this.enabled = this.group.visible = !!city;
     if (!city) return;
+    this.updateSigns(ground);
     if (this.asphalt.fog !== !!ground.city) {
       this.asphalt.fog = !!ground.city;
       this.asphalt.needsUpdate = true;
@@ -255,6 +257,32 @@ export class ExteriorDressing {
     this.merge(panes, this.glass, "dim-exterior-windows");
     this.merge(lit, this.warm, "lit-exterior-windows-practicals");
     this.merge(signals, this.emergency, "city-emergency-signals");
+  }
+
+  private updateSigns(floor: Floor) {
+    if (typeof document === "undefined") return;
+    const design = floor.exteriorDesign,
+      values = [
+        design?.buildingName ?? "MERCER CIVIC CENTRE",
+        design?.buildingSubtitle ?? "RECEPTION  •  STUDY HALL",
+        design?.quarantineTitle ?? "EVACUATION SUSPENDED",
+        design?.quarantineSubtitle ?? "QUARANTINE ZONE  •  06:40",
+      ],
+      key = JSON.stringify(values);
+    if (key === this.signKey) return;
+    this.signKey = key;
+    for (const [material, offset, warning] of [
+      [this.signMaterial, 0, false],
+      [this.quarantineMaterial, 2, true],
+    ] as const) {
+      material.map?.dispose();
+      material.map = messageTexture(
+        values[offset],
+        values[offset + 1],
+        warning,
+      );
+      material.needsUpdate = true;
+    }
   }
 
   private buildArrival(
@@ -1334,7 +1362,7 @@ export class ExteriorDressing {
       atlas.width = 768;
       atlas.height = 768;
       const c = atlas.getContext("2d")!,
-        labels = [
+        labels = floor.exteriorDesign?.streetLabels ?? [
           "LARK PHARMACY  •  CLOSED",
           "MERCER AVENUE",
           "NORTHSIDE CAFÉ",

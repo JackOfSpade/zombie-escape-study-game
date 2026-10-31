@@ -119,6 +119,18 @@ export function createStudyBridgeServer({
           ? "chatgpt-handoff"
           : "study-mode";
         if (
+          parsed.operation === "design-run" &&
+          actualProvider !== "chatgpt-handoff"
+        ) {
+          res.writeHead(409);
+          res.end(
+            JSON.stringify({
+              error: "Run designs require the ChatGPT handoff",
+            }),
+          );
+          return;
+        }
+        if (
           (provider !== undefined && provider !== actualProvider) ||
           (parsed.provider !== undefined && parsed.provider !== actualProvider)
         ) {

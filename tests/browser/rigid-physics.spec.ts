@@ -1,7 +1,8 @@
+import { startProceduralRun } from "./helpers/procedural-run";
 import { expect, test, type Page } from "@playwright/test";
 async function scene(page: Page) {
   await page.goto("/");
-  await page.locator("#start").click();
+  await startProceduralRun(page);
   await page.evaluate(() => {
     const g = (window as any).__deadAir.game,
       a = g.survivors[0],

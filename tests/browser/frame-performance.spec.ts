@@ -1,9 +1,10 @@
+import { startProceduralRun } from "./helpers/procedural-run";
 import { expect, test } from "@playwright/test";
 test("normal play records local frame costs and pausing persists the diagnostic window", async ({
   page,
 }) => {
   await page.goto("/");
-  await page.locator("#start").click();
+  await startProceduralRun(page);
   await expect
     .poll(() => page.evaluate(() => (window as any).__deadAir.game.time))
     .toBeGreaterThan(3);

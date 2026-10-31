@@ -11,6 +11,7 @@ import {
   releaseSettledRequests,
 } from "./run-learning";
 import { readDurable, writeDurable } from "./storage";
+import { parseSavedRunDesign } from "./run-design-contract.mjs";
 const KEY = "dead-air-save-v1";
 interface Envelope {
   schema: 1;
@@ -44,6 +45,20 @@ export function decode(text: string): Game {
     !g.surge
   )
     throw Error("Unsupported save");
+  if (g.design) {
+    g.design = parseSavedRunDesign(g.design);
+    // Geometry and moved furniture remain authoritative. Immutable presentation
+    // and collision descriptors must agree with the fingerprinted blueprint.
+    for (const floor of g.floors) {
+      floor.design = g.design.design.floors[floor.index];
+      floor.exteriorDesign =
+        floor.index === 0 ? g.design.design.exterior : undefined;
+    }
+  } else if (g.floors.some((f) => f.design || f.exteriorDesign)) {
+    throw Error(
+      "Authored floor descriptors are missing their saved run design",
+    );
+  }
   // Discard retired door-hacking state without changing earned keys or field access.
   for (const a of g.survivors) {
     const legacy = a as unknown as Record<string, unknown>;

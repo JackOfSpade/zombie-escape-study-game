@@ -1,5 +1,6 @@
 import type { Floor, Point } from "./model";
 import { STAIR_ROUTE_WIDTH } from "./stair-route";
+import type { RunDesign } from "./run-design-contract.mjs";
 
 export interface CityRectangle extends Point {
   w: number;
@@ -70,6 +71,7 @@ export function createCityPlan(
   floor: Floor,
   seed: number,
   runway: number,
+  design?: RunDesign["city"],
 ): CityPlan {
   const b = floor.boundary;
   if (!b) throw Error("A physical city needs a building footprint");
@@ -80,12 +82,13 @@ export function createCityPlan(
       y: (door?.y ?? b.bottom + 0.5) + (door?.h ?? 1) / 2 + 0.42,
     },
     length = Math.max(24, runway) + 24,
-    boulevard = b.bottom + 15 + Math.floor(random() * 5),
+    boulevard =
+      b.bottom + (design?.boulevardOffset ?? 15 + Math.floor(random() * 5)),
     tail = boulevard - entrance.y,
     west = entrance.x - (length - tail),
     east = entrance.x + (length - tail),
     south = entrance.y + length,
-    width = 7 + Math.floor(random() * 3),
+    width = design?.roadWidth ?? 7 + Math.floor(random() * 3),
     roads: CityRectangle[] = [],
     approaches: CityApproach[] = [],
     rows = b.rows.slice(b.top, b.bottom),
@@ -217,7 +220,7 @@ export function createCityPlan(
   }
   // Split only the nearby skyline into smaller addresses. Distant blocks stay
   // large silhouettes so longer grace periods do not grow geometry unboundedly.
-  const district = 18 + Math.floor(random() * 8);
+  const district = design?.districtSize ?? 18 + Math.floor(random() * 8);
   for (let x = entrance.x - 72; x <= entrance.x + 72; x += district) xs.add(x);
   for (let y = b.top - 1; y <= b.bottom + 1; y++) {
     ys.add(y);
@@ -273,7 +276,13 @@ export function createCityPlan(
       previous.y = top + previous.h / 2;
     } else merged.push({ ...r });
   }
-  const palette = ["#56616a", "#695f56", "#57685e", "#62666b", "#64565a"],
+  const palette = design?.palette ?? [
+      "#56616a",
+      "#695f56",
+      "#57685e",
+      "#62666b",
+      "#64565a",
+    ],
     obstacles: CityObstacle[] = [
       ...caps,
       ...merged.map((r, i) => ({
@@ -282,10 +291,13 @@ export function createCityPlan(
         height:
           r.w < 3 || r.h < 3
             ? 2.3 + random() * 1.2
-            : 9 + Math.floor(random() * 11) * 3.15,
+            : design
+              ? design.buildingHeightMin +
+                random() * (design.buildingHeightMax - design.buildingHeightMin)
+              : 9 + Math.floor(random() * 11) * 3.15,
         color:
           palette[(Math.floor(random() * palette.length) + i) % palette.length],
-        damaged: random() < 0.35,
+        damaged: random() < (design?.damageRate ?? 0.35),
       })),
     ];
   return { version: 1, seed, bounds, roads, obstacles, approaches };

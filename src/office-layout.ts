@@ -610,9 +610,44 @@ export function furnishOffice(
         ),
       ))
         tryPlace(bay);
-    for (const variants of plan(type, r, small))
+    let groups = plan(type, r, small);
+    if (f.design) {
+      const wanted = Math.ceil(groups.length * f.design.furnitureDensity);
+      if (wanted > groups.length)
+        groups.push(...plan(type, r, small).slice(0, wanted - groups.length));
+      groups = groups.slice(0, wanted);
+    }
+    for (const variants of groups)
       for (const group of variants) if (tryPlace(group)) break;
   }
+}
+
+/** Check the finished physical furnishing, not just the floor-plan raster. */
+export function furnishingErrors(f: Floor) {
+  const errors: string[] = [],
+    grid = blockedGrid(f),
+    reachableFromEntry = reachable(grid, f.entry),
+    sealed = grid.slice();
+  for (const o of f.furniture) {
+    if (!o.field && !canPlace(f, o, o))
+      errors.push(`furniture overlaps geometry: ${o.id}`);
+    if (o.field && !o.field.exit && o.field.limit !== undefined)
+      for (let y = 0; y < H; y++)
+        for (let x = 0; x < W; x++)
+          if (
+            inFurniture({ x: x + 0.5, y: y + 0.5 }, { ...o, field: undefined })
+          )
+            sealed[y * W + x] = 1;
+  }
+  const egress = reachable(sealed, f.stairs),
+    at = (p: Point) => Math.floor(p.y) * W + Math.floor(p.x);
+  for (const point of [...f.stations, f.stairs])
+    if (!reachableFromEntry[at(point)])
+      errors.push(`furniture blocks route to ${point.x},${point.y}`);
+  for (const station of f.stations)
+    if (!egress[at(station)])
+      errors.push(`furniture blocks egress from ${station.id}`);
+  return errors;
 }
 const ROOMS: OfficeRoomType[] = [
   "break",
@@ -737,13 +772,15 @@ function sectorOfficeZones(f: Floor): OfficeZone[] {
       y2: r.y2 + 1,
     }));
     const types: OfficeRoomType[] =
-      s.id === "room2"
-        ? ["cubicles"]
-        : s.id === "entry"
-          ? ["reception"]
-          : s.id === "lobby"
-            ? ["break", "reception"]
-            : ROOMS;
+      f.design && s.room !== undefined
+        ? [f.design.roomTypes[s.room]]
+        : s.id === "room2"
+          ? ["cubicles"]
+          : s.id === "entry"
+            ? ["reception"]
+            : s.id === "lobby"
+              ? ["break", "reception"]
+              : ROOMS;
     s.blocks.forEach((b, i) =>
       zones.push({
         id: `${s.id}${i ? String.fromCharCode(97 + i) : ""}`,

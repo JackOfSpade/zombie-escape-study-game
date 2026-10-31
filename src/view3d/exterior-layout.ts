@@ -170,6 +170,7 @@ export function cityBackdrop(floor: Floor): CityBlock[] {
   const city = floor.city;
   if (!city) return [];
   const b = city.bounds,
+    skyline = floor.exteriorDesign?.skyline,
     blocks: CityBlock[] = [];
   let state = (city.seed ^ 0x736b796c) >>> 0;
   const random = () => {
@@ -199,9 +200,13 @@ export function cityBackdrop(floor: Floor): CityBlock[] {
           : along,
         w: horizontal ? frontage : depth,
         d: horizontal ? depth : frontage,
-        stories: 9 + Math.floor(random() * 20),
+        stories: skyline
+          ? (skyline.minHeight +
+              random() * (skyline.maxHeight - skyline.minHeight)) /
+            3.15
+          : 9 + Math.floor(random() * 20),
         color: ["#354653", "#3f4d55", "#39444c"][i % 3],
-        damaged: random() < 0.3,
+        damaged: random() < (skyline?.damageRate ?? 0.3),
         distant: true,
       });
     }

@@ -1246,6 +1246,32 @@ body.reduced * {
   display: block;
   margin: 16px 0 6px;
 }
+.run-design-dialog {
+  width: min(660px, calc(100vw - 36px));
+  max-height: calc(100dvh - 40px);
+  overflow: auto;
+}
+.run-design-dialog h2 {
+  font-size: clamp(1.5rem, 4vw, 2.2rem);
+}
+.run-design-dialog textarea {
+  width: 100%;
+  box-sizing: border-box;
+  margin: 12px 0;
+}
+.run-design-dialog small {
+  display: block;
+  margin-top: 14px;
+}
+.run-design-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin: 16px 0;
+}
+#run-design-status {
+  min-height: 3em;
+}
 #career-focus {
   max-width: 100%;
   padding: 8px;

@@ -1,5 +1,7 @@
 # Office floor plans (generation version 5)
 
+Fresh AI-authored runs now select the shell parameters, plan family, room order, furnishing functions/density and field quotas through a saved validated blueprint. The engine still realizes version 5 geometry and enforces the invariants below. Seed-only runs retain the original algorithm described here. See [AI-authored runs](AI_RUN_DESIGNS.md).
+
 Fresh force-field floors (generation 4) carve four full-width transverse
 bands between the rear entry and the front stairs. Every study room is a
 strip about 4 to 6 cells deep and 36 to 40 cells wide, so every room reads
@@ -20,7 +22,8 @@ seeded stream are unchanged. One cell is one wall thickness.
    covered by exactly one force field. The public gate `f{i}-room2-door` is
    the entry-to-room2 gate (`publicEntry`, no limit). Each study sector's
    forward gate `f{i}-room{n}-forward` has `exit: true`,
-   `limit: 3 + ((seed + floor + n) % 3)` and a `direction` such that the free
+   an authored quota from 2 to 6 (or the seed-only formula
+   `limit: 3 + ((seed + floor + n) % 3)`) and a `direction` such that the free
    first-touch pass is claimed when arriving from the previous sector.
    Non-consecutive sectors share no opening. A red field can never be walked
    around: every study sector is a cut of the entry-to-stairs graph.
@@ -36,7 +39,8 @@ seeded stream are unchanged. One cell is one wall thickness.
    has credentialed egress to the stairs with all entrance quotas exhausted.
    At least `survivors.length` terminals are reachable from the entry through
    the public gate alone.
-5. Generation reads only `layoutRandom(seed, 0x726f6f6d, floor)`; the world
+5. Generation reads only `layoutRandom(seed, 0x726f6f6d, floor)` (using the
+   saved floor `layoutSeed` for authored runs); the world
    stream (`g.rng`) never moves; the same seed always builds the same floor;
    saves restore floors exactly (geometry is persisted, never regenerated).
 6. Historical geometry is untouched: `pursuitLayout` without `f.boundary`
@@ -45,7 +49,7 @@ seeded stream are unchanged. One cell is one wall thickness.
 
 ## Vocabulary and data model
 
-- **Sector**: one chain node. Its *territory* is the set of interior cells
+- **Sector**: one chain node. Its _territory_ is the set of interior cells
   inside its outer walls: corridors, open halls, sub-room interiors and the
   sub-room partition walls. Sector outer walls (and the shell) belong to no
   sector. Gate cells are carved outer-wall cells; they belong to no sector.
@@ -60,22 +64,27 @@ seeded stream are unchanged. One cell is one wall thickness.
 
 ```ts
 /** Inclusive interior cell ranges. */
-interface Rect { x1: number; y1: number; x2: number; y2: number }
+interface Rect {
+  x1: number;
+  y1: number;
+  x2: number;
+  y2: number;
+}
 interface SubRoom {
   /** Zone id for furnishing and furniture ids, e.g. "room3r1". */
   id: string;
   kind: "office" | "meeting" | "storage" | "break";
-  rect: Rect;      // interior cells
-  doorway: Rect;   // the two open cells in this room's wall ring
+  rect: Rect; // interior cells
+  doorway: Rect; // the two open cells in this room's wall ring
 }
 interface Sector {
   id: "entry" | "lobby" | "room0" | "room1" | "room2" | "room3";
-  room?: 0 | 1 | 2 | 3;   // study sectors only
-  order: number;           // 0 = entry ... 5 = lobby
-  blocks: Rect[];          // union = territory; one to three rects
-  corridors: Rect[];       // deliberate corridor cells (subset of circulation)
+  room?: 0 | 1 | 2 | 3; // study sectors only
+  order: number; // 0 = entry ... 5 = lobby
+  blocks: Rect[]; // union = territory; one to three rects
+  corridors: Rect[]; // deliberate corridor cells (subset of circulation)
   rooms: SubRoom[];
-  gate?: Point;            // centre of the opening to the next sector
+  gate?: Point; // centre of the opening to the next sector
 }
 // Floor.generation for fresh floors:
 // { version: 5, upperDivider, lowerDivider, sectors: Sector[] }
@@ -140,12 +149,12 @@ its exit gate, to every doorway and to every terminal.
 
 Room sizes (cells):
 
-| kind    | interior          | furnishing types      |
-| ------- | ----------------- | --------------------- |
-| office  | 3x3 to 4x5        | manager               |
-| meeting | 4x5 to 6x8        | meeting               |
-| storage | 3x3 to 3x4        | storage               |
-| break   | 5x5 to 7x8        | break                 |
+| kind    | interior   | furnishing types |
+| ------- | ---------- | ---------------- |
+| office  | 3x3 to 4x5 | manager          |
+| meeting | 4x5 to 6x8 | meeting          |
+| storage | 3x3 to 3x4 | storage          |
+| break   | 5x5 to 7x8 | break            |
 
 `room2` stays an open-plan hall: at most two small sub-rooms, and at least
 24 terminal slots on a grid with 2.5 to 3 cell spacing must remain. Thin

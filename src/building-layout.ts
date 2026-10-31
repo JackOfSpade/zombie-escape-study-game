@@ -8,6 +8,7 @@ import {
   type Game,
 } from "./model";
 import { carveStairwells } from "./stairwell";
+import type { RunDesign } from "./run-design-contract.mjs";
 
 /** Domain-separated streams: adding a floor/layout roll cannot change the
  * building shell, another floor, loot, population or simulation randomness. */
@@ -18,18 +19,22 @@ export function layoutRandom(seed: number, domain: number, floor = 0) {
   return { rng: (value ^ (value >>> 15)) >>> 0 };
 }
 
-export function createBuildingFootprint(seed: number): BuildingFootprint {
+export function createBuildingFootprint(
+  seed: number,
+  design?: RunDesign["footprint"],
+): BuildingFootprint {
   const random = layoutRandom(seed, 0x7368656c);
   const shapes = ["rectangle", "chamfered", "stepped", "waisted"] as const;
-  const shape = shapes[Math.floor(rand(random) * shapes.length)];
-  const width = 36 + 2 * Math.floor(rand(random) * 3);
-  const top = 2 + Math.floor(rand(random) * 3),
+  const shape =
+    design?.shape ?? shapes[Math.floor(rand(random) * shapes.length)];
+  const width = design?.width ?? 36 + 2 * Math.floor(rand(random) * 3);
+  const top = design?.top ?? 2 + Math.floor(rand(random) * 3),
     bottom = 28;
   const left = 22 - width / 2,
     right = 22 + width / 2;
-  const inset = 2 + Math.floor(rand(random) * 3);
-  const mirrored = rand(random) < 0.5;
-  const shoulder = top + 8 + Math.floor(rand(random) * 7);
+  const inset = design?.inset ?? 2 + Math.floor(rand(random) * 3);
+  const mirrored = design?.mirrored ?? rand(random) < 0.5;
+  const shoulder = design?.shoulder ?? top + 8 + Math.floor(rand(random) * 7);
   const rows = Array.from({ length: H }, (_, y) => {
     if (y < top || y >= bottom) return { left: 22, right: 22 };
     let l = left,

@@ -21,6 +21,10 @@ import { applyStudyPacing } from "./study-pacing";
 import { spawnGrace } from "./study-pacing";
 import { createCityPlan } from "./city-layout";
 import { cityZombieSpeed, initCityInvasion } from "./city-invasion";
+import {
+  parseSavedRunDesign,
+  type SavedRunDesign,
+} from "./run-design-contract.mjs";
 
 /** Only a fresh run opts into a new neighbourhood; saves retain their exact city. */
 export function populateCity(g: Game, invasion = true) {
@@ -30,6 +34,7 @@ export function populateCity(g: Game, invasion = true) {
     floor,
     g.seed,
     spawnGrace(g) * cityZombieSpeed(g),
+    g.design?.design.city,
   );
   if (invasion) initCityInvasion(g);
   return g;
@@ -105,8 +110,9 @@ export function createPlayableGame(
   seed: number,
   r: Roadmap,
   study?: StudyState,
+  design?: SavedRunDesign,
 ): Game {
-  const g = createGame(seed, r, study, { layout: "forward" });
+  const g = createGame(seed, r, study, { layout: "forward", design });
   redesign(g, r, { randomized: true });
   // Fresh live runs use the study-friendly world tempo; legacy factories keep
   // historical timing for reproducible fixtures.
@@ -122,8 +128,7 @@ export function createPlayableGame(
   // The opening view presents the approaching street horde immediately.
   // Refuge is just behind the player, where the other survivors are entering.
   g.survivors[0].heading = { x: 0, y: 1 };
-  g.notice =
-    "Zombies are already approaching. The entrance is behind you; they will reach it in about three minutes.";
+  g.notice = `${g.design ? `${g.design.design.opening} ` : ""}Zombies are already approaching. The entrance is behind you; they will reach it in about three minutes.`;
   return g;
 }
 /** Legacy layout remains the default for existing scenario/benchmark compatibility. */
@@ -131,9 +136,13 @@ export function createGame(
   seed: number,
   r: Roadmap,
   study?: StudyState,
-  options: { layout?: "legacy" | "forward" } = {},
+  options: { layout?: "legacy" | "forward"; design?: SavedRunDesign } = {},
 ): Game {
+  const design = options.design
+    ? parseSavedRunDesign(options.design)
+    : undefined;
   const g: Game = {
+    ...(design ? { design } : {}),
     schema: 1,
     id: `run-${crypto.randomUUID()}`,
     seed,
@@ -173,6 +182,12 @@ export function createGame(
     notice:
       "10 seconds before zombies spawn. E releases the entrance latch; push to enter.",
   };
+  if (design)
+    for (let i = 0; i < design.design.roster.length; i++) {
+      const a = g.survivors[i + 1];
+      Object.assign(a, design.design.roster[i]);
+      a.technical = makeNpcProfile(a.id, a.skill, a.role);
+    }
   g.surge.quietDelay =
     CONFIG.quietMin + rand(g) * (CONFIG.quietMax - CONFIG.quietMin);
   for (let fi = 0; fi <= CONFIG.floors; fi++)
@@ -208,12 +223,22 @@ function generateFloor(g: Game, index: number): Floor {
   const tiles = Array.from({ length: H }, () => Array(W).fill(1));
   for (let y = 2; y < 28; y++) for (let x = 2; x < 42; x++) tiles[y][x] = 0;
   const floor: Floor = {
+    ...(g.design && index < CONFIG.floors
+      ? { design: structuredClone(g.design.design.floors[index]) }
+      : {}),
+    ...(g.design && index === 0
+      ? { exteriorDesign: structuredClone(g.design.design.exterior) }
+      : {}),
     index,
     tiles,
     stations: [],
     furniture: [],
     dark: index === 0 ? 0.1 : index % 3 === 2 ? 0.95 : 0.5,
-    name: floorNames[index],
+    name: g.design
+      ? index === CONFIG.floors
+        ? g.design.design.roofName
+        : g.design.design.floors[index].name
+      : floorNames[index],
     layout: (["archive", "switchback", "gallery"] as const)[
       (g.seed + index) % 3
     ],

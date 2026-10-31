@@ -10,7 +10,12 @@ import {
 import { carveStairwells } from "./stairwell";
 import { layoutRandom } from "./building-layout";
 import { inRect, sizeFits, type Sector } from "./floor-plan";
-import { fieldDoor, planOfficeFloor, wideFlood } from "./office-plan";
+import {
+  fieldDoor,
+  forwardFieldQuota,
+  planOfficeFloor,
+  wideFlood,
+} from "./office-plan";
 
 /** The first free hall has an independent one-use terminal for everyone, plus spares. */
 function topUpHall(g: Game, f: Floor) {
@@ -40,8 +45,11 @@ export function pursuitLayout(g: Game, f: Floor) {
   if (f.index === 4 || !f.stations.length) return;
   if (f.boundary) {
     topUpHall(g, f);
-    planOfficeFloor(g, f, layoutRandom(g.seed, 0x726f6f6d, f.index), (fl) =>
-      pursuitLayoutErrors(g, fl),
+    planOfficeFloor(
+      g,
+      f,
+      layoutRandom(f.design?.layoutSeed ?? g.seed, 0x726f6f6d, f.index),
+      (fl) => pursuitLayoutErrors(g, fl),
     );
     return;
   }
@@ -364,7 +372,7 @@ function officePlanErrors(g: Game, f: Floor): string[] {
     if (
       k > 0 &&
       (!o.field!.exit ||
-        o.field!.limit !== 3 + ((g.seed + f.index + room) % 3) ||
+        o.field!.limit !== forwardFieldQuota(g, f, room) ||
         o.field!.direction !== -prevSide)
     )
       errors.push(`forward field ${o.id} has wrong rules`);

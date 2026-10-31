@@ -1,3 +1,4 @@
+import { startProceduralRun } from "./helpers/procedural-run";
 import { expect, test, type Page } from "@playwright/test";
 
 async function walkIntoWell(page: Page) {
@@ -34,7 +35,7 @@ test("walking into the personal staircase starts a saved flight; leaving the wel
   page,
 }) => {
   await page.goto("/");
-  await page.getByRole("button", { name: "Enter the building" }).click();
+  await startProceduralRun(page);
   const baseline = await page.evaluate(async () => {
     const d = (window as any).__deadAir,
       g = d.game,

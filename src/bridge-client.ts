@@ -156,6 +156,8 @@ export interface BridgeRequestOptions {
   /** Handoff wait budget; bounded to DIRECT_STUDY_TIMEOUT_MS. */
   timeoutMs?: number;
   nativeScope?: NativeStudyScope;
+  /** A run-design generation keeps its own chat without rotating study chats. */
+  chatCode?: string;
   /** Stop renewing a released job after its owning session closes. */
   isActive?: () => boolean;
 }
@@ -183,6 +185,12 @@ export async function bridgeRequest<T extends object = Record<string, unknown>>(
 ) {
   if (options?.isActive?.() === false)
     throw Error("Study session closed; saved work retained");
+  if (
+    options?.chatCode !== undefined &&
+    (typeof options.chatCode !== "string" ||
+      !/^[A-Z0-9]{6,16}$/.test(options.chatCode))
+  )
+    throw Error("Invalid captured handoff chat code");
   const provider = status().mode,
     handoff = provider === "chatgpt-handoff";
   const requested = options?.timeoutMs;
@@ -203,7 +211,10 @@ export async function bridgeRequest<T extends object = Record<string, unknown>>(
     payload,
     provider,
     ...(handoff && options?.nativeScope
-      ? { nativeScope: options.nativeScope, chatCode: studyChatCode() }
+      ? {
+          nativeScope: options.nativeScope,
+          chatCode: options.chatCode ?? studyChatCode(),
+        }
       : {}),
   });
   // Handoff enqueue is idempotent for the exact requestId and payload. Other
@@ -213,7 +224,8 @@ export async function bridgeRequest<T extends object = Record<string, unknown>>(
     isRecord(payload) &&
     typeof payload.requestId === "string" &&
     !!payload.requestId.trim();
-  let chatterReceipt: { id: string; hash: string } | undefined;
+  let chatterReceipt: { id: string; hash: string } | undefined,
+    designReceipt: { id: string; hash: string } | undefined;
   try {
     let r: Response, submissionOutageAt: number | undefined;
     for (;;) {
@@ -258,6 +270,7 @@ export async function bridgeRequest<T extends object = Record<string, unknown>>(
       const receipt = { id: data.handoff.id, hash: data.handoff.hash };
       if (operation === "npc-chatter" || operation === "npc-chatter-review")
         chatterReceipt = receipt;
+      if (operation === "design-run") designReceipt = receipt;
       onProgress?.("queued");
       let nextProgressCheck = 0,
         unreachableSince = 0;
@@ -321,6 +334,14 @@ export async function bridgeRequest<T extends object = Record<string, unknown>>(
       );
     return data as T;
   } finally {
+    if (designReceipt && options?.signal?.aborted) {
+      // A user cancellation abandons this exact design. Transport deadlines and
+      // relay outages retain it for retry, as do successfully delivered designs.
+      await fetch(
+        `/api/bridge/result?id=${encodeURIComponent(designReceipt.id)}&hash=${encodeURIComponent(designReceipt.hash)}&operation=design-run`,
+        { method: "DELETE", signal: AbortSignal.timeout(1500) },
+      ).catch(() => {});
+    }
     if (chatterReceipt) {
       // Consumed/cancelled ambient lines have no durable role. This endpoint
       // cannot discard a study request, even if its receipt is supplied.

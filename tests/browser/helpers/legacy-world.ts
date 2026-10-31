@@ -1,3 +1,4 @@
+import { startProceduralRun } from "./procedural-run";
 import type { Page } from "@playwright/test";
 
 /**
@@ -15,7 +16,7 @@ export async function enterLegacyBuilding(page: Page) {
   await page.evaluate(() => {
     (window as any).__deadAir.game.settings.view = "top-down";
   });
-  await page.getByRole("button", { name: "Enter the building" }).click();
+  await startProceduralRun(page);
   await useLegacyWorld(page);
 }
 

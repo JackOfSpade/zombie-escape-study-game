@@ -1,3 +1,4 @@
+import { startProceduralRun } from "./helpers/procedural-run";
 import { openGameMenu } from "./helpers/game-menu";
 // Synthetic native protocol and source rows, not real learner certification.
 import { expect, test } from "@playwright/test";
@@ -94,7 +95,7 @@ test("closed assessment correction requires a source decision, reviews exact aut
     });
   });
   await page.goto("/");
-  await page.getByRole("button", { name: "Enter the building" }).click();
+  await startProceduralRun(page);
   const local = await page.evaluate(
     async ({ initial, excerpt, scope }) => {
       const root = "/src/",

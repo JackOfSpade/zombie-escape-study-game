@@ -11,6 +11,7 @@ import {
   type Zombie,
 } from "../model";
 import { actor, createGame } from "../world";
+import { runDesignFingerprint } from "../run-design-contract.mjs";
 import type { Scenario, Spawn } from "./schema";
 export function entity(g: Game, id: string) {
   return (
@@ -138,6 +139,18 @@ export function spawn(g: Game, s: Spawn, replace = false) {
 export function createTestWorld(s: Scenario, roadmap: Roadmap) {
   const g = createGame(s.seed, roadmap, undefined, {
     layout: s.layout === "randomized" ? "forward" : (s.layout ?? "legacy"),
+    ...(s.design
+      ? {
+          design: {
+            version: 1,
+            source: "fixture",
+            requestId: `gametest-${s.id}-design`,
+            generationId: `gametest-${s.id}-generation`,
+            fingerprint: runDesignFingerprint(s.design),
+            design: s.design,
+          },
+        }
+      : {}),
   });
   g.id = `gametest-${s.id}`;
   g.status = "playing";
@@ -184,6 +197,9 @@ export function createTestWorld(s: Scenario, roadmap: Roadmap) {
 }
 /** Capture layout only, never study state, drafts, chats or runtime credentials. */
 export function captureLayout(g: Game, s: Scenario): Scenario {
+  // An arena capture stores actual geometry and must not re-run an authored
+  // building plan. City captures retain their matching synthetic design.
+  const { design, ...captured } = structuredClone(s);
   const entities: Spawn[] = [
     ...g.survivors
       .filter((a) => a.alive && !a.escaped)
@@ -250,7 +266,8 @@ export function captureLayout(g: Game, s: Scenario): Scenario {
   if (!entities.some((e) => e.id === "human"))
     entities.unshift({ id: "human", kind: "player", x: 3.5, y: 3.5 });
   return {
-    ...structuredClone(s),
+    ...captured,
+    ...(g.floors[0].city && design ? { design } : {}),
     template: g.floors[0].city ? "building" : "arena",
     layout: g.floors[0].city
       ? "randomized"
