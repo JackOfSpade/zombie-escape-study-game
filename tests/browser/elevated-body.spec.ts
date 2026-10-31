@@ -217,8 +217,7 @@ test("free stair motion meets visible guards, falls through a damaged bay and ke
     p.draw(-Math.PI / 2, 0);
     return result;
   });
-  expect(landed.hp).toBeGreaterThan(80);
-  expect(landed.hp).toBeLessThan(90);
+  expect(landed.hp).toBeCloseTo(83, 6);
   expect(landed.alive).toBe(true);
   expect(landed.floor).toBe(0);
   expect(landed.elevated).toBe(false);

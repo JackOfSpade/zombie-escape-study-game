@@ -287,8 +287,30 @@ export function damageSurvivor(
   if (a.hp <= 0) death(g, a, cause);
 }
 
+// Gameplay anchors informed by adult fall-height research, not mortality odds.
+// Keep short-fall injury meaningful; see docs/FALL_DAMAGE.md for the calibration.
+const FALL_DAMAGE_CURVE = [
+  [2.5, 0],
+  [3.6, 17],
+  [7.2, 50],
+  [10.8, 75],
+  [14.4, 95],
+  [15, 100],
+] as const;
+
 export function fallDamage(drop: number) {
-  return drop > 2.5 ? ((drop - 2.5) * 100) / 6.5 : 0;
+  if (drop <= FALL_DAMAGE_CURVE[0][0]) return 0;
+  for (let i = 1; i < FALL_DAMAGE_CURVE.length; i++) {
+    const [height, damage] = FALL_DAMAGE_CURVE[i],
+      [previousHeight, previousDamage] = FALL_DAMAGE_CURVE[i - 1];
+    if (drop <= height)
+      return (
+        previousDamage +
+        ((drop - previousHeight) / (height - previousHeight)) *
+          (damage - previousDamage)
+      );
+  }
+  return 100;
 }
 
 export function tickSurge(g: Game) {

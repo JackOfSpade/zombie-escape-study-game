@@ -202,7 +202,7 @@ test("jumping onto the roof parapet and walking off produces a lethal-height fal
       Math.abs(result.surface.height - 15.4) < 1e-8
     )
       parapet = true;
-    if (result.landed && result.landed.drop >= 9) {
+    if (result.landed && result.landed.drop >= 15) {
       landed = result.landed;
       break;
     }
@@ -213,7 +213,7 @@ test("jumping onto the roof parapet and walking off produces a lethal-height fal
     "the 1.1 m jump clears the visible 1.0 m parapet",
   );
   assert.ok(
-    landed && landed.drop >= 9,
+    landed && landed.drop >= 15,
     "stepping beyond it falls to the actual ground below",
   );
   assert.equal(landed.surface.kind, "ground");
