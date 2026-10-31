@@ -19,6 +19,8 @@ import {
 } from "three";
 import {
   buildInteriorLighting,
+  fixtureIntensity,
+  FIXTURE_RANGE,
   hasDeskStory,
   interiorHash,
   lightAt,
@@ -30,6 +32,7 @@ import { FLOOR_HEIGHT } from "../stair-route";
 import { playerCanSee } from "../visibility";
 import { furnitureHeight } from "./furniture-height";
 import { InstancePool } from "./instances";
+import { InteriorLightmap } from "./interior-lightmap";
 
 interface Detail {
   slot: number;
@@ -247,6 +250,10 @@ export class InteriorAtmosphere {
   readonly phone = new Group();
   readonly phoneState = new PhoneLightState();
   currentLight = 1;
+  /** Baked light from every powered fixture, shared with world materials. */
+  readonly lightmap = new InteriorLightmap();
+  private practicalWeights = new Map<string, number>();
+  private practicalFloor = -1;
   private floors = new Map<Floor, FloorAtmosphere>();
   private solidMaterial = new MeshStandardMaterial({
     color: "white",
@@ -347,6 +354,12 @@ export class InteriorAtmosphere {
       "position",
       new Float32BufferAttribute(new Float32Array(48 * 3), 3),
     );
+    for (const material of [
+      this.solidMaterial,
+      this.tubeMaterial,
+      ...this.cardMaterials,
+    ])
+      this.lightmap.patch(material);
     this.dust = new Points(this.dustGeometry, this.dustMaterial);
     this.dust.name = "lit-office-dust";
     this.dust.frustumCulled = false;
@@ -479,6 +492,8 @@ export class InteriorAtmosphere {
       });
     this.group.add(group);
     this.floors.set(floor, context);
+    this.lightmap.build(floor.index, plan);
+    if (floor.index === this.practicalFloor) this.practicalWeights.clear();
     this.syncFurnishings(context);
     for (const pool of [solids, tubes, ...cards]) pool.flush();
     group.userData = {
@@ -675,36 +690,7 @@ export class InteriorAtmosphere {
       player.stairTravel?.walked !== undefined
         ? 1
         : lightAt(active.plan, player);
-    const nearby = active.plan.fixtures
-      .filter(
-        (f) =>
-          f.level > 0.2 &&
-          Math.hypot(f.x - player.x, f.y - player.y) < 6.5 &&
-          playerCanSee(floor, player, f, 6.5),
-      )
-      .sort(
-        (a, b) =>
-          Math.hypot(a.x - player.x, a.y - player.y) -
-          Math.hypot(b.x - player.x, b.y - player.y),
-      );
-    this.practicals.forEach((light, i) => {
-      const fixture = nearby[i];
-      if (
-        fixture &&
-        floor.index < CONFIG.floors &&
-        player.stairTravel?.walked === undefined
-      ) {
-        light.position.set(
-          fixture.x,
-          floor.index * FLOOR_HEIGHT + 2.59,
-          fixture.y,
-        );
-        light.color.set(fixture.color);
-        light.intensity =
-          (fixture.level > 0.5 ? 22 : 7) *
-          (game.surge.state === "active" ? 0.75 : 1);
-      } else light.intensity = 0;
-    });
+    const nearby = this.updatePracticals(game, floor, active, dt);
     if (this.phone.parent !== camera) camera.add(this.phone);
     // Keep the light in the scene even at zero intensity: hiding the phone
     // must not change shader light counts and recompile every world material.
@@ -730,13 +716,89 @@ export class InteriorAtmosphere {
     this.group.userData = {
       currentLight: this.currentLight,
       phoneRaised: this.phoneState.raised,
-      practicalLights: nearby.slice(0, 3).length,
+      practicalLights: nearby,
     };
     this.updateDust(
       game,
       floor,
-      (this.currentLight < 0.5 && raised > 0.2) || nearby.length > 0,
+      (this.currentLight < 0.5 && raised > 0.2) || nearby > 0,
     );
+  }
+
+  /** The nearest visible lamps get real point lights for close shading. Each
+   * fades in over the last 1.5 m of practical range, and the baked lightmap
+   * gives up exactly the share the point light takes, so the total light a
+   * lamp casts never depends on where the player stands. */
+  private updatePracticals(
+    game: Game,
+    floor: Floor,
+    active: FloorAtmosphere,
+    dt: number,
+  ) {
+    const player = game.survivors[0],
+      enabled =
+        floor.index < CONFIG.floors && player.stairTravel?.walked === undefined,
+      range = FIXTURE_RANGE - 0.5,
+      fade = 1.5;
+    if (this.practicalFloor !== floor.index) {
+      this.lightmap.setPracticals(this.practicalFloor, new Map());
+      this.practicalWeights.clear();
+      this.practicalFloor = floor.index;
+    }
+    const targets = new Map<string, number>();
+    if (enabled)
+      active.plan.fixtures
+        .filter(
+          (f) =>
+            f.level > 0.2 &&
+            Math.hypot(f.x - player.x, f.y - player.y) < range &&
+            playerCanSee(floor, player, f, range),
+        )
+        .sort(
+          (a, b) =>
+            Math.hypot(a.x - player.x, a.y - player.y) -
+            Math.hypot(b.x - player.x, b.y - player.y),
+        )
+        .slice(0, this.practicals.length)
+        .forEach((f) => {
+          const d = Math.hypot(f.x - player.x, f.y - player.y),
+            t = Math.min(1, Math.max(0, (range - d) / fade));
+          targets.set(f.id, t * t * (3 - 2 * t));
+        });
+    const ease = 1 - Math.exp(-Math.max(0, dt) * 8),
+      next = new Map<string, number>();
+    for (const id of new Set([
+      ...this.practicalWeights.keys(),
+      ...targets.keys(),
+    ])) {
+      const current = this.practicalWeights.get(id) ?? 0,
+        target = targets.get(id) ?? 0,
+        weight = dt > 0 ? current + (target - current) * ease : target;
+      if (weight > 0.002) next.set(id, weight);
+    }
+    // Only as many fixtures as there are point lights can hand over light.
+    const chosen = [...next.entries()]
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, this.practicals.length);
+    this.practicalWeights = new Map(chosen);
+    this.lightmap.setPracticals(floor.index, this.practicalWeights);
+    const surge = game.surge.state === "active" ? 0.75 : 1;
+    this.practicals.forEach((light, i) => {
+      const entry = chosen[i],
+        fixture = entry && active.plan.fixtures.find((f) => f.id === entry[0]);
+      if (!fixture || !entry) {
+        light.intensity = 0;
+        return;
+      }
+      light.position.set(
+        fixture.x,
+        floor.index * FLOOR_HEIGHT + 2.59,
+        fixture.y,
+      );
+      light.color.set(fixture.color);
+      light.intensity = fixtureIntensity(fixture) * surge * entry[1];
+    });
+    return chosen.length;
   }
 
   private updateDust(game: Game, floor: Floor, lit: boolean) {
@@ -772,6 +834,7 @@ export class InteriorAtmosphere {
   }
 
   private releaseFloor(context: FloorAtmosphere) {
+    this.lightmap.clear(context.plan.floor.index);
     for (const pool of [context.solids, context.tubes, ...context.cards])
       pool.dispose(false);
     context.group.removeFromParent();
@@ -782,6 +845,9 @@ export class InteriorAtmosphere {
   reset() {
     this.floors.forEach((context) => this.releaseFloor(context));
     this.floors.clear();
+    this.lightmap.reset();
+    this.practicalWeights.clear();
+    this.practicalFloor = -1;
     this.phoneState.reset();
     this.phone.visible = false;
     this.phoneLight.intensity = 0;
@@ -834,6 +900,7 @@ export class InteriorAtmosphere {
     });
     this.phoneLight.dispose();
     this.phoneBounce.dispose();
+    this.lightmap.dispose();
     this.screenTexture?.dispose();
   }
 }
