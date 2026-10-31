@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { readFileSync } from "node:fs";
 import {
-  newDesignDraft as newAuthoredDesignDraft,
+  newAuthoredDesignDraft,
   type LegacyDesignDraft,
   parseDesignDraft,
   prepareDesignedRun,
@@ -146,6 +146,8 @@ test("repetitive candidate requests a bound repair before building", async () =>
     capture: () => {},
     send: async (request) => {
       ids.push(request.requestId);
+      if (request.version !== 1)
+        assert.fail("Expected retained legacy request");
       if (ids.length === 2) {
         assert.deepEqual(request.repair?.candidate, harbor);
         assert.ok(
@@ -179,6 +181,8 @@ test("geometry rejection repairs the candidate, with only three calls per attemp
       send: async (request) => {
         generations.push(request.generationId);
         ids.push(request.requestId);
+        if (request.version !== 1)
+          assert.fail("Expected retained legacy request");
         if (ids.length > 1)
           assert.match(request.repair!.errors[0], /no terminal route/);
         return { requestId: request.requestId, design: sceneDesignFixture() };

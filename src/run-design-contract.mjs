@@ -1,6 +1,12 @@
 // Shared by the browser and relay. Design replies are bounded JSON data only.
 import { parseSceneDesign, parseSceneStructure } from "./scene-catalog.mjs";
 import {
+  parseQualityRequest,
+  parseQualityReply,
+  qualityGuidance,
+} from "./run-quality-contract.mjs";
+export * from "./run-quality-contract.mjs";
+import {
   parseEnvironmentManifest,
   parseEnvironmentContent,
   parseEnvironmentRepairCandidate,
@@ -438,6 +444,7 @@ export function runDesignNoveltyErrors(design, recent) {
   return errors;
 }
 export function parseRunDesignRequest(v) {
+  if (v?.version === 3) return parseQualityRequest(v);
   if (v?.version === 2) return parsePhasedRequest(v);
   // Composable maximum: five summaries, one valid candidate and repair errors.
   // Native handoff chunks large packets; 40 KB is only its inline threshold.
@@ -490,6 +497,7 @@ export function parseRunDesignRequest(v) {
   return clone(v);
 }
 export function parseRunDesignReply(v, request) {
+  if (request.version === 3) return parseQualityReply(v, request);
   if (request.version === 2)
     return request.phase === "structure"
       ? parseRunStructureReply(v, request)
@@ -669,7 +677,7 @@ export function parseSavedRunDesign(v) {
   return { ...clone(v), design };
 }
 
-export const RUN_DESIGN_GUIDANCE = `The exact captured request selects both version and phase. For request.version:2/designVersion:3/phase:structure, return exactly {requestId,structure:{version:3,...}}. The flattened structure uses the structural fields described below, but OMIT every floors[].stories and exterior.streetLabels. Include relationships:1..24 {from:exact roster name,to:another exact roster name,kind:colleague|friend|relative|mentor|rival,detail:1..120}; one relationship per person pair. Every floor scene has version:2 with the scene layout below, but OMIT furniture.label and prop.label/text. Room title/description and exterior names remain thematic context for later writing. This first phase creates geometry and cast only; never include environment or content. Structure≤100000 UTF-8 bytes. The engine constructs an isolated candidate, then requests content for its exact physical surfaces. For phase:content, follow the following separate content contract instead of returning any structural fields:\n${ENVIRONMENT_GUIDANCE}\n
+export const RUN_DESIGN_GUIDANCE = `${qualityGuidance()}\n\nThe exact captured request selects both version and phase. For request.version:2/designVersion:3/phase:structure, return exactly {requestId,structure:{version:3,...}}. The flattened structure uses the structural fields described below, but OMIT every floors[].stories and exterior.streetLabels. Include relationships:1..24 {from:exact roster name,to:another exact roster name,kind:colleague|friend|relative|mentor|rival,detail:1..120}; one relationship per person pair. Every floor scene has version:2 with the scene layout below, but OMIT furniture.label and prop.label/text. Room title/description and exterior names remain thematic context for later writing. This first phase creates geometry and cast only; never include environment or content. Structure≤100000 UTF-8 bytes. The engine constructs an isolated candidate, then requests content for its exact physical surfaces. For phase:content, follow the following separate content contract instead of returning any structural fields:\n${ENVIRONMENT_GUIDANCE}\n
 The remainder describes the shared structural schema and retained legacy requests. For retained request.version:1, return exactly {requestId:the captured requestId,design:{...}} following its designVersion; never upgrade that request. Design a distinctive fictional zombie-escape office building as JSON, not a study question. Do not output code, HTML, URLs, learner claims or mechanical rule changes. The engine realizes your choices as collision-tested geometry. Give every floor its own coherent purpose and story; tie signs and notes to this cast and premise. Vary actual spatial choices, furnishing, cast, atmosphere and tempo, not only names or random seeds. Recent fictional summaries identify designs to avoid. If repair is supplied, correct all listed failures while retaining the intended theme. Do not conceal an invalid plan or claim validation was performed.
 
 For retained request.version:1 only: If payload.designVersion is 2, return design.version:2 and include the scene objects below. If designVersion is absent, return design.version:1 and OMIT scene on every floor. Never upgrade a retained request or downgrade a version 2 request. Version3 structure requests use the exceptions stated above.

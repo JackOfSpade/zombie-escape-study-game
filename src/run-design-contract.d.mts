@@ -1,3 +1,8 @@
+import type {
+  QualityRunDesignRequest,
+  QualityRunDesignReply,
+} from "./run-quality-contract.mjs";
+export * from "./run-quality-contract.mjs";
 export type RunRoomType =
   "break" | "cubicles" | "meeting" | "storage" | "reception" | "manager";
 export type RunPower = "lit" | "dim" | "outage";
@@ -157,7 +162,10 @@ export interface ContentRunDesignRequest {
   repair?: { candidate: EnvironmentContent; errors: string[] };
 }
 export type RunDesignRequest =
-  LegacyRunDesignRequest | StructureRunDesignRequest | ContentRunDesignRequest;
+  | LegacyRunDesignRequest
+  | StructureRunDesignRequest
+  | ContentRunDesignRequest
+  | QualityRunDesignRequest;
 export interface RunStructureReply {
   requestId: string;
   structure: RunStructureV3;
@@ -167,7 +175,10 @@ export interface RunContentReply {
   content: EnvironmentContent;
 }
 export type RunDesignReply =
-  LegacyRunDesignReply | RunStructureReply | RunContentReply;
+  | LegacyRunDesignReply
+  | RunStructureReply
+  | RunContentReply
+  | QualityRunDesignReply;
 export const RUN_DESIGN_GUIDANCE: string;
 export function parseRunDesign(value: LegacyRunDesign): LegacyRunDesign;
 export function parseRunDesign(value: RunDesignV3): RunDesignV3;
@@ -192,6 +203,10 @@ export function parseRunDesignRequest(value: {
   phase: "content";
   [key: string]: unknown;
 }): ContentRunDesignRequest;
+export function parseRunDesignRequest(value: {
+  version: 3;
+  [key: string]: unknown;
+}): QualityRunDesignRequest;
 export function parseRunDesignRequest(value: unknown): RunDesignRequest;
 export function parseRunDesignReply(
   value: unknown,
@@ -205,6 +220,10 @@ export function parseRunDesignReply(
   value: unknown,
   request: ContentRunDesignRequest,
 ): RunContentReply;
+export function parseRunDesignReply(
+  value: unknown,
+  request: QualityRunDesignRequest,
+): QualityRunDesignReply;
 export function parseRunDesignReply(
   value: unknown,
   request: RunDesignRequest,

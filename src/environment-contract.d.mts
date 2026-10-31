@@ -164,3 +164,11 @@ export function parseEnvironmentRepairCandidate(
   structure: { roster: { name: string }[] },
   surfaces: readonly SurfaceSlot[],
 ): EnvironmentContent;
+
+/** Strict incremental authoring only; accepted designs require complete content. */
+export function parseEnvironmentPartialContent(
+  value: unknown,
+  structure: { roster: { name: string }[] },
+  surfaces: readonly SurfaceSlot[],
+): EnvironmentContent;
+export function environmentTextIsNearCopy(left: string, right: string): boolean;
