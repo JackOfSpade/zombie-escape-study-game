@@ -23,18 +23,35 @@ import { createCityPlan } from "./city-layout";
 import { cityZombieSpeed, initCityInvasion } from "./city-invasion";
 import {
   parseSavedRunDesign,
+  parseRunStructure,
+  runStructureFingerprint,
+  environmentSurfaceFingerprint,
+  type RunDesign,
+  type RunStructureV3,
   type SavedRunDesign,
 } from "./run-design-contract.mjs";
+import {
+  buildEnvironmentSurfaces,
+  ENVIRONMENT_BUILDER_VERSION,
+} from "./environment-surfaces";
+import { bindDesignedEnvironment } from "./environment-save";
+import type { SurfaceSlot } from "./environment-contract.mjs";
+
+type WorldBlueprint = RunDesign | RunStructureV3;
 
 /** Only a fresh run opts into a new neighbourhood; saves retain their exact city. */
-export function populateCity(g: Game, invasion = true) {
+export function populateCity(
+  g: Game,
+  invasion = true,
+  blueprint?: WorldBlueprint,
+) {
   const floor = g.floors[0];
   if (!floor.boundary) return g;
   floor.city = createCityPlan(
     floor,
     g.seed,
     spawnGrace(g) * cityZombieSpeed(g),
-    g.design?.design.city,
+    blueprint?.city ?? g.design?.design.city,
   );
   if (invasion) initCityInvasion(g);
   return g;
@@ -112,8 +129,34 @@ export function createPlayableGame(
   study?: StudyState,
   design?: SavedRunDesign,
 ): Game {
-  const g = createGame(seed, r, study, { layout: "forward", design });
-  redesign(g, r, { randomized: true });
+  const saved = design ? parseSavedRunDesign(design) : undefined;
+  const g = buildPlayableGame(seed, r, study, saved?.design, saved);
+  if (saved?.design.version === 3) {
+    const actual = buildEnvironmentSurfaces(g);
+    if (
+      environmentSurfaceFingerprint(actual) !==
+      saved.design.environment.surfaceFingerprint
+    )
+      throw Error(
+        "Saved environment inventory does not match this generated building",
+      );
+    bindDesignedEnvironment(g);
+  }
+  return g;
+}
+
+function buildPlayableGame(
+  seed: number,
+  r: Roadmap,
+  study?: StudyState,
+  blueprint?: WorldBlueprint,
+  saved?: SavedRunDesign,
+): Game {
+  const g = buildGame(seed, r, study, { layout: "forward" }, blueprint, saved);
+  redesign(g, r, {
+    randomized: true,
+    ...(blueprint?.version === 3 ? { blueprint } : {}),
+  });
   // Fresh live runs use the study-friendly world tempo; legacy factories keep
   // historical timing for reproducible fixtures.
   let depth = 1;
@@ -123,13 +166,72 @@ export function createPlayableGame(
     // A temporarily unavailable curriculum question must not prevent the
     // physical world from starting. Generation keeps its own eligibility gate.
   }
-  applyStudyPacing(g, depth);
-  populateCity(g);
+  applyStudyPacing(g, depth, blueprint?.pacing);
+  populateCity(g, true, blueprint);
   // The opening view presents the approaching street horde immediately.
   // Refuge is just behind the player, where the other survivors are entering.
   g.survivors[0].heading = { x: 0, y: 1 };
-  g.notice = `${g.design ? `${g.design.design.opening} ` : ""}Zombies are already approaching. The entrance is behind you; they will reach it in about three minutes.`;
+  g.notice = `${blueprint ? `${blueprint.opening} ` : ""}Zombies are already approaching. The entrance is behind you; they will reach it in about three minutes.`;
   return g;
+}
+
+declare const provisionalBrand: unique symbol;
+/** Inspection data only: the incomplete Game is not exposed or serializable. */
+export interface ProvisionalRun {
+  readonly [provisionalBrand]: true;
+  readonly builderVersion: string;
+  readonly structureFingerprint: string;
+  readonly surfaceFingerprint: string;
+  readonly surfaces: SurfaceSlot[];
+}
+const provisionalRuns = new WeakMap<
+  ProvisionalRun,
+  { game: Game; structure: RunStructureV3; surfaces: SurfaceSlot[] }
+>();
+
+export function previewDesignedRun(
+  seed: number,
+  roadmap: Roadmap,
+  study: StudyState | undefined,
+  proposed: RunStructureV3,
+): ProvisionalRun {
+  const structure = parseRunStructure(proposed),
+    game = buildPlayableGame(seed, roadmap, study, structure),
+    surfaces = buildEnvironmentSurfaces(game),
+    token = Object.freeze({
+      builderVersion: ENVIRONMENT_BUILDER_VERSION,
+      structureFingerprint: runStructureFingerprint(structure),
+      surfaceFingerprint: environmentSurfaceFingerprint(surfaces),
+      surfaces: structuredClone(surfaces),
+    }) as ProvisionalRun;
+  provisionalRuns.set(token, { game, structure, surfaces });
+  return token;
+}
+
+export function finalizeDesignedRun(
+  token: ProvisionalRun,
+  proposed: SavedRunDesign,
+): Game {
+  const candidate = provisionalRuns.get(token);
+  if (!candidate)
+    throw Error("This provisional run is unavailable or already accepted");
+  const saved = parseSavedRunDesign(proposed);
+  if (saved.design.version !== 3)
+    throw Error("A provisional run requires a complete version 3 design");
+  const { environment, ...structure } = saved.design;
+  if (
+    runStructureFingerprint(structure) !==
+      runStructureFingerprint(candidate.structure) ||
+    environmentSurfaceFingerprint(environment.surfaces) !==
+      environmentSurfaceFingerprint(candidate.surfaces)
+  )
+    throw Error(
+      "Accepted writing does not match the provisional building and surface inventory",
+    );
+  candidate.game.design = saved;
+  bindDesignedEnvironment(candidate.game);
+  provisionalRuns.delete(token);
+  return candidate.game;
 }
 /** Legacy layout remains the default for existing scenario/benchmark compatibility. */
 export function createGame(
@@ -141,6 +243,21 @@ export function createGame(
   const design = options.design
     ? parseSavedRunDesign(options.design)
     : undefined;
+  if (design?.design.version === 3)
+    throw Error(
+      "Version 3 designs require createPlayableGame and their complete physical-city inventory",
+    );
+  return buildGame(seed, r, study, options, design?.design, design);
+}
+
+function buildGame(
+  seed: number,
+  r: Roadmap,
+  study: StudyState | undefined,
+  options: { layout?: "legacy" | "forward" },
+  blueprint?: WorldBlueprint,
+  design?: SavedRunDesign,
+): Game {
   const g: Game = {
     ...(design ? { design } : {}),
     schema: 1,
@@ -182,16 +299,16 @@ export function createGame(
     notice:
       "10 seconds before zombies spawn. E releases the entrance latch; push to enter.",
   };
-  if (design)
-    for (let i = 0; i < design.design.roster.length; i++) {
+  if (blueprint)
+    for (let i = 0; i < blueprint.roster.length; i++) {
       const a = g.survivors[i + 1];
-      Object.assign(a, design.design.roster[i]);
+      Object.assign(a, blueprint.roster[i]);
       a.technical = makeNpcProfile(a.id, a.skill, a.role);
     }
   g.surge.quietDelay =
     CONFIG.quietMin + rand(g) * (CONFIG.quietMax - CONFIG.quietMin);
   for (let fi = 0; fi <= CONFIG.floors; fi++)
-    g.floors.push(generateFloor(g, fi));
+    g.floors.push(generateFloor(g, fi, blueprint));
   if (options.layout === "forward")
     for (const floor of g.floors) forwardLayout(floor, seed);
   for (const floor of g.floors)
@@ -219,25 +336,29 @@ export function loot(g: Game): Item[] {
     charges: 1,
   }));
 }
-function generateFloor(g: Game, index: number): Floor {
+function generateFloor(
+  g: Game,
+  index: number,
+  blueprint?: WorldBlueprint,
+): Floor {
   const tiles = Array.from({ length: H }, () => Array(W).fill(1));
   for (let y = 2; y < 28; y++) for (let x = 2; x < 42; x++) tiles[y][x] = 0;
   const floor: Floor = {
-    ...(g.design && index < CONFIG.floors
-      ? { design: structuredClone(g.design.design.floors[index]) }
+    ...(blueprint && index < CONFIG.floors
+      ? { design: structuredClone(blueprint.floors[index]) }
       : {}),
-    ...(g.design && index === 0
-      ? { exteriorDesign: structuredClone(g.design.design.exterior) }
+    ...(blueprint && index === 0
+      ? { exteriorDesign: structuredClone(blueprint.exterior) }
       : {}),
     index,
     tiles,
     stations: [],
     furniture: [],
     dark: index === 0 ? 0.1 : index % 3 === 2 ? 0.95 : 0.5,
-    name: g.design
+    name: blueprint
       ? index === CONFIG.floors
-        ? g.design.design.roofName
-        : g.design.design.floors[index].name
+        ? blueprint.roofName
+        : blueprint.floors[index].name
       : floorNames[index],
     layout: (["archive", "switchback", "gallery"] as const)[
       (g.seed + index) % 3

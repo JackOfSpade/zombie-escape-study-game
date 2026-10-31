@@ -56,7 +56,7 @@ test("version 1 fingerprints, summaries and captured requests remain byte-stable
     "d991642a0c835bdd35f0ab5a5934f9a2b2c4c7668b5fb3e19ea55b866c2e0390",
   );
   const request = {
-    version: 1,
+    version: 1 as const,
     requestId: "design-legacy",
     generationId: "design-pending",
     seed: 42,
@@ -256,7 +256,7 @@ test("scene item budgets reject whole-floor excess even when every individual ar
   assert.throws(() => parseSceneDesign(props, owners), /exceeds 48 props/);
 });
 
-test("new requests require version 2 scenes while exact retained version 1 requests still accept version 1", () => {
+test("retained version 2 requests require scenes while exact retained version 1 requests still accept version 1", () => {
   const request = parseRunDesignRequest({
     version: 1,
     designVersion: 2,

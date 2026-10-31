@@ -19,6 +19,8 @@ import {
   type SceneFurnitureDesign,
   type ScenePropDesign,
   type SceneRoomDesign,
+  type SceneFurnitureStructure,
+  type ScenePropStructure,
 } from "./scene-catalog.mjs";
 import { canPlace, inFurniture, wall } from "./spatial";
 import {
@@ -37,9 +39,12 @@ export interface ResolvedSceneFurniture {
   kind: SceneFurnitureDesign["kind"];
 }
 export interface ResolvedSceneProp extends Omit<
-  ScenePropDesign,
+  ScenePropStructure,
   "at" | "angle"
 > {
+  /** Historical labels only; version 3 writing lives in its surface manifest. */
+  label?: string;
+  text?: string;
   designId: string;
   furnitureId: string;
   room: number;
@@ -79,12 +84,12 @@ function furnitureId(floor: Floor, room: number, id: string) {
 }
 function appearance(
   room: number,
-  item: SceneFurnitureDesign,
+  item: SceneFurnitureDesign | SceneFurnitureStructure,
 ): NonNullable<Furniture["appearance"]> {
   return {
     color: item.color,
     condition: item.condition,
-    label: item.label,
+    ...("label" in item ? { label: item.label } : {}),
     owner: item.owner,
     room,
     designId: item.id,
@@ -199,7 +204,7 @@ function validPlaque(
 function candidatePositions(
   floor: Floor,
   sector: Sector,
-  item: SceneFurnitureDesign,
+  item: SceneFurnitureDesign | SceneFurnitureStructure,
 ) {
   const x1 = Math.min(...sector.blocks.map((b) => b.x1)),
     y1 = Math.min(...sector.blocks.map((b) => b.y1)),
@@ -252,7 +257,7 @@ function sealGrid(floor: Floor, sealed: Furniture[]) {
 function placeFurniture(
   floor: Floor,
   sector: Sector,
-  item: SceneFurnitureDesign,
+  item: SceneFurnitureDesign | SceneFurnitureStructure,
   keepClear: Point[],
   from: Point,
   sealed: Furniture[],
@@ -337,7 +342,7 @@ function resolveProp(
   floor: Floor,
   room: number,
   object: Furniture,
-  item: ScenePropDesign,
+  item: ScenePropDesign | ScenePropStructure,
   siblings: ResolvedSceneProp[],
 ) {
   const catalog = PROP_CATALOG[item.kind],
@@ -551,7 +556,7 @@ export function sceneSaveErrors(floor: Floor): string[] {
           !hasKeys(o.appearance, [
             "color",
             "condition",
-            "label",
+            ...("label" in item ? ["label"] : []),
             "owner",
             "room",
             "designId",
@@ -584,8 +589,7 @@ export function sceneSaveErrors(floor: Floor): string[] {
           "accent",
           "condition",
           "owner",
-          "label",
-          "text",
+          ...("label" in prop ? ["label", "text"] : []),
           "designId",
           "furnitureId",
           "room",

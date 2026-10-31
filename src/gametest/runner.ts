@@ -2,6 +2,7 @@ import { EQUIPMENT } from "../equipment";
 import { SWARM } from "../force-fields";
 import { soundConnected } from "../acoustics";
 import { buildingLayoutErrors } from "../building-layout";
+import { assertDesignedEnvironment } from "../environment-save";
 import { step, toggleDoor, toggleGrip, vault } from "../engine";
 import { distance, type Game, type Roadmap, type Point } from "../model";
 import { applyStudyPacing } from "../study-pacing";
@@ -108,6 +109,14 @@ function read(
   if (q.type === "soundConnected")
     return soundConnected(g.floors[q.floor], q.a, q.b);
   if (q.type === "buildingLayoutErrors") return buildingLayoutErrors(g).length;
+  if (q.type === "environmentErrors") {
+    try {
+      assertDesignedEnvironment(g);
+      return 0;
+    } catch {
+      return 1;
+    }
+  }
   const values =
     q.kind === "zombie"
       ? g.zombies.filter((z) => z.hp > 0)
@@ -150,7 +159,7 @@ export class TestRunner {
       if (!this.scenario.naturalSpawns)
         this.game.nextSpawn = Number.MAX_SAFE_INTEGER;
     }
-    if (this.scenario.city) {
+    if (this.scenario.city && this.scenario.design?.version !== 3) {
       populateCity(this.game, this.scenario.naturalSpawns);
       if (!this.scenario.naturalSpawns)
         this.game.nextSpawn = Number.MAX_SAFE_INTEGER;

@@ -17,6 +17,9 @@ import {
 import {
   RUN_DESIGN_GUIDANCE,
   summarizeRunDesign,
+  parseRunStructure,
+  runStructureFingerprint,
+  environmentSurfaceFingerprint,
 } from "../src/run-design-contract.mjs";
 
 const design = JSON.parse(
@@ -128,7 +131,10 @@ test("native ChatGPT follows only a correlated design repair and stops after a b
   assert.equal(done.completion.operation, "design-run");
   assert.doesNotMatch(done.completion.note, /key|learning|mastery/);
   assert.equal(done.completion.next, "design-run");
-  assert.equal(done.completion.continuation.expected, "run design repair");
+  assert.equal(
+    done.completion.continuation.expected,
+    "next run design phase or repair",
+  );
   assert.deepEqual(queue.result(receipt.id, receipt.hash).answer, answer(p));
   assert.equal(finish(app, turn, answer(p)).completion.duplicate, true);
   assert.throws(
@@ -394,6 +400,141 @@ test("a near-limit scene repair chunks the payload when its complete instruction
     createHash("sha256").update(serialized).digest("hex"),
   );
   assert.equal(finish(app, turn, response).completion.status, "sent");
+  assert.deepEqual(queue.result(receipt.id, receipt.hash).answer, response);
+});
+
+test("version 3 follows an exact structure-to-content continuation and requires all frozen content chunks", async () => {
+  const { streetLabels: _, ...exterior } = sceneDesign.exterior;
+  const structure = parseRunStructure({
+    ...sceneDesign,
+    version: 3,
+    exterior,
+    relationships: [
+      {
+        from: sceneDesign.roster[0].name,
+        to: sceneDesign.roster[1].name,
+        kind: "colleague",
+        detail: "They label the overnight archive together.",
+      },
+    ],
+    floors: sceneDesign.floors.map(({ stories: _, scene, ...f }) => ({
+      ...f,
+      scene: {
+        version: 2,
+        rooms: scene.rooms.map((r) => ({
+          ...r,
+          furniture: r.furniture.map(({ label: _, props, ...o }) => ({
+            ...o,
+            props: props.map(({ label: _, text: __, ...p }) => p),
+          })),
+        })),
+      },
+    })),
+  });
+  const p = {
+    ...request("design-structure-native"),
+    version: 2,
+    designVersion: 3,
+    phase: "structure",
+  };
+  const queue = createHandoffQueue(),
+    app = createTerminalRelayApp({ queue, continuationWaitMs: 5 });
+  queue.enable(true);
+  queue.enqueue("design-run", p, scope, chat);
+  const turn = get(app);
+  assert.throws(() => finish(app, turn, answer(p)), /unknown field|missing/);
+  const done = finish(app, turn, { requestId: p.requestId, structure });
+  const surfaces = Array.from({ length: 160 }, (_, i) => ({
+    id: `floor0/wall-${i}/poster`,
+    floor: 0,
+    scope: "interior",
+    role: "wall-poster",
+    room: i % 4,
+    owner: null,
+    binding: {
+      kind: "fixed",
+      x: i,
+      y: 2,
+      z: 1.6,
+      yaw: 0,
+      pitch: 0,
+      width: 0.62,
+      height: 0.86,
+    },
+    context: 'Synthetic frozen poster "context" \\ ' + "界".repeat(150),
+    maxTitle: 48,
+    maxBody: 160,
+    allowsArt: true,
+  }));
+  const contentRequest = {
+    version: 2,
+    designVersion: 3,
+    phase: "content",
+    requestId: "design-content-native",
+    generationId: p.generationId,
+    seed: p.seed,
+    structure,
+    structureFingerprint: runStructureFingerprint(structure),
+    builderVersion: "environment-v1",
+    surfaces,
+    surfaceFingerprint: environmentSurfaceFingerprint(surfaces),
+    recentContent: [],
+  };
+  const receipt = queue.enqueue("design-run", contentRequest, scope, chat);
+  const next = (
+    await app.call(
+      "get_current_study_question",
+      { chat, after: done.completion.continuation.after },
+      owner,
+    )
+  ).structuredContent;
+  assert.equal(next.jobFingerprint, receipt.hash);
+  assert.match(next.prompt, /"omitted":\["payload"\]/);
+  assert.ok(next.prompt.length <= PROMPT_LIMIT);
+  const content = {
+    version: 1,
+    surfaceFingerprint: contentRequest.surfaceFingerprint,
+    fragments: [],
+    entries: surfaces.map((s, i) => ({
+      surfaceId: s.id,
+      layout: "text",
+      title: [{ text: `Synthetic panel ${i}` }],
+      body: [],
+      description: "",
+      drawing: null,
+    })),
+  };
+  const response = { requestId: contentRequest.requestId, content };
+  assert.throws(() => finish(app, next, response), /Read every/);
+  const read = (index) =>
+    app.call(
+      "read_study_terminal_context",
+      { relayId: next.relayId, turnId: next.turnId, part: "payload", index },
+      owner,
+    ).structuredContent;
+  const first = read(0),
+    parts = [first.text];
+  assert.ok(first.parts > 1);
+  for (let i = 1; i < first.parts; i++) parts.push(read(i).text);
+  assert.equal(parts.join(""), JSON.stringify(contentRequest));
+  assert.equal(
+    first.sha256,
+    createHash("sha256").update(parts.join("")).digest("hex"),
+  );
+  assert.throws(
+    () => finish(app, next, { ...response, structure }),
+    /unknown field/,
+  );
+  assert.throws(
+    () =>
+      finish(app, next, {
+        ...response,
+        content: { ...content, entries: content.entries.slice(1) },
+      }),
+    /entries/,
+  );
+  assert.equal(queue.result(receipt.id, receipt.hash).status, "pending");
+  assert.equal(finish(app, next, response).completion.status, "sent");
   assert.deepEqual(queue.result(receipt.id, receipt.hash).answer, response);
 });
 

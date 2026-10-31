@@ -1,6 +1,10 @@
 import { checkBridge } from "./bridge-client";
 import type { Game, Roadmap } from "./model";
-import { createPlayableGame } from "./world";
+import {
+  createPlayableGame,
+  previewDesignedRun,
+  finalizeDesignedRun,
+} from "./world";
 import {
   clearDesignDraft,
   cancelDesignDraft,
@@ -9,6 +13,8 @@ import {
   prepareDesignedRun,
   readDesignDraft,
   saveDesignDraft,
+  retryDesignDraft,
+  type DesignDraft,
 } from "./run-designer";
 import type { SavedRunDesign } from "./run-design-contract.mjs";
 
@@ -34,7 +40,7 @@ export async function chooseRunDesign(
   const previousPause = game.paused;
   if (game.status === "playing") game.paused = true;
   dialog.showModal();
-  let draft: ReturnType<typeof newDesignDraft> | undefined;
+  let draft: DesignDraft | undefined;
   let active: AbortController | undefined;
   let closed = false;
   let settle: (choice: RunChoice | undefined) => void = () => {};
@@ -80,6 +86,14 @@ export async function chooseRunDesign(
         },
         build: (seed, saved) =>
           createPlayableGame(seed, roadmap, structuredClone(game.study), saved),
+        preview: (seed, structure) =>
+          previewDesignedRun(
+            seed,
+            roadmap,
+            structuredClone(game.study),
+            structure,
+          ),
+        finalize: finalizeDesignedRun,
       });
       finish({ seed: result.seed, saved: result.saved });
     } catch (error) {
@@ -119,6 +133,7 @@ export async function chooseRunDesign(
     void copy();
   };
   retry.onclick = () => {
+    if (draft) retryDesignDraft(draft);
     void attempt();
   };
   dialog.querySelector<HTMLButtonElement>("#run-design-procedural")!.onclick =

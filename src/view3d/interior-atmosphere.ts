@@ -36,6 +36,7 @@ import { InteriorLightmap } from "./interior-lightmap";
 import { outsideBuilding } from "./exterior-layout";
 import type { RunStory } from "../run-design-contract.mjs";
 import { AuthoredScene } from "./authored-scene";
+import { EnvironmentSurfaces } from "./environment-surfaces";
 
 interface Detail {
   slot: number;
@@ -62,6 +63,7 @@ interface FloorAtmosphere {
   /** Authored cards belong to this floor; legacy cards stay shared. */
   authoredMaterials?: MeshStandardMaterial[];
   authoredScene?: AuthoredScene;
+  environmentSurfaces?: EnvironmentSurfaces;
   furnishings: Furnishing[];
 }
 
@@ -416,7 +418,11 @@ export class InteriorAtmosphere {
     group.name = `office-atmosphere-${floor.index}`;
     group.position.y = floor.index * FLOOR_HEIGHT;
     const plan = buildInteriorLighting(floor, seed),
-      authoredMaterials = floor.design?.stories.map((story, i) => {
+      authoredMaterials = (
+        floor.design && "stories" in floor.design
+          ? floor.design.stories
+          : undefined
+      )?.map((story, i) => {
         const material = new MeshStandardMaterial({
           color: "white",
           map: storyTexture(i, story) ?? null,
@@ -439,7 +445,9 @@ export class InteriorAtmosphere {
         128,
         false,
       ),
-      cards = (authoredMaterials ?? this.cardMaterials).map(
+      cards = (
+        floor.environment ? [] : (authoredMaterials ?? this.cardMaterials)
+      ).map(
         (material) =>
           new InstancePool(
             group,
@@ -512,7 +520,7 @@ export class InteriorAtmosphere {
         );
       }
     }
-    for (const story of plan.stories) {
+    for (const story of floor.environment ? [] : plan.stories) {
       const pool = cards[story.story];
       pool.set(
         pool.allocate(),
@@ -526,8 +534,22 @@ export class InteriorAtmosphere {
         "#ece5d3",
       );
     }
-    const desks = floor.furniture
-        .filter((object) => !object.appearance && hasDeskStory(object))
+    const savedDeskIds = new Set(
+        floor.environment?.surfaces
+          .filter(
+            (s) =>
+              s.floor === floor.index &&
+              (s.role === "desk-papers" || s.role === "desk-note") &&
+              s.binding.kind === "furniture",
+          )
+          .map((s) => (s.binding as { furnitureId: string }).furnitureId),
+      ),
+      desks = floor.furniture
+        .filter((object) =>
+          floor.environment
+            ? savedDeskIds.has(object.id)
+            : !object.appearance && hasDeskStory(object),
+        )
         .sort(
           (a, b) =>
             interiorHash(seed, floor.index, a.id) -
@@ -535,7 +557,13 @@ export class InteriorAtmosphere {
         )
         .slice(0, MAX_DESKS),
       boards = floor.furniture
-        .filter((o) => !o.appearance && o.kind === "whiteboard" && !o.destroyed)
+        .filter(
+          (o) =>
+            !floor.environment &&
+            !o.appearance &&
+            o.kind === "whiteboard" &&
+            !o.destroyed,
+        )
         .slice(0, MAX_FURNISHINGS - desks.length);
     for (const object of [...desks, ...boards])
       context.furnishings.push({
@@ -545,6 +573,15 @@ export class InteriorAtmosphere {
     if (floor.scene) {
       context.authoredScene = new AuthoredScene(floor, this.lightmap);
       group.add(context.authoredScene.group);
+    }
+    if (floor.environment) {
+      context.environmentSurfaces = new EnvironmentSurfaces(
+        floor,
+        floor.environment,
+        "interior",
+        this.lightmap,
+      );
+      group.add(context.environmentSurfaces.group);
     }
     this.group.add(group);
     this.floors.set(floor, context);
@@ -592,7 +629,8 @@ export class InteriorAtmosphere {
       w: number,
       h: number,
       rotationX = 0,
-    ) =>
+    ) => {
+      if (context.plan.floor.environment) return;
       details.push({
         slot: context.cards[story].allocate(),
         story,
@@ -605,6 +643,7 @@ export class InteriorAtmosphere {
         rotationX,
         color: "#ffffff",
       });
+    };
     if (object.kind === "whiteboard") {
       card(
         3,
@@ -630,15 +669,16 @@ export class InteriorAtmosphere {
       pageD * 0.95,
       "#dfd9bd",
     );
-    solid(
-      -x,
-      top + 0.016,
-      z - pageD * 0.17,
-      pageW * 0.7,
-      0.002,
-      0.006,
-      "#657271",
-    );
+    if (!context.plan.floor.environment)
+      solid(
+        -x,
+        top + 0.016,
+        z - pageD * 0.17,
+        pageW * 0.7,
+        0.002,
+        0.006,
+        "#657271",
+      );
     solid(
       -x + pageW * 0.15,
       top + 0.018,
@@ -691,6 +731,7 @@ export class InteriorAtmosphere {
 
   private syncFurnishings(context: FloorAtmosphere) {
     context.authoredScene?.sync();
+    context.environmentSurfaces?.sync();
     for (const { object, details } of context.furnishings) {
       const angle = object.angle ?? 0,
         c = Math.cos(angle),
@@ -895,6 +936,7 @@ export class InteriorAtmosphere {
 
   private releaseFloor(context: FloorAtmosphere) {
     context.authoredScene?.dispose();
+    context.environmentSurfaces?.dispose();
     this.lightmap.clear(context.plan.floor.index);
     for (const pool of [context.solids, context.tubes, ...context.cards])
       pool.dispose(false);

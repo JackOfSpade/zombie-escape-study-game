@@ -77,6 +77,7 @@ export interface Check {
     | { type: "separation"; ids: string[] }
     | { type: "event"; event: string }
     | { type: "buildingLayoutErrors" }
+    | { type: "environmentErrors" }
     | { type: "soundConnected"; floor: number; a: Point; b: Point }
     /** Simulated world time in seconds. */
     | { type: "worldTime" }
@@ -315,7 +316,11 @@ export function parseScenario(value: string | unknown): Scenario {
         s.rules === "force-fields",
       "Authored designs require a randomized force-field building.",
     );
-    parseRunDesign(s.design);
+    const design = parseRunDesign(s.design);
+    requireThat(
+      design.version !== 3 || (s.city === true && s.pacing === "study"),
+      "Version 3 environment fixtures require the complete physical city and study pacing.",
+    );
   }
   requireThat(
     integer(s.maxTicks, 1, LAB_LIMITS.ticks) &&
@@ -528,7 +533,10 @@ export function parseScenario(value: string | unknown): Scenario {
       );
     else if (q.type === "event")
       requireThat(id(q.event), "Invalid event type.");
-    else if (q.type === "buildingLayoutErrors")
+    else if (
+      q.type === "buildingLayoutErrors" ||
+      q.type === "environmentErrors"
+    )
       requireThat(
         Object.keys(q).length === 1,
         "Building layout error checks take no parameters.",

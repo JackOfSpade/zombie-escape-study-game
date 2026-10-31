@@ -2,7 +2,8 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { readFileSync } from "node:fs";
 import {
-  newDesignDraft,
+  newDesignDraft as newAuthoredDesignDraft,
+  type LegacyDesignDraft,
   parseDesignDraft,
   prepareDesignedRun,
   clearDesignDraft,
@@ -24,6 +25,29 @@ import {
 import { createPlayableGame } from "../src/world";
 import { decode, encode } from "../src/persistence";
 import type { Roadmap } from "../src/model";
+
+// These regressions retain the exact v1/v2 single-phase packets. The fresh
+// two-phase flow has its own environmental designer suite.
+function newDesignDraft(
+  targetRunId: string,
+  seed: number,
+  recent: ReturnType<typeof summarizeRunDesign>[] = [],
+): LegacyDesignDraft {
+  const modern = newAuthoredDesignDraft(targetRunId, seed, recent, []);
+  return {
+    version: 1,
+    targetRunId,
+    chatCode: modern.chatCode,
+    request: parseRunDesignRequest({
+      version: 1,
+      designVersion: 2,
+      requestId: modern.request.requestId,
+      generationId: modern.request.generationId,
+      seed,
+      recent,
+    }) as LegacyDesignDraft["request"],
+  };
+}
 
 test("accepted AI design is correlated, fingerprinted and built before activation", async () => {
   const draft = newDesignDraft("synthetic-run", 42, []),
@@ -54,7 +78,7 @@ test("accepted AI design is correlated, fingerprinted and built before activatio
   ]);
 });
 
-test("retained version 1 drafts resume exactly while fresh drafts cannot silently downgrade", async () => {
+test("retained version 1 drafts resume exactly while version 2 drafts cannot silently downgrade", async () => {
   const retained = newDesignDraft("synthetic-run", 42, []);
   delete retained.request.designVersion;
   const original = JSON.stringify(retained.request);
@@ -339,6 +363,8 @@ test("saved immutable floor descriptors are rebound to the validated blueprint w
   ) as Roadmap;
   const game = createPlayableGame(42, roadmap, undefined, savedRunDesign());
   const originalTiles = structuredClone(game.floors[0].tiles);
+  assert.ok("stories" in game.floors[0].design!);
+  assert.ok("streetLabels" in game.floors[0].exteriorDesign!);
   game.floors[0].design!.stories = [];
   game.floors[0].exteriorDesign!.streetLabels = [];
   const restored = decode(encode(game));
@@ -347,12 +373,14 @@ test("saved immutable floor descriptors are rebound to the validated blueprint w
     restored.floors[0].design,
     restored.design!.design.floors[0],
   );
+  assert.ok("stories" in restored.floors[0].design!);
+  assert.ok("streetLabels" in restored.floors[0].exteriorDesign!);
   assert.equal(restored.floors[0].design!.stories.length, 6);
   assert.equal(restored.floors[0].exteriorDesign!.streetLabels.length, 8);
   restored.design!.fingerprint = "tampered";
   assert.throws(() => decode(encode(restored)), /fingerprint mismatch/);
   delete game.design;
-  assert.throws(() => decode(encode(game)), /missing their saved run design/);
+  assert.throws(() => encode(game), /missing its complete accepted run design/);
 });
 
 test("explicit cancellation can clear a corrupt design draft without touching other storage", () => {

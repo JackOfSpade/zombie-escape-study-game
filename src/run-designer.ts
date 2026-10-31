@@ -12,43 +12,68 @@ import {
   runDesignFingerprint,
   runDesignNoveltyErrors,
   summarizeRunDesign,
+  parseRunStructureReply,
+  parseRunContentReply,
+  parseRunContentRepairCandidate,
+  parseSavedRunDesign,
+  parseEnvironmentSummaries,
+  summarizeEnvironment,
+  type EnvironmentSummary,
+  type RunStructureV3,
+  type StructureRunDesignRequest,
+  type ContentRunDesignRequest,
   type RunDesignRequest,
   type RunDesignSummary,
   type SavedRunDesign,
 } from "./run-design-contract.mjs";
+import type { ProvisionalRun } from "./world";
 
-export interface DesignDraft {
-  version: 1;
+type LegacyRequest = Extract<RunDesignRequest, { version: 1 }>;
+interface DraftIdentity {
   targetRunId: string;
   chatCode: string;
-  request: RunDesignRequest;
   receipt?: HandoffReceipt & { requestId: string };
 }
+export interface LegacyDesignDraft extends DraftIdentity {
+  version: 1;
+  request: LegacyRequest;
+}
+export interface AuthoredDesignDraft extends DraftIdentity {
+  version: 2;
+  request: StructureRunDesignRequest | ContentRunDesignRequest;
+  /** Exact history captured before the first model request. */
+  recentContent: EnvironmentSummary[];
+  attempts: { structure: number; content: number };
+  /** A saved repair awaits an explicit Retry after exhausting a phase's budget. */
+  exhausted: boolean;
+}
+export type DesignDraft = LegacyDesignDraft | AuthoredDesignDraft;
 const DRAFT_KEY = "dead-air-run-design-draft-v1";
 const HISTORY_KEY = "dead-air-run-design-history-v1";
+const CONTENT_HISTORY_KEY = "dead-air-environment-history-v1";
 export const DESIGN_ATTEMPTS = 3;
 
 export function parseDesignDraft(value: unknown): DesignDraft {
   const d = value as DesignDraft;
   if (
     !d ||
-    d.version !== 1 ||
+    (d.version !== 1 && d.version !== 2) ||
     typeof d.targetRunId !== "string" ||
     d.targetRunId.length > 128 ||
     !/^[A-Z0-9]{6,16}$/.test(d.chatCode)
   )
     throw Error("Invalid saved run-design request");
   const request = parseRunDesignRequest(d.request);
+  if (request.version !== d.version)
+    throw Error("Saved design phase does not match its request version");
   if (
     d.receipt !== undefined &&
     (!isHandoffReceipt(d.receipt) || d.receipt.requestId !== request.requestId)
   )
     throw Error("Invalid saved run-design receipt");
-  return {
-    version: 1,
+  const identity = {
     targetRunId: d.targetRunId,
     chatCode: d.chatCode,
-    request,
     ...(d.receipt
       ? {
           receipt: {
@@ -59,6 +84,47 @@ export function parseDesignDraft(value: unknown): DesignDraft {
         }
       : {}),
   };
+  if (d.version === 1 && request.version === 1)
+    return { ...identity, version: 1, request };
+  if (d.version !== 2 || request.version !== 2)
+    throw Error("Invalid saved design phase");
+  if (
+    !d.attempts ||
+    !Number.isInteger(d.attempts.structure) ||
+    !Number.isInteger(d.attempts.content) ||
+    d.attempts.structure < 1 ||
+    d.attempts.structure > DESIGN_ATTEMPTS ||
+    d.attempts.content < 0 ||
+    d.attempts.content > DESIGN_ATTEMPTS ||
+    (request.phase === "structure" && d.attempts.content !== 0) ||
+    (request.phase === "content" && d.attempts.content < 1) ||
+    typeof d.exhausted !== "boolean"
+  )
+    throw Error("Invalid saved design attempt budget");
+  const recentContent = parseEnvironmentSummaries(d.recentContent);
+  if (
+    request.phase === "content" &&
+    JSON.stringify(request.recentContent) !== JSON.stringify(recentContent)
+  )
+    throw Error("Saved design content history changed");
+  return {
+    ...identity,
+    version: 2,
+    request,
+    recentContent,
+    attempts: { ...d.attempts },
+    exhausted: d.exhausted,
+  };
+}
+
+export function recentEnvironment(): EnvironmentSummary[] {
+  try {
+    return parseEnvironmentSummaries(
+      JSON.parse(localStorage.getItem(CONTENT_HISTORY_KEY) ?? "[]"),
+    );
+  } catch {
+    return [];
+  }
 }
 export function recentDesigns(): RunDesignSummary[] {
   try {
@@ -107,12 +173,27 @@ export function rememberDesign(saved: SavedRunDesign) {
     HISTORY_KEY,
     JSON.stringify([next, ...recent].slice(0, 5)),
   );
+  if (saved.design.version === 3) {
+    const summary = summarizeEnvironment(saved.design.environment);
+    localStorage.setItem(
+      CONTENT_HISTORY_KEY,
+      JSON.stringify(
+        [
+          summary,
+          ...recentEnvironment().filter(
+            (s) => s.fingerprint !== summary.fingerprint,
+          ),
+        ].slice(0, 5),
+      ),
+    );
+  }
 }
 export function newDesignDraft(
   targetRunId: string,
   seed: number,
   recent = recentDesigns(),
-): DesignDraft {
+  recentContent = recentEnvironment(),
+): AuthoredDesignDraft {
   const generationId = `design-${crypto.randomUUID()}`;
   const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
   const chatCode = Array.from(
@@ -120,26 +201,42 @@ export function newDesignDraft(
     (n) => alphabet[n % alphabet.length],
   ).join("");
   return {
-    version: 1,
+    version: 2,
     targetRunId,
     chatCode,
     request: parseRunDesignRequest({
-      version: 1,
-      designVersion: 2,
+      version: 2,
+      designVersion: 3,
+      phase: "structure",
       requestId: `${generationId}-1`,
       generationId,
       seed,
       recent,
-    }),
+    }) as StructureRunDesignRequest,
+    recentContent: parseEnvironmentSummaries(recentContent),
+    attempts: { structure: 1, content: 0 },
+    exhausted: false,
   };
 }
-export interface DesignOptions<T> {
+/** Only an explicit UI retry starts another bounded repair cycle. */
+export function retryDesignDraft(draft: DesignDraft) {
+  if (draft.version === 2 && draft.exhausted) {
+    draft.attempts[draft.request.phase] = 1;
+    draft.exhausted = false;
+  }
+}
+export interface DesignOptions<
+  T,
+  R extends RunDesignRequest = RunDesignRequest,
+> {
   build: (seed: number, design: SavedRunDesign) => T;
   capture: (draft: DesignDraft) => void | Promise<void>;
   signal: AbortSignal;
   progress?: (text: string) => void;
+  preview?: (seed: number, structure: RunStructureV3) => ProvisionalRun;
+  finalize?: (candidate: ProvisionalRun, saved: SavedRunDesign) => T;
   send?: (
-    request: RunDesignRequest,
+    request: R,
     draft: DesignDraft,
     signal: AbortSignal,
     progress: (phase: HandoffProgress) => void,
@@ -173,6 +270,7 @@ export async function prepareDesignedRun<T>(
         isActive: () => !signal.aborted,
       });
     });
+  if (draft.version === 2) return prepareAuthoredRun(draft, options, send);
   for (let attempt = 0; attempt < DESIGN_ATTEMPTS; attempt++) {
     options.signal.throwIfAborted();
     await options.capture(draft);
@@ -234,6 +332,158 @@ export async function prepareDesignedRun<T>(
   throw Error("Run design did not complete");
 }
 
+async function prepareAuthoredRun<T>(
+  draft: AuthoredDesignDraft,
+  options: DesignOptions<T>,
+  send: NonNullable<DesignOptions<T>["send"]>,
+) {
+  options.signal.throwIfAborted();
+  if (!options.preview || !options.finalize)
+    throw Error(
+      "This client cannot prepare individual environmental writing. Update the game before retrying.",
+    );
+  if (draft.exhausted)
+    throw Error(
+      "This design needs more changes after three attempts. Choose Retry to continue the saved request, cancel, or choose a procedural run.",
+    );
+  let candidate: ProvisionalRun | undefined;
+  const rebuild = (request: ContentRunDesignRequest) => {
+    const preview = options.preview!(request.seed, request.structure);
+    if (
+      preview.structureFingerprint !== request.structureFingerprint ||
+      preview.surfaceFingerprint !== request.surfaceFingerprint ||
+      preview.builderVersion !== request.builderVersion ||
+      JSON.stringify(preview.surfaces) !== JSON.stringify(request.surfaces)
+    )
+      throw Error(
+        "The saved object inventory no longer matches this game version. Cancel this design and start a new one; its writing will not be rebound to different objects.",
+      );
+    return preview;
+  };
+  // Recreate only the private candidate. The captured request and object IDs
+  // remain immutable across reloads and exact transport retries.
+  if (draft.request.phase === "content") candidate = rebuild(draft.request);
+  for (;;) {
+    options.signal.throwIfAborted();
+    await options.capture(draft);
+    options.signal.throwIfAborted();
+    const request = draft.request;
+    const reply = await send(request, draft, options.signal, (phase) =>
+      options.progress?.(
+        phase === "working"
+          ? request.phase === "structure"
+            ? "ChatGPT is designing the building and its occupants…"
+            : "ChatGPT is writing and illustrating the objects in this building…"
+          : phase === "queued"
+            ? "Waiting for ChatGPT. Continue in the connected chat to finish this run."
+            : "Waiting for the bridge to reconnect. Your exact request is saved.",
+      ),
+    );
+    options.signal.throwIfAborted();
+    let repair: unknown;
+    let errors: string[] = [];
+    if (request.phase === "structure") {
+      const { structure } = parseRunStructureReply(reply, request);
+      repair = structure;
+      errors = runDesignNoveltyErrors(structure, request.recent);
+      if (!errors.length) {
+        try {
+          options.progress?.(
+            "Checking routes and identifying the objects that need writing and artwork…",
+          );
+          candidate = options.preview(request.seed, structure);
+          options.signal.throwIfAborted();
+          const contentRequest = parseRunDesignRequest({
+            version: 2,
+            designVersion: 3,
+            phase: "content",
+            requestId: `design-${crypto.randomUUID()}`,
+            generationId: request.generationId,
+            seed: request.seed,
+            structure,
+            structureFingerprint: candidate.structureFingerprint,
+            builderVersion: candidate.builderVersion,
+            surfaces: candidate.surfaces,
+            surfaceFingerprint: candidate.surfaceFingerprint,
+            recentContent: draft.recentContent,
+          }) as ContentRunDesignRequest;
+          delete draft.receipt;
+          draft.request = contentRequest;
+          draft.attempts.content = 1;
+          await options.capture(draft);
+          options.signal.throwIfAborted();
+          continue;
+        } catch (error) {
+          options.signal.throwIfAborted();
+          // A failed durable phase capture is not a geometry rejection. Keep
+          // the exact content packet for retry and release no further request.
+          if (draft.request.phase === "content") throw error;
+          errors = [error instanceof Error ? error.message : String(error)];
+        }
+      }
+    } else {
+      let content;
+      try {
+        content = parseRunContentReply(reply, request).content;
+      } catch (error) {
+        options.signal.throwIfAborted();
+        // Retain only strictly bounded content data for a semantic repair.
+        // Unknown fields and unsafe drawing shapes never enter a repair packet.
+        repair = parseRunContentRepairCandidate(reply, request);
+        errors = [error instanceof Error ? error.message : String(error)];
+      }
+      if (content)
+        try {
+          repair = content;
+          const design = {
+            ...request.structure,
+            environment: { ...content, surfaces: request.surfaces },
+          };
+          const saved = parseSavedRunDesign({
+            version: 1,
+            source: "chatgpt-handoff",
+            requestId: request.requestId,
+            generationId: request.generationId,
+            fingerprint: runDesignFingerprint(design),
+            design,
+          });
+          options.progress?.(
+            "Checking the writing, artwork and saved object bindings…",
+          );
+          const game = options.finalize(candidate ?? rebuild(request), saved);
+          options.signal.throwIfAborted();
+          return { seed: request.seed, saved, game };
+        } catch (error) {
+          options.signal.throwIfAborted();
+          errors = [error instanceof Error ? error.message : String(error)];
+        }
+    }
+    delete draft.receipt;
+    const phase = request.phase;
+    draft.request = parseRunDesignRequest({
+      ...request,
+      requestId: `design-${crypto.randomUUID()}`,
+      repair: {
+        candidate: repair,
+        errors: errors
+          .slice(0, 20)
+          .map((e) => e.replace(/[\u0000-\u001f\u007f]/g, " ").slice(0, 400)),
+      },
+    }) as AuthoredDesignDraft["request"];
+    if (draft.attempts[phase] >= DESIGN_ATTEMPTS) draft.exhausted = true;
+    else draft.attempts[phase]++;
+    await options.capture(draft);
+    options.signal.throwIfAborted();
+    if (draft.exhausted)
+      throw Error(
+        "This design still needs changes after three attempts. Your exact repair request is saved; choose Retry, Cancel, or a procedural run.",
+      );
+    options.progress?.(
+      "Asking ChatGPT to repair this design while keeping its setting and object bindings…",
+    );
+  }
+}
+
 export function designChatPrompt(draft: DesignDraft) {
-  return `Design my new zombie-escape-study-game run. Call get_current_study_question with chat: "${draft.chatCode}" and use this chat code on every fetch in this chat. Follow the game's captured design contract, then return the design with finish_study_preparation. Follow any bound design-repair continuation; stop when the game has no further design request. This is fictional world design, not a study conversation. Do not fetch another chat's work. If the tools lack the chat argument, ask me to refresh the zombie-escape-study-game plugin tools.`;
+  return `Design my new zombie-escape-study-game run. Call get_current_study_question with chat: "${draft.chatCode}" and use this chat code on every fetch in this chat. Follow the game's captured design contract, then return the requested structure or object writing and artwork with finish_study_preparation. Follow any bound next design phase or repair continuation; stop when the game has no further design request. This is fictional world design, not a study conversation. Do not fetch another chat's work. If the tools lack the chat argument, ask me to refresh the zombie-escape-study-game plugin tools.`;
 }

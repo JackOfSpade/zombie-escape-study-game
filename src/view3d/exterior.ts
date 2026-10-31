@@ -1,3 +1,4 @@
+import { EnvironmentSurfaces } from "./environment-surfaces";
 import {
   BackSide,
   AdditiveBlending,
@@ -98,6 +99,7 @@ export class ExteriorDressing {
   readonly horizon = new Color("#344552");
   enabled = false;
   private world = new Group();
+  private environmentSurfaces?: EnvironmentSurfaces;
   private asphalt = new MeshStandardMaterial({
     map: asphaltTexture(),
     color: "#77838a",
@@ -257,10 +259,18 @@ export class ExteriorDressing {
     this.merge(panes, this.glass, "dim-exterior-windows");
     this.merge(lit, this.warm, "lit-exterior-windows-practicals");
     this.merge(signals, this.emergency, "city-emergency-signals");
+    if (ground.environment) {
+      this.environmentSurfaces = new EnvironmentSurfaces(
+        ground,
+        ground.environment,
+        "exterior",
+      );
+      this.world.add(this.environmentSurfaces.group);
+    }
   }
 
   private updateSigns(floor: Floor) {
-    if (typeof document === "undefined") return;
+    if (typeof document === "undefined" || floor.environment) return;
     const design = floor.exteriorDesign,
       values = [
         design?.buildingName ?? "MERCER CIVIC CENTRE",
@@ -310,7 +320,8 @@ export class ExteriorDressing {
     const sign = new Mesh(new PlaneGeometry(3.55, 0.74), this.signMaterial);
     sign.position.set(entrance, 3.22, front + 0.56);
     sign.name = "entrance-sign";
-    this.world.add(sign);
+    if (!floor.environment) this.world.add(sign);
+    else sign.geometry.dispose();
     this.entranceLight.position.set(entrance, 2.65, front + 0.8);
 
     // Flat paving and flush markings never suggest an extra physical obstacle.
@@ -868,7 +879,7 @@ export class ExteriorDressing {
         for (const y of [0.45, 1, 1.55])
           box(opaque, x + 1.38, y, cordon + 0.6, 2.75, 0.025, 0.025, "#637371");
     }
-    if (this.quarantineMaterial) {
+    if (this.quarantineMaterial && !floor.environment) {
       const notice = new Mesh(
         new PlaneGeometry(5.2, 1.08),
         this.quarantineMaterial,
@@ -1197,6 +1208,7 @@ export class ExteriorDressing {
             nz ? 0.55 : 3.4,
             entry % 2 ? "#725844" : "#4d6258",
           );
+          if (floor.environment) continue;
           const sign = new PlaneGeometry(3.05, 0.6),
             uv = sign.getAttribute("uv"),
             row = hash(id + 41) % 8;
@@ -1362,7 +1374,9 @@ export class ExteriorDressing {
       atlas.width = 768;
       atlas.height = 768;
       const c = atlas.getContext("2d")!,
-        labels = floor.exteriorDesign?.streetLabels ?? [
+        labels = (floor.exteriorDesign && "streetLabels" in floor.exteriorDesign
+          ? floor.exteriorDesign.streetLabels
+          : undefined) ?? [
           "LARK PHARMACY  •  CLOSED",
           "MERCER AVENUE",
           "NORTHSIDE CAFÉ",
@@ -1596,7 +1610,9 @@ export class ExteriorDressing {
     route.position.set(entrance - 3, 1.7, front + 1.06);
     suspended.name = "evacuation-suspended-sign";
     suspended.position.set(entrance + 4, 1.8, front + 1.06);
-    this.world.add(route, suspended);
+    this.world.add(route);
+    if (!floor.environment) this.world.add(suspended);
+    else suspended.geometry.dispose();
     this.streetLight.position.set(entrance, 5.2, front + 13);
     this.streetLight.intensity = 32;
     this.streetLight.distance = 28;
@@ -1819,6 +1835,8 @@ export class ExteriorDressing {
   }
 
   private clear() {
+    this.environmentSurfaces?.dispose();
+    this.environmentSurfaces = undefined;
     this.shopSigns?.material.map?.dispose();
     this.shopSigns?.material.dispose();
     this.shopSigns = undefined;

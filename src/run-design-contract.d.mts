@@ -5,7 +5,7 @@ export interface RunStory {
   title: string;
   lines: string[];
 }
-export interface RunFloorDesign {
+export interface LegacyRunFloorDesign {
   /** Required for version 2 designs; absent from historical version 1 data. */
   scene?: SceneFloorDesign;
   name: string;
@@ -20,7 +20,7 @@ export interface RunFloorDesign {
   stories: RunStory[];
   brokenGuard: { segment: 3 | 4; bay: 1 | 2 };
 }
-export interface RunExteriorDesign {
+export interface LegacyRunExteriorDesign {
   buildingName: string;
   buildingSubtitle: string;
   quarantineTitle: string;
@@ -28,7 +28,7 @@ export interface RunExteriorDesign {
   streetLabels: string[];
   skyline: { minHeight: number; maxHeight: number; damageRate: number };
 }
-export interface RunDesign {
+export interface LegacyRunDesign {
   version: 1 | 2;
   title: string;
   premise: string;
@@ -41,7 +41,7 @@ export interface RunDesign {
     mirrored: boolean;
     shoulder: number;
   };
-  floors: RunFloorDesign[];
+  floors: LegacyRunFloorDesign[];
   roofName: string;
   roster: {
     name: string;
@@ -59,7 +59,7 @@ export interface RunDesign {
     damageRate: number;
     palette: string[];
   };
-  exterior: RunExteriorDesign;
+  exterior: LegacyRunExteriorDesign;
   pacing: {
     swarmInterval: number;
     swarmBatch: number;
@@ -69,6 +69,38 @@ export interface RunDesign {
     helicopterInterval: number;
   };
 }
+export interface RunFloorStructureV3 extends Omit<
+  LegacyRunFloorDesign,
+  "stories" | "scene"
+> {
+  scene: SceneFloorStructure;
+}
+export type RunFloorDesign = LegacyRunFloorDesign | RunFloorStructureV3;
+export type RunExteriorStructureV3 = Omit<
+  LegacyRunExteriorDesign,
+  "streetLabels"
+>;
+export type RunExteriorDesign =
+  LegacyRunExteriorDesign | RunExteriorStructureV3;
+export interface RunRelationship {
+  from: string;
+  to: string;
+  kind: "colleague" | "friend" | "relative" | "mentor" | "rival";
+  detail: string;
+}
+export interface RunStructureV3 extends Omit<
+  LegacyRunDesign,
+  "version" | "floors" | "exterior"
+> {
+  version: 3;
+  floors: RunFloorStructureV3[];
+  exterior: RunExteriorStructureV3;
+  relationships: RunRelationship[];
+}
+export interface RunDesignV3 extends RunStructureV3 {
+  environment: EnvironmentManifest;
+}
+export type RunDesign = LegacyRunDesign | RunDesignV3;
 export interface SavedRunDesign {
   version: 1;
   source: "chatgpt-handoff" | "fixture";
@@ -85,7 +117,7 @@ export interface RunDesignSummary {
   cast: string;
   tempo: string;
 }
-export interface RunDesignRequest {
+export interface LegacyRunDesignRequest {
   version: 1;
   /** Absent on retained version 1 requests; never inserted during retry. */
   designVersion?: 2;
@@ -93,24 +125,134 @@ export interface RunDesignRequest {
   generationId: string;
   seed: number;
   recent: RunDesignSummary[];
-  repair?: { candidate: RunDesign; errors: string[] };
+  repair?: { candidate: LegacyRunDesign; errors: string[] };
 }
-export interface RunDesignReply {
+export interface LegacyRunDesignReply {
   requestId: string;
-  design: RunDesign;
+  design: LegacyRunDesign;
 }
+export interface StructureRunDesignRequest {
+  version: 2;
+  designVersion: 3;
+  phase: "structure";
+  requestId: string;
+  generationId: string;
+  seed: number;
+  recent: RunDesignSummary[];
+  repair?: { candidate: RunStructureV3; errors: string[] };
+}
+export interface ContentRunDesignRequest {
+  version: 2;
+  designVersion: 3;
+  phase: "content";
+  requestId: string;
+  generationId: string;
+  seed: number;
+  structure: RunStructureV3;
+  structureFingerprint: string;
+  builderVersion: string;
+  surfaces: SurfaceSlot[];
+  surfaceFingerprint: string;
+  recentContent: EnvironmentSummary[];
+  repair?: { candidate: EnvironmentContent; errors: string[] };
+}
+export type RunDesignRequest =
+  LegacyRunDesignRequest | StructureRunDesignRequest | ContentRunDesignRequest;
+export interface RunStructureReply {
+  requestId: string;
+  structure: RunStructureV3;
+}
+export interface RunContentReply {
+  requestId: string;
+  content: EnvironmentContent;
+}
+export type RunDesignReply =
+  LegacyRunDesignReply | RunStructureReply | RunContentReply;
 export const RUN_DESIGN_GUIDANCE: string;
+export function parseRunDesign(value: LegacyRunDesign): LegacyRunDesign;
+export function parseRunDesign(value: RunDesignV3): RunDesignV3;
 export function parseRunDesign(value: unknown): RunDesign;
+export function parseRunStructure(value: unknown): RunStructureV3;
+export function parseRunDesignRequest(value: {
+  version: 1;
+  [key: string]: unknown;
+}): LegacyRunDesignRequest;
+export function parseRunDesignRequest(value: {
+  version: number;
+  phase?: never;
+  [key: string]: unknown;
+}): LegacyRunDesignRequest;
+export function parseRunDesignRequest(value: {
+  version: 2;
+  phase: "structure";
+  [key: string]: unknown;
+}): StructureRunDesignRequest;
+export function parseRunDesignRequest(value: {
+  version: 2;
+  phase: "content";
+  [key: string]: unknown;
+}): ContentRunDesignRequest;
 export function parseRunDesignRequest(value: unknown): RunDesignRequest;
+export function parseRunDesignReply(
+  value: unknown,
+  request: LegacyRunDesignRequest,
+): LegacyRunDesignReply;
+export function parseRunDesignReply(
+  value: unknown,
+  request: StructureRunDesignRequest,
+): RunStructureReply;
+export function parseRunDesignReply(
+  value: unknown,
+  request: ContentRunDesignRequest,
+): RunContentReply;
 export function parseRunDesignReply(
   value: unknown,
   request: RunDesignRequest,
 ): RunDesignReply;
-export function summarizeRunDesign(design: RunDesign): RunDesignSummary;
+export function parseRunStructureReply(
+  value: unknown,
+  request: StructureRunDesignRequest,
+): RunStructureReply;
+export function parseRunContentReply(
+  value: unknown,
+  request: ContentRunDesignRequest,
+): RunContentReply;
+export function parseRunContentRepairCandidate(
+  value: unknown,
+  request: ContentRunDesignRequest,
+): EnvironmentContent;
+export function summarizeRunDesign(
+  design: RunDesign | RunStructureV3,
+): RunDesignSummary;
 export function runDesignNoveltyErrors(
-  design: RunDesign,
+  design: RunDesign | RunStructureV3,
   recent: RunDesignSummary[],
 ): string[];
-export function runDesignFingerprint(design: RunDesign): string;
+export function runDesignFingerprint(design: unknown): string;
+export function runStructureFingerprint(design: RunStructureV3): string;
 export function parseSavedRunDesign(value: unknown): SavedRunDesign;
-import type { SceneFloorDesign } from "./scene-catalog.mjs";
+import type {
+  SceneFloorDesign,
+  SceneFloorStructure,
+} from "./scene-catalog.mjs";
+import type {
+  SurfaceSlot,
+  EnvironmentManifest,
+  EnvironmentContent,
+  EnvironmentSummary,
+} from "./environment-contract.mjs";
+export {
+  parseEnvironmentManifest,
+  parseEnvironmentContent,
+  parseEnvironmentSurfaces,
+  parseEnvironmentSummaries,
+  environmentSurfaceFingerprint,
+  summarizeEnvironment,
+} from "./environment-contract.mjs";
+export type {
+  SurfaceSlot,
+  SurfaceContent,
+  EnvironmentManifest,
+  EnvironmentContent,
+  EnvironmentSummary,
+} from "./environment-contract.mjs";

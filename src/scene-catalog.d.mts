@@ -62,6 +62,20 @@ export interface SceneFloorDesign {
   version: 1;
   rooms: SceneRoomDesign[];
 }
+export type ScenePropStructure = Omit<ScenePropDesign, "label" | "text">;
+export interface SceneFurnitureStructure extends Omit<
+  SceneFurnitureDesign,
+  "label" | "props"
+> {
+  props: ScenePropStructure[];
+}
+export interface SceneRoomStructure extends Omit<SceneRoomDesign, "furniture"> {
+  furniture: SceneFurnitureStructure[];
+}
+export interface SceneFloorStructure {
+  version: 2;
+  rooms: SceneRoomStructure[];
+}
 export const PROP_CATALOG: Readonly<
   Record<ScenePropKind, Readonly<{ w: number; d: number; h: number }>>
 >;
@@ -73,3 +87,8 @@ export function parseSceneDesign(
   rosterNames: readonly string[],
   path?: string,
 ): SceneFloorDesign;
+export function parseSceneStructure(
+  value: unknown,
+  rosterNames: readonly string[],
+  path?: string,
+): SceneFloorStructure;
