@@ -19,6 +19,7 @@ import {
 } from "./schema";
 import { createTestWorld, entity, spawn } from "./world";
 import { populateCity } from "../world";
+import { FLOOR_HEIGHT, sampleStairRoute } from "../stair-route";
 export const TEST_DT = 1 / 30;
 export interface CheckResult {
   name: string;
@@ -72,6 +73,20 @@ function read(
       if (!("kind" in e)) throw Error(`${q.id} has no furniture angle`);
       return Math.abs(e.angle ?? 0);
     }
+    if (q.field === "elevation")
+      return "alive" in e
+        ? (e.elevated?.feet ??
+            (e.stairTravel?.walked !== undefined
+              ? sampleStairRoute(g, e.stairTravel).y
+              : e.floor * FLOOR_HEIGHT))
+        : e.floor * FLOOR_HEIGHT;
+    if (q.field === "falling")
+      return (
+        "alive" in e &&
+        !!e.elevated &&
+        !e.elevated.grounded &&
+        e.elevated.vz < 0
+      );
     if (q.field === "alive") return "alive" in e ? e.alive : e.hp > 0;
     return e[q.field];
   }
@@ -124,6 +139,8 @@ export class TestRunner {
   readonly results: CheckResult[];
   readonly actionResults: { tick: number; type: string; ok: boolean }[] = [];
   private moves = new Map<string, Point & { stairWalk?: boolean }>();
+  private walkTargets = new Map<string, Point & { stairWalk?: boolean }>();
+  private jumpPending = false;
   private endedTravel = { npcTravel: 0, zombieTravel: 0 };
   constructor(s: Scenario, roadmap: Roadmap) {
     this.scenario = parseScenario(s);
@@ -174,7 +191,17 @@ export class TestRunner {
     const e = entity(this.game, a.id);
     if (!e || !("alive" in e || "origin" in e))
       throw Error(`Missing character ${a.id}`);
+    if (a.type === "jump") {
+      this.jumpPending = true;
+      return true;
+    }
+    if (a.type === "walkTo") {
+      this.moves.delete(a.id);
+      this.walkTargets.set(a.id, { x: a.x, y: a.y, stairWalk: a.stairWalk });
+      return true;
+    }
     if (a.type === "move") {
+      this.walkTargets.delete(a.id);
       this.moves.set(a.id, {
         x: a.x,
         y: a.y,
@@ -228,8 +255,27 @@ export class TestRunner {
                     { x: e.x, y: e.y, floor: e.floor },
                   ]),
                 );
-          const input = manual ?? this.moves.get("human") ?? { x: 0, y: 0 };
-          step(this.game, TEST_DT, { ...input, grab: false });
+          const target = this.walkTargets.get("human"),
+            human = this.game.survivors[0],
+            dx = target ? target.x - human.x : 0,
+            dy = target ? target.y - human.y : 0,
+            remaining = Math.hypot(dx, dy),
+            steering = target
+              ? {
+                  x: remaining > human.speed * TEST_DT ? dx / remaining : 0,
+                  y: remaining > human.speed * TEST_DT ? dy / remaining : 0,
+                  stairWalk: target.stairWalk,
+                }
+              : undefined,
+            input = manual ??
+              steering ??
+              this.moves.get("human") ?? { x: 0, y: 0 };
+          step(this.game, TEST_DT, {
+            ...input,
+            grab: false,
+            jump: this.jumpPending,
+          });
+          this.jumpPending = false;
           if (before)
             for (const [kind, entities] of [
               [

@@ -3,6 +3,7 @@ import {
   BufferGeometry,
   CanvasTexture,
   Color,
+  DoubleSide,
   Float32BufferAttribute,
   Group,
   Mesh,
@@ -12,7 +13,14 @@ import {
   SRGBColorSpace,
 } from "three";
 import { mergeGeometries } from "three/addons/utils/BufferGeometryUtils.js";
-import { type Game } from "../model";
+import { devPass, type Game } from "../model";
+import {
+  COLUMN_SIZE,
+  DECK_THICKNESS,
+  exteriorStructure,
+  stairAccessPortals,
+  type StairAccessPortal,
+} from "../exterior-structure";
 import {
   buildStairRoute,
   cityStairBase,
@@ -67,6 +75,17 @@ export class StairGallery {
     roughness: 0.4,
   });
   private signs: MeshBasicMaterial[] = [];
+  private accessFields: { portal: StairAccessPortal; mesh: Mesh }[] = [];
+  private field = new MeshStandardMaterial({
+    color: "#ff6274",
+    emissive: "#b4283d",
+    emissiveIntensity: 0.5,
+    transparent: true,
+    opacity: 0.3,
+    depthWrite: false,
+    roughness: 0.55,
+    side: DoubleSide,
+  });
   private tint = new Color();
   constructor() {
     this.group.name = "continuous-stair-gallery";
@@ -79,7 +98,7 @@ export class StairGallery {
       rails: BufferGeometry[] = [],
       glazing: BufferGeometry[] = [],
       supports: BufferGeometry[] = [],
-      columns = new Map<string, { x: number; z: number; top: number }>();
+      structure = exteriorStructure(game);
     const box = (
       out: BufferGeometry[],
       x: number,
@@ -100,183 +119,104 @@ export class StairGallery {
       }
       out.push(g);
     };
-    for (let level = 0; level < game.floors.length - 1; level++) {
-      const floor = game.floors[level],
-        next = game.floors[level + 1];
-      const route = buildStairRoute(game, {
-        fromFloor: level,
-        toFloor: level + 1,
-        origin: floor.stairs,
-        destination: next.entry,
-        until: 0,
-      });
-      for (let i = 0; i < route.points.length - 1; i++) {
-        const a = route.points[i],
-          b = route.points[i + 1],
-          dx = b.x - a.x,
-          dz = b.z - a.z,
-          run = Math.hypot(dx, dz),
-          rise = b.y - a.y,
-          groundCourt = level === 0 && !!floor.city && rise === 0,
-          angle = -Math.atan2(dz, dx),
-          nx = run ? -dz / run : 0,
-          nz = run ? dx / run : 1,
-          steps = rise ? 20 : 1;
-        if (run < 0.01) continue;
-        const previous = route.points[i - 1],
-          following = route.points[i + 2],
-          turnsAtStart =
-            previous &&
-            Math.abs((a.x - previous.x) * dz - (a.z - previous.z) * dx) > 0.01,
-          turnsAtEnd =
-            following &&
-            Math.abs(dx * (following.z - b.z) - dz * (following.x - b.x)) >
-              0.01;
-        for (let j = 0; j < steps; j++) {
-          // A corner landing owns its square. Trim adjoining level decks to
-          // its edge instead of drawing two differently colored top faces in
-          // exactly the same plane. Treads end at the next segment's edge too.
-          const start = !rise && turnsAtStart ? 0.95 : 0,
-            end = !rise && turnsAtEnd ? run - 0.95 : run,
-            deckRun = end - start,
-            t = (start + (deckRun * (j + 0.5)) / steps) / run,
-            y = a.y + (rise * (j + 1)) / steps;
+    // Render the exact slabs and guard bays used by elevated-body collision.
+    for (const slab of structure.slabs) {
+      const length = slab.halfLength * 2,
+        angle = -Math.atan2(slab.uy, slab.ux);
+      for (let j = 0; j < slab.steps; j++) {
+        const along = -slab.halfLength + (length * (j + 0.5)) / slab.steps,
+          top = slab.top + (slab.rise * (j + 1)) / slab.steps;
+        box(
+          decks,
+          slab.x + slab.ux * along,
+          top - DECK_THICKNESS / 2,
+          slab.y + slab.uy * along,
+          length / slab.steps,
+          DECK_THICKNESS,
+          slab.halfWidth * 2,
+          j % 2 ? "#7c8c87" : slab.color,
+          angle,
+        );
+        if (slab.rise) {
+          const edge = -slab.halfLength + (length * (j + 1)) / slab.steps;
           box(
-            decks,
-            a.x + dx * t,
-            y - 0.1,
-            a.z + dz * t,
-            deckRun / steps,
-            0.2,
-            STAIR_ROUTE_WIDTH + 0.12,
-            j % 2 ? "#7c8c87" : "#8e9b91",
+            rails,
+            slab.x + slab.ux * edge,
+            top + 0.008,
+            slab.y + slab.uy * edge,
+            0.035,
+            0.016,
+            STAIR_ROUTE_WIDTH,
+            undefined,
             angle,
           );
-          if (rise)
-            box(
-              rails,
-              a.x + (dx * (j + 1)) / steps,
-              y + 0.008,
-              a.z + (dz * (j + 1)) / steps,
-              0.035,
-              0.016,
-              STAIR_ROUTE_WIDTH,
-              undefined,
-              angle,
-            );
-        }
-        // Railed glass keeps the city visible. Posts and rails follow the
-        // continuous slope; flat landings leave open connections at each end.
-        const guardStart = turnsAtStart ? Math.min(0.49, 0.96 / run) : 0,
-          guardEnd = turnsAtEnd ? Math.max(0.51, 1 - 0.96 / run) : 1,
-          guardRun = run * (guardEnd - guardStart),
-          sections = Math.max(1, Math.ceil(guardRun / 1.5));
-        // These lowest flat walks are now ordinary public court paving. A
-        // ground-level glass fence would imply a barrier the city does not own.
-        for (let j = 0; !groundCourt && j <= sections; j++) {
-          const t = guardStart + ((guardEnd - guardStart) * j) / sections,
-            y = a.y + rise * t;
-          for (const side of [-1, 1])
-            box(
-              rails,
-              a.x + dx * t + nx * side * 0.81,
-              y + 0.58,
-              a.z + dz * t + nz * side * 0.81,
-              0.055,
-              1.16,
-              0.055,
-            );
-        }
-        for (let j = 0; !groundCourt && j < sections; j++) {
-          const t =
-              guardStart + ((guardEnd - guardStart) * (j + 0.5)) / sections,
-            y = a.y + rise * t;
-          for (const side of [-1, 1]) {
-            const x = a.x + dx * t + nx * side * 0.81,
-              z = a.z + dz * t + nz * side * 0.81;
-            const rail = new BoxGeometry(
-              guardRun / sections + 0.04,
-              0.055,
-              0.055,
-            )
-              .rotateZ(Math.atan2(rise, run))
-              .rotateY(angle)
-              .translate(x, y + 1.14, z);
-            rails.push(rail);
-            box(
-              glazing,
-              x,
-              y + 0.52,
-              z,
-              Math.max(0.05, guardRun / sections - 0.08),
-              0.92,
-              0.018,
-              undefined,
-              angle,
-            );
-          }
-        }
-        // Corner landings cover the turn without a step or a loading seam.
-        if (turnsAtStart) {
-          box(decks, a.x, a.y - 0.1, a.z, 1.9, 0.2, 1.9, "#87988e");
-          // The two sides without an incoming/outgoing passage close the
-          // outside corner while leaving the actual walking turn unobstructed.
-          const prevRun = Math.hypot(a.x - previous.x, a.z - previous.z),
-            closed = [
-              {
-                x: (a.x - previous.x) / prevRun,
-                z: (a.z - previous.z) / prevRun,
-              },
-              { x: -dx / run, z: -dz / run },
-            ];
-          for (const side of closed) {
-            if (groundCourt) continue;
-            // Ground-level city access is a real third opening on this
-            // landing, rather than a walking motor passing through glass.
-            if (level === 0 && floor.city && i === 2 && side.z < -0.5) continue;
-            const groundFlight = level === 0 && !!floor.city && i === 2,
-              cornerRun = groundFlight ? 0.9 : 1.85,
-              cx = a.x + side.x * 0.9,
-              cz = a.z + side.z * 0.9 + (groundFlight ? 0.45 : 0),
-              cornerAngle = Math.atan2(-side.x, side.z);
-            box(
-              rails,
-              cx,
-              a.y + 1.14,
-              cz,
-              cornerRun,
-              0.055,
-              0.055,
-              undefined,
-              cornerAngle,
-            );
-            box(
-              glazing,
-              cx,
-              a.y + 0.52,
-              cz,
-              cornerRun - 0.1,
-              0.92,
-              0.018,
-              undefined,
-              cornerAngle,
-            );
-          }
         }
       }
-      const north = route.points[1],
-        east = route.points[2],
+    }
+    const posts = new Set<string>();
+    for (const bay of structure.guards) {
+      if (!bay.corner)
+        for (const [x, z, base] of [
+          [bay.x1, bay.y1, bay.base1],
+          [bay.x2, bay.y2, bay.base2],
+        ]) {
+          const key = `${x}/${z}/${base}`;
+          if (posts.has(key)) continue;
+          posts.add(key);
+          box(rails, x, base + 0.58, z, 0.055, 1.16, 0.055);
+        }
+      // Storm damage removes the entire glass and rail bay but leaves posts.
+      if (bay.broken) continue;
+      const dx = bay.x2 - bay.x1,
+        dz = bay.y2 - bay.y1,
+        run = Math.hypot(dx, dz),
+        rise = bay.base2 - bay.base1,
+        angle = -Math.atan2(dz, dx),
+        x = (bay.x1 + bay.x2) / 2,
+        z = (bay.y1 + bay.y2) / 2,
+        base = (bay.base1 + bay.base2) / 2;
+      rails.push(
+        new BoxGeometry(
+          Math.hypot(run, rise) + (bay.corner ? 0 : 0.04),
+          0.055,
+          0.055,
+        )
+          .rotateZ(Math.atan2(rise, run))
+          .rotateY(angle)
+          .translate(x, base + 1.14, z),
+      );
+      const pane = new BoxGeometry(
+          Math.max(0.05, run - (bay.corner ? 0.1 : 0.08)),
+          0.92,
+          0.018,
+        ),
+        vertices = pane.getAttribute("position");
+      for (let i = 0; i < vertices.count; i++)
+        vertices.setY(i, vertices.getY(i) + (vertices.getX(i) * rise) / run);
+      pane.computeVertexNormals();
+      glazing.push(pane.rotateY(angle).translate(x, base + 0.52, z));
+    }
+    for (const column of structure.columns)
+      box(
+        supports,
+        column.x,
+        column.top / 2,
+        column.y,
+        COLUMN_SIZE,
+        column.top,
+        COLUMN_SIZE,
+        "#4f6265",
+      );
+    for (let level = 0; level < game.floors.length - 1; level++) {
+      const route = buildStairRoute(game, {
+          fromFloor: level,
+          toFloor: level + 1,
+          origin: game.floors[level].stairs,
+          destination: game.floors[level + 1].entry,
+          until: 0,
+        }),
+        north = route.points[1],
         south = route.points[5];
-      for (const p of [east, route.points[4]]) {
-        // Columns belong at the outside edge, not through the walking line.
-        // One continuous column serves stacked landings and ends under the
-        // highest deck, avoiding duplicated faces and flush colored tops.
-        const x = p.x + 0.98,
-          top = p.y - 0.2,
-          key = `${x}/${p.z}`;
-        if (top > 0 && top > (columns.get(key)?.top ?? 0))
-          columns.set(key, { x, z: p.z, top });
-      }
       this.sign(
         north.x + 0.65,
         north.y + 1.6,
@@ -294,17 +234,19 @@ export class StairGallery {
         Math.PI,
       );
     }
-    for (const column of columns.values())
-      box(
-        supports,
-        column.x,
-        column.top / 2,
-        column.z,
-        0.2,
-        column.top,
-        0.2,
-        "#4f6265",
+    for (const portal of stairAccessPortals(game)) {
+      const mesh = new Mesh(
+        new PlaneGeometry(portal.width, portal.height),
+        this.field,
       );
+      mesh.name = `stair-access-field-${portal.kind}-${portal.floor}`;
+      mesh.position.set(portal.x, portal.base + portal.height / 2, portal.y);
+      mesh.rotation.y = portal.axis === "x" ? Math.PI / 2 : 0;
+      mesh.userData = { ...portal, oneWay: true };
+      this.group.add(mesh);
+      this.accessFields.push({ portal, mesh });
+    }
+    this.update(game);
     const foundation = buildCityStairFoundation(game);
     if (foundation) {
       const mesh = new Mesh(foundation, this.concrete);
@@ -326,6 +268,14 @@ export class StairGallery {
     this.merge(supports, this.concrete, "stair-support-columns");
     this.merge(rails, this.metal, "stair-handrails");
     this.merge(glazing, this.glass, "stair-glass-guards");
+  }
+
+  /** Personal permission can change while this persistent gallery is visible. */
+  update(game: Game) {
+    const human = game.survivors[0];
+    for (const { portal, mesh } of this.accessFields)
+      mesh.visible =
+        !!human && !devPass(human) && !human.access.includes(portal.floor);
   }
 
   private sign(
@@ -382,11 +332,13 @@ export class StairGallery {
       m.dispose();
     }
     this.signs.length = 0;
+    this.accessFields.length = 0;
   }
   dispose() {
     this.clear();
     this.concrete.dispose();
     this.metal.dispose();
     this.glass.dispose();
+    this.field.dispose();
   }
 }

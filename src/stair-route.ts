@@ -125,10 +125,12 @@ export function sampleStairRoute(
   throw Error("Stair route has no segments");
 }
 
-/** Logical floor changes only at the destination door. Sensing and contact
- * must nevertheless use the walker's physical height on a raised gallery. */
+/** Sensing and contact use physical elevation, including a reachable survivor
+ * on a desk, a stair walker or someone falling past the floor. */
 export function actorOnFloor(g: Game, actor: Actor, floor: number) {
   const travel = actor.stairTravel;
+  if (actor.elevated)
+    return Math.abs(actor.elevated.feet - floor * FLOOR_HEIGHT) <= 1.2;
   return travel?.walked === undefined
     ? actor.floor === floor
     : Math.abs(sampleStairRoute(g, travel).y - floor * FLOOR_HEIGHT) <= 0.9;

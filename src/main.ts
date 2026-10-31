@@ -162,6 +162,7 @@ let game: Game,
   active: string | undefined,
   tab: "tutor" | "group" = "tutor",
   keys = new Set<string>(),
+  jumpRequested = false,
   running = false,
   last = 0,
   acc = 0,
@@ -266,6 +267,7 @@ const firstPersonControls = new FirstPersonControls(canvas3d, {
   onUnlock: () => {
     pointerUnlockAt = performance.now();
     keys.clear();
+    jumpRequested = false;
     if (firstPersonPlaying() && !game.paused && !quitMenu) setPaused(true);
   },
   onRetry: () => {
@@ -725,11 +727,13 @@ function openPanel(id: string, focus: string) {
   menu.setAttribute("aria-labelledby", `${id}-title`);
   $("#pause-panels").scrollTop = 0;
   keys.clear();
+  jumpRequested = false;
   $(focus).focus();
 }
 function closePanel(id: string) {
   if (pausePanel !== id) return;
   keys.clear();
+  jumpRequested = false;
   showPauseHome(panelToggle(id));
 }
 $("#pause-back").onclick = () => {
@@ -746,6 +750,7 @@ function ownsKeyboard(target: EventTarget | null) {
 document.addEventListener("focusin", (ev) => {
   if (ownsKeyboard(ev.target)) {
     keys.clear();
+    jumpRequested = false;
     firstPersonControls.release();
   }
 });
@@ -754,6 +759,7 @@ function setPaused(paused: boolean) {
   const menu = $<HTMLDialogElement>("#pause-menu");
   const playing = simulationActive(game);
   keys.clear();
+  jumpRequested = false;
   acc = 0;
   if (paused) {
     firstPersonControls.release();
@@ -810,6 +816,7 @@ function setStudyMode(enabled: boolean) {
   if (saveRecoveryError) return;
   firstPersonControls.release();
   keys.clear();
+  jumpRequested = false;
   acc = 0;
   closeTerminal();
   if (enabled) {
@@ -1049,6 +1056,7 @@ async function fresh(statusLine?: HTMLElement) {
   lastQuestion = undefined;
   completionCursor = 0;
   keys.clear();
+  jumpRequested = false;
   closeTerminal();
   begin();
   return true;
@@ -1251,6 +1259,7 @@ function closeTerminal() {
   document.body.classList.remove("terminal-open");
   editor.blur();
   keys.clear();
+  jumpRequested = false;
   focusWorld();
   persist();
 }
@@ -1403,6 +1412,7 @@ async function interact() {
   }
   active = e.id;
   keys.clear();
+  jumpRequested = false;
   lastQuestion = e.id;
   game.lastStudyEncounter = e.id;
   if (e.mode === "solo") e.owner = "human";
@@ -2681,6 +2691,7 @@ $("#game-view").onchange = () => {
       : "first-person";
   viewFailedRun = "";
   keys.clear();
+  jumpRequested = false;
   syncGameView();
   void persist();
 };
@@ -2853,7 +2864,11 @@ window.addEventListener("keydown", (ev) => {
   keys.add(ev.code);
   if (ev.repeat) return;
   if (ev.code === "KeyE") void interact();
-  if (ev.code === "Space" && game.rules !== "force-fields") {
+  if (ev.code === "Space") {
+    if (game.rules === "force-fields") {
+      jumpRequested = true;
+      return;
+    }
     const a = human(game),
       { x, y } = moveInput(keys),
       n = Math.hypot(x, y);
@@ -2875,14 +2890,17 @@ window.addEventListener("keydown", (ev) => {
             ? "recovering"
             : "no-safe-faced-route",
     });
-    if (!jumped && !a.vault)
+    if (!jumped && !a.vault) {
+      jumpRequested = true;
       game.notice =
-        "Face a nearby barricade with a clear landing, then press Space.";
+        "Jumping. Face a nearby barricade with a clear landing to vault it.";
+    }
   }
 });
 window.addEventListener("keyup", (ev) => keys.delete(ev.code));
 window.addEventListener("blur", () => {
   keys.clear();
+  jumpRequested = false;
   persist();
 });
 window.addEventListener("pagehide", persist);
@@ -2893,6 +2911,7 @@ window.addEventListener("online", () => {
 document.addEventListener("visibilitychange", () => {
   if (document.visibilityState === "hidden") {
     keys.clear();
+    jumpRequested = false;
     void persist();
   }
 });
@@ -3019,10 +3038,10 @@ function ui() {
         : a.floor === CONFIG.floors
           ? "Reach the helipad and press E while a helicopter is boarding. Four seats per trip."
           : a.access.includes(a.floor)
-            ? "Your credential is personal. Walk into the staircase at the north edge of the floor."
+            ? "Your credential is personal. Walk into the staircase at the north edge of the floor. Space jumps; watch for broken guards."
             : game.rules === "force-fields"
-              ? "Solve a solo terminal for personal stair access and one key. Other entrance passes run out; the rear study hall stays open. E uses a key on red fields. Green fields still block zombies."
-              : "Find a glowing terminal. Solo work or meaningful shared-room defense can earn your credential. Walk into light furniture to push it; E grips heavier pieces to drag and pivot. Space jumps over barricades.";
+              ? "Solve a solo terminal for personal stair access and one key. Other entrance passes run out; the rear study hall stays open. E uses a key on red fields. Green fields still block zombies. Space jumps."
+              : "Find a glowing terminal. Solo work or meaningful shared-room defense can earn your credential. Walk into light furniture to push it; E grips heavier pieces to drag and pivot. Space jumps; facing a barricade vaults it.";
   $("#pickup").textContent =
     game.status === "escaped"
       ? `PICKUP ${game.helicopter.trip} · EXTRACTED`
@@ -3118,6 +3137,7 @@ function ui() {
       currentNativeQuestion() ?? unfinishedLastQuestion(game, lastQuestion);
     releaseStation(human(game));
     keys.clear();
+    jumpRequested = false;
     $("#terminal").hidden = true;
     document.body.classList.remove("terminal-open");
     finalQuestion = false;
@@ -3168,7 +3188,9 @@ function frame(time: number) {
         ...input,
         grab: false,
         stairWalk: firstPersonPlaying(),
+        jump: !focused && jumpRequested,
       });
+      jumpRequested = false;
       simulationMs += performance.now() - stepStarted;
       steps++;
       acc -= 1 / 30;

@@ -373,6 +373,14 @@ test("continuous stairs show supported treads, clear turns and the real next flo
       const pose = sampleStairRoute(game, travel);
       actor.x = pose.x;
       actor.y = pose.z;
+      actor.elevated = {
+        feet: pose.y,
+        vx: 0,
+        vy: 0,
+        vz: 0,
+        peak: pose.y,
+        grounded: true,
+      };
       view.render(game, Math.atan2(pose.tangent.y, pose.tangent.x), pitch, dt);
       maxCameraError = Math.max(
         maxCameraError,
@@ -523,6 +531,9 @@ test("continuous stairs show supported treads, clear turns and the real next flo
       ).__cityPreview,
       actor = game.survivors[0],
       before = renderAt(route.length);
+    // This renderer test supplies the completed physical landing; engine
+    // scenarios separately walk the route and exercise arrival detection.
+    actor.stairTravel.arrived = true;
     advanceStairs(game, actor);
     view.render(game, -Math.PI / 2, 0, 1 / 60);
     return {

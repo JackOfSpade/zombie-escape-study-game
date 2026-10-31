@@ -7,7 +7,7 @@
   "layout": "randomized",
   "rules": "force-fields",
   "simulation": "game",
-  "maxTicks": 764,
+  "maxTicks": 820,
   "startTime": 0,
   "naturalSpawns": false,
   "entities": [
@@ -45,26 +45,26 @@
   "actions": [
     {
       "tick": 1,
-      "type": "move",
+      "type": "walkTo",
       "id": "human",
-      "x": 0,
-      "y": -1,
-      "stairWalk": true
-    },
-    {
-      "tick": 29,
-      "type": "move",
-      "id": "human",
-      "x": 1,
+      "x": 22,
       "y": 0,
       "stairWalk": true
     },
     {
-      "tick": 238,
-      "type": "move",
+      "tick": 40,
+      "type": "walkTo",
       "id": "human",
-      "x": 0,
-      "y": 1,
+      "x": 45,
+      "y": 0,
+      "stairWalk": true
+    },
+    {
+      "tick": 265,
+      "type": "walkTo",
+      "id": "human",
+      "x": 45,
+      "y": 31,
       "stairWalk": true
     },
     {
@@ -72,42 +72,34 @@
       "type": "checkpoint"
     },
     {
-      "tick": 527,
-      "type": "move",
+      "tick": 565,
+      "type": "walkTo",
       "id": "human",
-      "x": -1,
-      "y": 0,
+      "x": 22,
+      "y": 31,
       "stairWalk": true
     },
     {
-      "tick": 736,
-      "type": "move",
+      "tick": 790,
+      "type": "walkTo",
       "id": "human",
-      "x": 0,
-      "y": -1,
-      "stairWalk": true
-    },
-    {
-      "tick": 755,
-      "type": "move",
-      "id": "human",
-      "x": 0,
-      "y": 0,
+      "x": 22,
+      "y": 27.5,
       "stairWalk": true
     }
   ],
   "checks": [
     {
-      "name": "The player remains on the departure floor while walking the outside gallery",
+      "name": "The body stands at the upper gallery elevation halfway through the walk",
       "mode": "at",
       "tick": 400,
       "query": {
         "type": "property",
         "id": "human",
-        "field": "floor"
+        "field": "elevation"
       },
       "op": "eq",
-      "expected": 0
+      "expected": 3.6
     },
     {
       "name": "Following every physical turn reaches the next floor",
@@ -123,7 +115,7 @@
     {
       "name": "Only one completed flight is recorded",
       "mode": "at",
-      "tick": 764,
+      "tick": 820,
       "query": {
         "type": "event",
         "event": "climb"
@@ -140,6 +132,17 @@
       },
       "op": "eq",
       "expected": 0
+    },
+    {
+      "name": "Walking every tread and landing causes no damage",
+      "mode": "always",
+      "query": {
+        "type": "property",
+        "id": "human",
+        "field": "hp"
+      },
+      "op": "eq",
+      "expected": 100
     }
   ]
 }

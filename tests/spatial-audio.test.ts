@@ -256,7 +256,7 @@ test("sampled impacts and synthesized fallbacks use the actual world emitter thr
   }
 });
 
-test("listener height and pitch match the continuous stair camera and source height changes distance", () => {
+test("listener height and pitch track a freely moving elevated body instead of the old stair rail", () => {
   const g = fixture(),
     audio = graph(),
     a = g.survivors[0];
@@ -269,13 +269,29 @@ test("listener height and pitch match the continuous stair camera and source hei
     walked: 0,
   };
   a.stairTravel.walked = buildStairRoute(g, a.stairTravel).length - 0.5;
-  const stair = sampleStairRoute(g, a.stairTravel);
+  const stair = sampleStairRoute(g, a.stairTravel),
+    original = { x: a.x, y: a.y };
+  // A lateral step and jump must reach the listener even though saved route
+  // progress still identifies the same gallery segment.
+  a.x = stair.x + 0.35;
+  a.y = stair.z - 0.2;
+  a.elevated = {
+    feet: stair.y + 0.65,
+    vx: 0.8,
+    vy: 0,
+    vz: -1,
+    peak: stair.y + 1.1,
+    grounded: false,
+  };
   audio.director.start();
   audio.director.update(g, { yaw: 0.7, pitch: 0.4 });
   const pose = listenerPose(g, { yaw: 0.7, pitch: 0.4 });
-  assert.equal(value(audio.listener, "positionY"), stair.y + 1.6);
-  assert.equal(value(audio.listener, "positionX"), stair.x);
-  assert.equal(value(audio.listener, "positionZ"), stair.z);
+  assert.ok(
+    Math.abs(value(audio.listener, "positionY") - (a.elevated.feet + 1.6)) <
+      1e-10,
+  );
+  assert.equal(value(audio.listener, "positionX"), a.x);
+  assert.equal(value(audio.listener, "positionZ"), a.y);
   assert.ok(
     Math.abs(
       pose.forward.x * pose.up.x +
@@ -283,7 +299,17 @@ test("listener height and pitch match the continuous stair camera and source hei
         pose.forward.z * pose.up.z,
     ) < 1e-10,
   );
+  delete a.elevated;
+  const legacy = listenerPose(g);
+  assert.equal(
+    legacy.y,
+    stair.y + 1.6,
+    "old walking saves retain their height until upgraded",
+  );
+  assert.equal(legacy.x, stair.x);
+  assert.equal(legacy.z, stair.z);
   delete a.stairTravel;
+  Object.assign(a, original);
   const mix = spatialMixer(g),
     near = mix({ x: 13.5, y: 15.5, floor: 0, height: 1.45 }),
     far = mix({ x: 22.5, y: 15.5, floor: 0, height: 1.45 }),

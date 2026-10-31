@@ -34,6 +34,8 @@ export interface Spawn extends Point {
 }
 export type Action = { tick: number } & (
   | { type: "move"; id: string; x: number; y: number; stairWalk?: boolean }
+  | { type: "walkTo"; id: string; x: number; y: number; stairWalk?: boolean }
+  | { type: "jump"; id: "human" }
   | { type: "door" | "grip" | "vault"; id: string; target: string }
   | { type: "spawn"; entity: Spawn }
   | { type: "pause"; paused: boolean }
@@ -55,6 +57,8 @@ export interface Check {
           | "hp"
           | "maxHp"
           | "floor"
+          | "elevation"
+          | "falling"
           | "alive"
           | "latched"
           | "absAngle";
@@ -389,6 +393,22 @@ export function parseScenario(value: string | unknown): Scenario {
           (s.simulation === "physics" || a.id === "human"),
         "Move actions control the player in game mode, or character motors in physics mode.",
       );
+    else if (a.type === "walkTo")
+      requireThat(
+        s.simulation === "game" &&
+          a.id === "human" &&
+          point(a, s.template === "building") &&
+          (a.stairWalk === undefined || typeof a.stairWalk === "boolean") &&
+          Object.keys(a).length === (a.stairWalk === undefined ? 5 : 6),
+        "WalkTo actions steer the human in game simulation toward a bounded world point.",
+      );
+    else if (a.type === "jump")
+      requireThat(
+        s.simulation === "game" &&
+          a.id === "human" &&
+          Object.keys(a).length === 3,
+        "Jump actions control the human in game simulation.",
+      );
     else if (["door", "grip", "vault"].includes(String(a.type)))
       requireThat(id(a.id) && id(a.target), "Invalid interaction IDs.");
     else requireThat(a.type === "checkpoint", "Unknown action type.");
@@ -460,6 +480,8 @@ export function parseScenario(value: string | unknown): Scenario {
             "hp",
             "maxHp",
             "floor",
+            "elevation",
+            "falling",
             "alive",
             "latched",
             "absAngle",
