@@ -1698,7 +1698,26 @@ for (const { storageFailure, provider } of [
     // learner work below are synthetic and never certify real human progress.
     let releaseReview: (() => void) | undefined;
     let calls = 0,
-      first: any;
+      first: any,
+      held: any,
+      released = false;
+    const reviewReply = (p: any) => ({
+      requestId: p.requestId,
+      sourceHash: p.sourceHash,
+      observationId: p.observation.id,
+      observationFingerprint: p.observation.fingerprint,
+      envId: p.definition.id,
+      classification: "observed",
+      learnerWork: true,
+      learnerWorkQuote: "I wrote and executed the tests",
+      reviewedOutputs: [
+        { kind: "supplied-output", excerpt: "one browser test passed" },
+      ],
+      covered: ["Synthetic complete test scope"],
+      remaining: [],
+      completeScope: true,
+      rationale: "Synthetic only <script>window.badReview=true</script>",
+    });
     await page.route("**/api/status", (route) =>
       route.fulfill({
         json: {
@@ -1723,30 +1742,46 @@ for (const { storageFailure, provider } of [
         return;
       }
       expect(p).toEqual(first);
+      if (provider === "chatgpt-handoff") {
+        // A handoff relay acknowledges the queued job at once (202 receipt)
+        // and the client polls /api/bridge/result; the submission itself has
+        // a short per-attempt deadline (bridge-client.ts, aed2f79).
+        held = p;
+        releaseReview = () => {
+          released = true;
+        };
+        await route.fulfill({
+          status: 202,
+          json: {
+            handoff: { id: p.requestId, hash: `synthetic-${p.requestId}` },
+          },
+        });
+        return;
+      }
       await new Promise<void>((resolve) => {
         releaseReview = resolve;
       });
-      await route.fulfill({
-        json: {
-          requestId: p.requestId,
-          sourceHash: p.sourceHash,
-          observationId: p.observation.id,
-          observationFingerprint: p.observation.fingerprint,
-          envId: p.definition.id,
-          classification: "observed",
-          learnerWork: true,
-          learnerWorkQuote: "I wrote and executed the tests",
-          reviewedOutputs: [
-            { kind: "supplied-output", excerpt: "one browser test passed" },
-          ],
-          covered: ["Synthetic complete test scope"],
-          remaining: [],
-          completeScope: true,
-          rationale: "Synthetic only <script>window.badReview=true</script>",
-        },
-      });
+      await route.fulfill({ json: reviewReply(p) });
+    });
+    await page.route("**/api/bridge/result?**", (route) => {
+      const url = new URL(route.request().url());
+      expect(provider).toBe("chatgpt-handoff");
+      expect(url.searchParams.get("id")).toBe(held?.requestId);
+      expect(url.searchParams.get("hash")).toBe(`synthetic-${held?.requestId}`);
+      return released
+        ? route.fulfill({ json: reviewReply(held) })
+        : route.fulfill({
+            status: 202,
+            json: { handoff: { id: held.requestId, status: "working" } },
+          });
     });
     await page.goto("/");
+    // This review never needs the first-person city. Software WebGL makes
+    // each of its frames cost seconds and starves every later UI step.
+    await page.waitForFunction(() => !!(window as any).__deadAir);
+    await page.evaluate(() => {
+      (window as any).__deadAir.game.settings.view = "top-down";
+    });
     await page.getByRole("button", { name: "Enter the building" }).click();
     const before = await page.evaluate(async () => {
       const g = (window as any).__deadAir.game,
