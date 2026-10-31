@@ -17,7 +17,6 @@ import {
   parseRunContentRepairCandidate,
   parseSavedRunDesign,
   parseEnvironmentSummaries,
-  summarizeEnvironment,
   type EnvironmentSummary,
   type RunStructureV3,
   type StructureRunDesignRequest,
@@ -27,6 +26,14 @@ import {
   type SavedRunDesign,
 } from "./run-design-contract.mjs";
 import type { ProvisionalRun } from "./world";
+import {
+  createQualityDraft,
+  parseQualityDraft,
+  prepareQualityRun,
+  retryQualityDraft,
+  type QualityDesignDraft,
+} from "./run-quality-designer";
+import { summarizeQualityEnvironment } from "./environment-history";
 
 type LegacyRequest = Extract<RunDesignRequest, { version: 1 }>;
 interface DraftIdentity {
@@ -47,13 +54,16 @@ export interface AuthoredDesignDraft extends DraftIdentity {
   /** A saved repair awaits an explicit Retry after exhausting a phase's budget. */
   exhausted: boolean;
 }
-export type DesignDraft = LegacyDesignDraft | AuthoredDesignDraft;
+export type DesignDraft =
+  LegacyDesignDraft | AuthoredDesignDraft | QualityDesignDraft;
 const DRAFT_KEY = "dead-air-run-design-draft-v1";
 const HISTORY_KEY = "dead-air-run-design-history-v1";
 const CONTENT_HISTORY_KEY = "dead-air-environment-history-v1";
 export const DESIGN_ATTEMPTS = 3;
 
 export function parseDesignDraft(value: unknown): DesignDraft {
+  if ((value as { version?: unknown } | null)?.version === 3)
+    return parseQualityDraft(value);
   const d = value as DesignDraft;
   if (
     !d ||
@@ -174,7 +184,7 @@ export function rememberDesign(saved: SavedRunDesign) {
     JSON.stringify([next, ...recent].slice(0, 5)),
   );
   if (saved.design.version === 3) {
-    const summary = summarizeEnvironment(saved.design.environment);
+    const summary = summarizeQualityEnvironment(saved.design.environment);
     localStorage.setItem(
       CONTENT_HISTORY_KEY,
       JSON.stringify(
@@ -188,7 +198,8 @@ export function rememberDesign(saved: SavedRunDesign) {
     );
   }
 }
-export function newDesignDraft(
+/** Historical two-phase drafts remain supported without upgrading their packets. */
+export function newAuthoredDesignDraft(
   targetRunId: string,
   seed: number,
   recent = recentDesigns(),
@@ -218,8 +229,30 @@ export function newDesignDraft(
     exhausted: false,
   };
 }
+export function newDesignDraft(
+  targetRunId: string,
+  seed: number,
+  recent = recentDesigns(),
+  recentContent = recentEnvironment(),
+): QualityDesignDraft {
+  const identity = newAuthoredDesignDraft(
+    targetRunId,
+    seed,
+    recent,
+    recentContent,
+  );
+  return createQualityDraft({
+    targetRunId,
+    chatCode: identity.chatCode,
+    generationId: identity.request.generationId,
+    seed,
+    recent,
+    recentContent,
+  });
+}
 /** Only an explicit UI retry starts another bounded repair cycle. */
 export function retryDesignDraft(draft: DesignDraft) {
+  if (draft.version === 3) return retryQualityDraft(draft);
   if (draft.version === 2 && draft.exhausted) {
     draft.attempts[draft.request.phase] = 1;
     draft.exhausted = false;
@@ -270,6 +303,7 @@ export async function prepareDesignedRun<T>(
         isActive: () => !signal.aborted,
       });
     });
+  if (draft.version === 3) return prepareQualityRun(draft, options, send);
   if (draft.version === 2) return prepareAuthoredRun(draft, options, send);
   for (let attempt = 0; attempt < DESIGN_ATTEMPTS; attempt++) {
     options.signal.throwIfAborted();
@@ -485,5 +519,9 @@ async function prepareAuthoredRun<T>(
 }
 
 export function designChatPrompt(draft: DesignDraft) {
-  return `Design my new zombie-escape-study-game run. Call get_current_study_question with chat: "${draft.chatCode}" and use this chat code on every fetch in this chat. Follow the game's captured design contract, then return the requested structure or object writing and artwork with finish_study_preparation. Follow any bound next design phase or repair continuation; stop when the game has no further design request. This is fictional world design, not a study conversation. Do not fetch another chat's work. If the tools lack the chat argument, ask me to refresh the zombie-escape-study-game plugin tools.`;
+  const purpose =
+    draft.version === 3
+      ? "Prioritize creative quality and meaningful variety over startup speed. Follow each captured concept, selection, authoring or review stage; make evidence-based improvements until the game's review process finishes."
+      : "Return the requested structure or object writing and artwork.";
+  return `Design my new zombie-escape-study-game run. Call get_current_study_question with chat: "${draft.chatCode}" and use this chat code on every fetch in this chat. Follow the game's captured design contract. ${purpose} Submit each captured stage with finish_study_preparation. Follow any bound next design phase or repair continuation; stop when the game has no further design request. This is fictional world design, not a study conversation. Do not fetch another chat's work. If the tools lack the chat argument, ask me to refresh the zombie-escape-study-game plugin tools.`;
 }

@@ -324,6 +324,22 @@ export function environmentDuplicateErrors(content) {
   return errors;
 }
 
+/** The same normalized exact/near-copy policy used by in-run duplicate checks. */
+export function environmentTextIsNearCopy(left, right) {
+  const a = normalizeEnvironmentText(left),
+    b = normalizeEnvironmentText(right);
+  if (!a || !b) return false;
+  if (a === b) return true;
+  if (Math.min(a.length, b.length) < 40) return false;
+  const A = new Set(a.split(" ")),
+    B = new Set(b.split(" "));
+  return (
+    similarity(shingles(a), shingles(b)) >= 0.78 ||
+    (Math.min(A.size, B.size) >= 8 && similarity(A, B) >= 0.9) ||
+    editSimilarity(a, b, characterGrams(a), characterGrams(b)) >= 0.88
+  );
+}
+
 const mechanicClaims = [
   /\b(?:do not|don t) need (?:any )?(?:keys?|clearance|permission|terminal completion)\b/u,
   /\bno (?:keys?|clearance|permission|terminal(?: completion)?|access) (?:is |are )?(?:needed|required|necessary)\b/u,
@@ -459,7 +475,13 @@ function drawing(value, p, totals) {
   totals.primitives += value.primitives.length;
   totals.points += points;
 }
-function parseContent(value, structure, surfaces, repair = false) {
+function parseContent(
+  value,
+  structure,
+  surfaces,
+  repair = false,
+  partial = false,
+) {
   bounded(value, ENVIRONMENT_LIMITS.contentBytes, "content");
   object(
     value,
@@ -536,6 +558,16 @@ function parseContent(value, structure, surfaces, repair = false) {
         ),
         `${p} branding needs a label, plaque, poster or sign`,
       );
+    if (partial)
+      fail(
+        f.surfaces.every((member) => {
+          const slot = slots.get(member);
+          return (
+            fragmentText(f).length <= Math.max(slot.maxTitle, slot.maxBody)
+          );
+        }),
+        `${p} cannot fit every declared member surface`,
+      );
     fragments.set(f.id, f);
     usage.set(f.id, new Set());
   });
@@ -543,7 +575,7 @@ function parseContent(value, structure, surfaces, repair = false) {
     totals = { primitives: 0, points: 0 };
   array(
     value.entries,
-    repair ? 0 : checked.length,
+    repair || partial ? 0 : checked.length,
     repair ? 1024 : checked.length,
     "entries",
     (e, p) => {
@@ -619,7 +651,12 @@ function parseContent(value, structure, surfaces, repair = false) {
   );
   for (const f of value.fragments)
     fail(
-      repair || usage.get(f.id).size === f.surfaces.length,
+      repair ||
+        (partial
+          ? f.surfaces.every(
+              (member) => !ids.has(member) || usage.get(f.id).has(member),
+            )
+          : usage.get(f.id).size === f.surfaces.length),
       `fragment ${f.id} has unused members`,
     );
   fail(
@@ -638,6 +675,11 @@ function parseContent(value, structure, surfaces, repair = false) {
 }
 export function parseEnvironmentContent(value, structure, surfaces) {
   return parseContent(value, structure, surfaces);
+}
+/** Strict accumulating content: only entries and declared fragment members that
+ * have not been authored yet may be absent. Never use this for accepted saves. */
+export function parseEnvironmentPartialContent(value, structure, surfaces) {
+  return parseContent(value, structure, surfaces, false, true);
 }
 export function parseEnvironmentRepairCandidate(value, structure, surfaces) {
   return parseContent(value, structure, surfaces, true);

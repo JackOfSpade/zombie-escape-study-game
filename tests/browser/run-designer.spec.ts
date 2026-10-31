@@ -1,5 +1,11 @@
 import { readFileSync } from "node:fs";
-import { expect, test, type Page } from "./helpers/offline-test";
+import { expect as baseExpect, test, type Page } from "./helpers/offline-test";
+import { qualityFixtureReply } from "../helpers/quality-design";
+import { qualityContentBatches } from "../../src/run-quality-contract.mjs";
+
+// Synthetic preparation now exercises thirty captured stages rather than two.
+const expect = baseExpect.configure({ timeout: 30_000 });
+test.describe.configure({ timeout: 90_000 });
 
 const harbor = JSON.parse(
   readFileSync("tests/fixtures/run-designs/harbor-inscriptions.json", "utf8"),
@@ -10,6 +16,17 @@ const orchard = JSON.parse(
     "utf8",
   ),
 );
+const harborPhases = [
+  "concepts",
+  "selection",
+  "structure",
+  "structure-review",
+  "content-plan",
+  ...qualityContentBatches(harbor.environment.surfaces).map(
+    () => "content-batch",
+  ),
+  "content-review",
+];
 
 async function designer(page: Page) {
   const calls: any[] = [],
@@ -19,11 +36,17 @@ async function designer(page: Page) {
     pending = new Map<string, (design: object) => void>();
   let capable = true,
     queued = false,
-    queuedPhase: "structure" | "content" = "structure",
+    queuedPhase = "concepts",
     delayed = false,
     failedPoll = false;
   let answer = (_body: any) => harbor;
+  let editReply = (_body: any, response: any) => response;
   const reply = (body: any, proposed: any) => {
+    if (body.payload.version === 3)
+      return editReply(
+        body,
+        qualityFixtureReply(body.payload, proposed, [harbor, orchard]),
+      );
     const requestId = body.payload.requestId;
     if (body.payload.phase === "structure") {
       const { environment: _environment, ...structure } = proposed;
@@ -87,7 +110,7 @@ async function designer(page: Page) {
         return json({ error: "Unexpected synthetic operation" }, 400);
       calls.push(body);
       const id = body.payload.requestId;
-      if (delayed && body.payload.phase === "structure") {
+      if (delayed && body.payload.phase === "concepts") {
         const design = await new Promise<object>((resolve) =>
           pending.set(id, resolve),
         );
@@ -120,7 +143,7 @@ async function designer(page: Page) {
     setCapable(value: boolean) {
       capable = value;
     },
-    setQueued(value: boolean, phase: "structure" | "content" = "structure") {
+    setQueued(value: boolean, phase = "concepts") {
       queued = value;
       queuedPhase = phase;
     },
@@ -132,6 +155,9 @@ async function designer(page: Page) {
     },
     setAnswer(value: (body: any) => any) {
       answer = value;
+    },
+    setReply(value: (body: any, response: any) => any) {
+      editReply = value;
     },
     finish(call: any, design = harbor) {
       const waiting = pending.get(call.payload.requestId);
@@ -193,13 +219,11 @@ test("new-game AI design reaches the full app and a saved reload keeps the exact
   await expect.poll(async () => (await state(page)).status).toBe("playing");
   await pause(page);
   const before = await state(page);
-  expect(relay.calls).toHaveLength(2);
+  expect(relay.calls).toHaveLength(harborPhases.length);
   expect(relay.calls[0].provider).toBe("chatgpt-handoff");
   expect(relay.calls[0].payload.designVersion).toBe(3);
-  expect(relay.calls.map((c) => c.payload.phase)).toEqual([
-    "structure",
-    "content",
-  ]);
+  expect(relay.calls[0].payload.version).toBe(3);
+  expect(relay.calls.map((c) => c.payload.phase)).toEqual(harborPhases);
   expect(before.design.design.version).toBe(3);
   expect(before.environments[0].entries.length).toBeGreaterThan(50);
   expect(before.scenes[0].props.length).toBeGreaterThan(0);
@@ -225,7 +249,7 @@ test("new-game AI design reaches the full app and a saved reload keeps the exact
   expect(restored.floorNames).toEqual(before.floorNames);
   expect(restored.names).toEqual(before.names);
   expect(restored.environments).toEqual(before.environments);
-  expect(relay.calls).toHaveLength(2);
+  expect(relay.calls).toHaveLength(harborPhases.length);
   await expect(page.locator("#run-design-dialog")).toHaveCount(0);
 });
 
@@ -282,35 +306,39 @@ test("reloading a pending design retries the same captured request and chat rath
   await expect
     .poll(async () => (await state(page)).design?.design.title)
     .toBe(harbor.title);
-  expect(relay.calls).toHaveLength(3);
+  expect(relay.calls).toHaveLength(harborPhases.length + 1);
 });
 
 test("reloading while individual writing is pending retains the exact object inventory and content request", async ({
   page,
 }) => {
   const relay = await designer(page);
-  relay.setQueued(true, "content");
+  relay.setQueued(true, "content-batch");
   await open(page);
   const original = await state(page);
   await page.locator("#start").click();
-  await expect.poll(() => relay.calls.length).toBe(2);
-  const captured = structuredClone(relay.calls[1]);
-  expect(captured.payload.phase).toBe("content");
+  await expect
+    .poll(() => relay.calls.at(-1)?.payload.phase)
+    .toBe("content-batch");
+  const index = relay.calls.length - 1;
+  const captured = structuredClone(relay.calls[index]);
+  expect(captured.payload.phase).toBe("content-batch");
   expect(captured.payload.surfaces).toEqual(harbor.environment.surfaces);
   expect((await state(page)).id).toBe(original.id);
   await flush(page);
   await page.reload();
   await page.waitForFunction(() => !!(window as any).__deadAir);
   await page.locator("#start").click();
-  await expect.poll(() => relay.calls.length).toBe(3);
-  expect(relay.calls[2]).toEqual(captured);
+  await expect.poll(() => relay.calls.length).toBe(index + 2);
+  expect(relay.calls[index + 1]).toEqual(captured);
   expect((await state(page)).id).toBe(original.id);
+  relay.setQueued(false);
   relay.finish(captured);
   await expect.poll(async () => (await state(page)).status).toBe("playing");
   expect((await state(page)).design.design.environment).toEqual(
     harbor.environment,
   );
-  expect(relay.calls).toHaveLength(3);
+  expect(relay.calls).toHaveLength(harborPhases.length + 1);
 });
 
 test("restart sends recent fictional designs and repairs a repeated design before replacing the run", async ({
@@ -330,7 +358,9 @@ test("restart sends recent fictional designs and repairs a repeated design befor
   const after = await state(page);
   expect(after.id).not.toBe(before.id);
   expect(after.tiles).not.toEqual(before.tiles);
-  expect(relay.calls).toHaveLength(5);
+  expect(
+    relay.calls.filter((c) => c.payload.phase === "content-review"),
+  ).toHaveLength(2);
   const structureCalls = relay.calls.filter(
     (c) => c.payload.phase === "structure",
   );
@@ -343,14 +373,97 @@ test("restart sends recent fictional designs and repairs a repeated design befor
   expect(repair.payload.requestId).not.toBe(repeat.payload.requestId);
   expect(repair.chatCode).toBe(repeat.chatCode);
   expect(Object.keys(repeat.payload).sort()).toEqual([
+    "concept",
     "designVersion",
     "generationId",
     "phase",
+    "rationale",
     "recent",
+    "recentContent",
     "requestId",
     "seed",
     "version",
   ]);
+});
+
+test("editorial review resumes exactly after reload and revises only its identified object before play", async ({
+  page,
+}) => {
+  const relay = await designer(page);
+  const slot = harbor.environment.surfaces.find(
+    (s: any) => s.floor === 0 && s.role === "wall-poster" && s.maxBody >= 100,
+  );
+  const entry = harbor.environment.entries.find(
+    (e: any) => e.surfaceId === slot.id,
+  );
+  const revisedBody = `${harbor.roster[0].name} kept Wednesday's ferry sketches beside the brass visitor ledger. The last page is unfinished.`;
+  let reviews = 0;
+  relay.setReply((body, response) => {
+    if (body.payload.phase === "content-review" && ++reviews === 1)
+      return {
+        requestId: body.payload.requestId,
+        findings: [
+          {
+            id: "specific-occupant-evidence",
+            priority: "major",
+            target: `surface:${slot.id}`,
+            problem:
+              "The poster gives little evidence of the room's previous occupant.",
+            evidence: `The current title is ${entry.title.map((p: any) => p.text ?? "").join("")}.`,
+            recommendation:
+              "Add a concrete ordinary workplace trace tied to the room's artifacts.",
+          },
+        ],
+      };
+    if (body.payload.phase === "content-revision")
+      return {
+        ...response,
+        entries: response.entries.map((e: any) => ({
+          ...e,
+          body: [{ text: revisedBody }],
+          layout: e.drawing ? "mixed" : "text",
+        })),
+      };
+    return response;
+  });
+  relay.setQueued(true, "content-review");
+  await open(page);
+  const original = await state(page);
+  await page.locator("#start").click();
+  await expect
+    .poll(() => relay.calls.at(-1)?.payload.phase)
+    .toBe("content-review");
+  const reviewIndex = relay.calls.length - 1;
+  const captured = structuredClone(relay.calls[reviewIndex]);
+  expect(captured.payload.content.entries).toHaveLength(
+    harbor.environment.entries.length,
+  );
+  expect((await state(page)).id).toBe(original.id);
+  await flush(page);
+  await page.reload();
+  await page.waitForFunction(() => !!(window as any).__deadAir);
+  await page.locator("#start").click();
+  await expect.poll(() => relay.calls.length).toBe(reviewIndex + 2);
+  expect(relay.calls.at(-1)).toEqual(captured);
+  expect((await state(page)).id).toBe(original.id);
+  relay.setQueued(false);
+  relay.finish(captured);
+  await expect.poll(async () => (await state(page)).status).toBe("playing");
+  const after = await state(page);
+  const entries = after.design.design.environment.entries;
+  expect(entries.find((e: any) => e.surfaceId === slot.id).body).toEqual([
+    { text: revisedBody },
+  ]);
+  expect(entries.filter((e: any) => e.surfaceId !== slot.id)).toEqual(
+    harbor.environment.entries.filter((e: any) => e.surfaceId !== slot.id),
+  );
+  expect(
+    relay.calls.slice(reviewIndex + 2).map((c) => c.payload.phase),
+  ).toEqual(["content-revision", "content-review"]);
+  await pause(page);
+  await page.reload();
+  await page.waitForFunction(() => !!(window as any).__deadAir);
+  expect((await state(page)).design).toEqual(after.design);
 });
 
 test("a late result from a cancelled design cannot replace the current run or the next design", async ({
@@ -381,7 +494,7 @@ test("a late result from a cancelled design cannot replace the current run or th
     .toBe(orchard.title);
   const content = relay.calls.find(
     (call) =>
-      call.payload.phase === "content" &&
+      call.payload.phase === "content-review" &&
       call.payload.generationId === current.payload.generationId,
   );
   expect(content).toBeDefined();
@@ -419,7 +532,7 @@ test("cancelling before the bridge replies ignores that delayed reply while anot
     .toBe(orchard.title);
   const content = relay.calls.find(
     (call) =>
-      call.payload.phase === "content" &&
+      call.payload.phase === "content-review" &&
       call.payload.generationId === current.payload.generationId,
   );
   expect(content).toBeDefined();
@@ -472,7 +585,7 @@ test("looking at an authored object reveals its readable caption without replaci
   page,
 }) => {
   // The full first-person scene compiles on software WebGL in hosted CI.
-  test.setTimeout(90_000);
+  test.setTimeout(120_000);
   await designer(page);
   await open(page);
   await page.locator("#start").click();

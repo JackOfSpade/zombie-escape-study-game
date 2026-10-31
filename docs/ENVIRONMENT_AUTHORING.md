@@ -1,6 +1,6 @@
 # Individual environmental writing and artwork
 
-New version 3 runs author actual instances through the existing ChatGPT bridge. The engine first builds and validates the proposed world, then supplies its complete eligible surface inventory to the designer. Every surface needs exactly one accepted content entry. IDs identify walls, furniture, props and city faces; they do not depend on a game UUID or the order of unrelated objects.
+New version 3 runs author actual instances through the existing ChatGPT bridge. The engine builds and validates the proposed world, then supplies its complete eligible surface inventory to the designer. Fresh quality requests establish room stories before writing batches of at most 24 objects, followed by global editorial review and targeted revision. Every surface needs exactly one accepted content entry. IDs identify walls, furniture, props and city faces; they do not depend on a game UUID or the order of unrelated objects.
 
 ## What the designer can customize
 
@@ -22,7 +22,7 @@ The complete synthetic harbor fixture contains 287 surfaces; the observatory fix
 
 The content request includes the fictional premise, room purposes, roster relationships, ownership and local object context. Guidance asks for varied subjects, tone, length and presentation, mixing ordinary workplace traces with evacuation stories and evidence of previous occupants.
 
-Normalized duplicate checks compare individual prose and visible drawing descriptions independently of titles, including Unicode and punctuation changes. Longer near-copies are compared by shared token sequences and edit similarity. A different object ID or renamed title cannot conceal a copied passage. Up to five recent writing summaries, including readable artwork descriptions and composition summaries, discourage recurrence across new runs.
+Normalized duplicate checks compare individual prose and visible drawing descriptions independently of titles, including Unicode and punctuation changes. Longer near-copies are compared by shared token sequences and edit similarity. A different object ID or renamed title cannot conceal a copied passage. Up to five recent writing summaries, including readable artwork descriptions and composition summaries, inform new requests. Fresh quality generation checks reused prose and artwork against this history, while its editorial review considers repeated subjects and compositions. New history sampling represents floors, room groups, surface roles and different lengths of writing.
 
 Deliberate repetition uses explicitly declared fragments with named member surfaces and a reason: consistent branding, connected clues, or an approved directional fact. Ordinary text around a fragment still receives duplicate checks. A fragment is not a blanket exemption for copying every object. Directional facts come from engine-owned constants; fictional clues cannot change credentials, keys, rewards or extraction rules.
 
@@ -44,7 +44,7 @@ Rendering uses padded shared texture atlases, aspect-aware text layout and insta
 
 The accepted version 3 design stores the original surface inventory and all writing and artwork. Save decoding validates canonical bindings without generating replacement text or re-enumerating moved furniture. Checkpoints and offline replays retain identical object content. Historical version 1 and 2 designs keep their existing shared textures and single-phase request behavior.
 
-Pending version 3 drafts retain their exact phase, request ID, chat code, captured history, inventory fingerprint, builder version and attempt budget. Reload rebuilds only the private candidate and verifies it against the captured inventory before resuming. A changed builder cannot silently attach old writing to new objects. Retry, cancellation, late-result rejection and explicit procedural fallback retain their existing purpose.
+Pending drafts retain their exact phase, request ID, chat code, captured history, inventory fingerprint, builder version and attempt budget. Quality draft version 3 additionally retains accepted batches and compact review/convergence state, without copying every prior full request. Reload rebuilds only the private candidate and verifies it against the captured inventory before resuming. A changed builder cannot silently attach old writing to new objects. Retry, cancellation, late-result rejection and explicit procedural fallback retain their existing purpose. Retained request/draft version 2 continues its original two-phase behavior without an automatic upgrade.
 
 ## Remaining fixed or shared content
 
