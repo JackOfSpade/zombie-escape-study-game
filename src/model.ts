@@ -589,6 +589,8 @@ export interface Settings {
   handoffAutonomous?: boolean;
   /** Temporary contextual computer speech; no clips are included in saves. */
   npcVoices?: boolean;
+  /** Developer playtesting switch mirrored into DEV.passAllDoors. */
+  passAllDoors?: boolean;
   volume: number;
   captions: boolean;
   reducedFlash: boolean;
@@ -642,10 +644,11 @@ export interface Game {
 }
 export const W = 44,
   H = 34;
-/** Developer switches for manual playtesting. Keep false in commits that ship. */
+/** Developer switches for manual playtesting, driven by the settings panel. */
 export const DEV = {
   /** The player passes every red force field and climbs every staircase
-   * without a key or terminal credential. NPCs and zombies are unaffected. */
+   * without a key or terminal credential. NPCs and zombies are unaffected.
+   * Mirrors Game.settings.passAllDoors every frame. */
   passAllDoors: false,
 };
 /** Whether DEV mode lets this actor through any locked door or staircase. */
