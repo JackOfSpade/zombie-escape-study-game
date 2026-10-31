@@ -1,4 +1,11 @@
-import { bridgeRequest, status, type HandoffProgress } from "./bridge-client";
+import {
+  bridgeRequest,
+  discardRunDesign,
+  isHandoffReceipt,
+  status,
+  type HandoffProgress,
+  type HandoffReceipt,
+} from "./bridge-client";
 import {
   parseRunDesignRequest,
   parseRunDesignReply,
@@ -15,6 +22,7 @@ export interface DesignDraft {
   targetRunId: string;
   chatCode: string;
   request: RunDesignRequest;
+  receipt?: HandoffReceipt & { requestId: string };
 }
 const DRAFT_KEY = "dead-air-run-design-draft-v1";
 const HISTORY_KEY = "dead-air-run-design-history-v1";
@@ -30,11 +38,26 @@ export function parseDesignDraft(value: unknown): DesignDraft {
     !/^[A-Z0-9]{6,16}$/.test(d.chatCode)
   )
     throw Error("Invalid saved run-design request");
+  const request = parseRunDesignRequest(d.request);
+  if (
+    d.receipt !== undefined &&
+    (!isHandoffReceipt(d.receipt) || d.receipt.requestId !== request.requestId)
+  )
+    throw Error("Invalid saved run-design receipt");
   return {
     version: 1,
     targetRunId: d.targetRunId,
     chatCode: d.chatCode,
-    request: parseRunDesignRequest(d.request),
+    request,
+    ...(d.receipt
+      ? {
+          receipt: {
+            requestId: request.requestId,
+            id: d.receipt.id,
+            hash: d.receipt.hash,
+          },
+        }
+      : {}),
   };
 }
 export function recentDesigns(): RunDesignSummary[] {
@@ -68,6 +91,13 @@ export function clearDesignDraft(targetRunId: string) {
     // Explicit cancellation/fallback can discard an unreadable design draft.
     // This key contains fictional generation requests, never a game or learner save.
     localStorage.removeItem(DRAFT_KEY);
+  }
+}
+/** A settled request may still be queued; explicit dismissal cancels its receipt. */
+export async function cancelDesignDraft(draft: DesignDraft | undefined) {
+  if (draft?.receipt) {
+    const current = parseDesignDraft(draft);
+    await discardRunDesign(current.receipt!);
   }
 }
 export function rememberDesign(saved: SavedRunDesign) {
@@ -132,6 +162,12 @@ export async function prepareDesignedRun<T>(
       return bridgeRequest("design-run", request, progress, {
         signal,
         chatCode: current.chatCode,
+        onQueued: async (receipt) => {
+          // A delayed receipt must not recreate a draft that Cancel just removed.
+          if (signal.aborted) return;
+          current.receipt = { ...receipt, requestId: request.requestId };
+          await options.capture(current);
+        },
         nativeScope: { runId: request.generationId, encounterId: "run-design" },
         isActive: () => !signal.aborted,
       });
@@ -174,6 +210,7 @@ export async function prepareDesignedRun<T>(
       }
     }
     // The previous reply stays immutable. A repair is a new, correlated job.
+    delete draft.receipt;
     draft.request = parseRunDesignRequest({
       ...draft.request,
       requestId: `design-${crypto.randomUUID()}`,

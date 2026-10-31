@@ -3,6 +3,7 @@ import type { Game, Roadmap } from "./model";
 import { createPlayableGame } from "./world";
 import {
   clearDesignDraft,
+  cancelDesignDraft,
   designChatPrompt,
   newDesignDraft,
   prepareDesignedRun,
@@ -45,6 +46,7 @@ export async function chooseRunDesign(
     closed = true;
     active?.abort();
     if (!choice?.saved) {
+      void cancelDesignDraft(draft).catch(() => {});
       try {
         clearDesignDraft(game.id);
       } catch {

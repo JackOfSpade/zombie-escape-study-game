@@ -16,7 +16,8 @@ async function designer(page: Page) {
     pending = new Map<string, (design: object) => void>();
   let capable = true,
     queued = false,
-    delayed = false;
+    delayed = false,
+    failedPoll = false;
   let answer = (_body: any) => harbor;
   await page.addInitScript(() => {
     const random = crypto.getRandomValues.bind(crypto);
@@ -86,6 +87,8 @@ async function designer(page: Page) {
         cancelled.push(id);
         return json({ cancelled: true });
       }
+      if (failedPoll)
+        return json({ error: "Synthetic design request interrupted" }, 409);
       return results.has(id)
         ? json(results.get(id))
         : json({ handoff: { id, status: "queued" } }, 202);
@@ -104,6 +107,9 @@ async function designer(page: Page) {
     },
     setDelayed(value: boolean) {
       delayed = value;
+    },
+    setFailedPoll(value: boolean) {
+      failedPoll = value;
     },
     setAnswer(value: (body: any) => any) {
       answer = value;
@@ -343,4 +349,43 @@ test("cancelling before the bridge replies ignores that delayed reply while anot
     .poll(async () => (await state(page)).design?.design.title)
     .toBe(orchard.title);
   expect((await state(page)).design.requestId).toBe(current.payload.requestId);
+});
+
+test("settled design failures retain receipts until Cancel, Escape or explicit procedural fallback", async ({
+  page,
+}) => {
+  const relay = await designer(page);
+  relay.setQueued(true);
+  relay.setFailedPoll(true);
+  await open(page);
+  const before = await state(page);
+  for (const dismissal of ["cancel", "escape", "procedural"]) {
+    await page.locator("#start").click();
+    await expect(page.locator("#run-design-status")).toContainText(
+      "Synthetic design request interrupted",
+    );
+    await expect(page.locator("#run-design-retry")).toBeEnabled();
+    const call = relay.calls.at(-1)!;
+    expect(relay.cancelled).not.toContain(call.payload.requestId);
+    const receipt = await page.evaluate(
+      () =>
+        JSON.parse(localStorage.getItem("dead-air-run-design-draft-v1")!)
+          .receipt,
+    );
+    expect(receipt.requestId).toBe(call.payload.requestId);
+    if (dismissal === "escape") await page.keyboard.press("Escape");
+    else await page.locator(`#run-design-${dismissal}`).click();
+    await expect(page.locator("#run-design-dialog")).toHaveCount(0);
+    await expect.poll(() => relay.cancelled).toContain(call.payload.requestId);
+    expect(
+      await page.evaluate(() =>
+        localStorage.getItem("dead-air-run-design-draft-v1"),
+      ),
+    ).toBeNull();
+    if (dismissal !== "procedural") expect(await state(page)).toEqual(before);
+  }
+  await expect.poll(async () => (await state(page)).status).toBe("playing");
+  const after = await state(page);
+  expect(after.id).not.toBe(before.id);
+  expect(after.design).toBeUndefined();
 });

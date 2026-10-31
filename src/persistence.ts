@@ -50,9 +50,11 @@ export function decode(text: string): Game {
     // Geometry and moved furniture remain authoritative. Immutable presentation
     // and collision descriptors must agree with the fingerprinted blueprint.
     for (const floor of g.floors) {
-      floor.design = g.design.design.floors[floor.index];
-      floor.exteriorDesign =
-        floor.index === 0 ? g.design.design.exterior : undefined;
+      const designedFloor = g.design.design.floors[floor.index];
+      if (designedFloor) floor.design = designedFloor;
+      else delete floor.design;
+      if (floor.index === 0) floor.exteriorDesign = g.design.design.exterior;
+      else delete floor.exteriorDesign;
     }
   } else if (g.floors.some((f) => f.design || f.exteriorDesign)) {
     throw Error(

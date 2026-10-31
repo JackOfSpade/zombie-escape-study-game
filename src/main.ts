@@ -2875,6 +2875,9 @@ const PAN_KEYS = [
 window.addEventListener("keydown", (ev) => {
   // Study view never reveals the game through Escape or gameplay shortcuts.
   if (game.studyWorkspace?.enabled) return;
+  // Let the design modal own its keyboard, including native Escape dismissal.
+  if (document.querySelector<HTMLDialogElement>("#run-design-dialog")?.open)
+    return;
   if (ev.code === "Escape") {
     ev.preventDefault();
     // Some browsers deliver Escape after the pointer-lock loss already paused us.
