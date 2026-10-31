@@ -13,6 +13,10 @@ import {
 import { readDurable, writeDurable } from "./storage";
 import { parseSavedRunDesign } from "./run-design-contract.mjs";
 import { sceneSaveErrors } from "./authored-scene";
+import {
+  assertDesignedEnvironment,
+  bindDesignedEnvironment,
+} from "./environment-save";
 const KEY = "dead-air-save-v1";
 interface Envelope {
   schema: 1;
@@ -20,6 +24,7 @@ interface Envelope {
   checksum: number;
 }
 export function encode(g: Game) {
+  assertDesignedEnvironment(g);
   checkpointPhysics(g);
   const payload = JSON.stringify(g);
   return JSON.stringify({
@@ -48,6 +53,7 @@ export function decode(text: string): Game {
     throw Error("Unsupported save");
   if (g.design) {
     g.design = parseSavedRunDesign(g.design);
+    assertDesignedEnvironment(g);
     // Geometry and moved furniture remain authoritative. Immutable presentation
     // and collision descriptors must agree with the fingerprinted blueprint.
     for (const floor of g.floors) {
@@ -69,6 +75,8 @@ export function decode(text: string): Game {
         `Invalid saved scene on floor ${floor.index}: ${errors.join("; ")}`,
       );
   }
+  assertDesignedEnvironment(g);
+  bindDesignedEnvironment(g);
   // Discard retired door-hacking state without changing earned keys or field access.
   for (const a of g.survivors) {
     const legacy = a as unknown as Record<string, unknown>;

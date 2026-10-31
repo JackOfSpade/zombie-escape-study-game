@@ -431,13 +431,13 @@ export function createTerminalRelayApp({
               },
               expected:
                 receipt.next === "design-run"
-                  ? "run design repair"
+                  ? "next run design phase or repair"
                   : receipt.next === "tutor"
                     ? "question"
                     : "assessment",
               instruction:
                 receipt.next === "design-run"
-                  ? "Call get_current_study_question once with this after token and this chat's chat code. The server waits briefly for a repair of this same run design. If it returns waiting, report that and stop; no polling loop."
+                  ? "Call get_current_study_question once with this after token and this chat's chat code. The server waits briefly for the next authoring phase or a repair of this same run design. If it returns waiting, report that and stop; no polling loop."
                   : "Call get_current_study_question once with this after token and this chat's chat code. The server waits briefly for this same question's next phase. If it returns waiting, report that and stop; no polling loop.",
             },
           }
@@ -846,7 +846,7 @@ export function createTerminalRelayApp({
           ...value,
           note:
             prior.operation === "design-run"
-              ? "No repair for this same run design arrived within the bounded wait. The game may have accepted it or may still be validating it. Report that and stop; no further polling."
+              ? "No next phase or repair for this same run design arrived within the bounded wait. The game may have accepted it or may still be validating it. Report that and stop; no further polling."
               : "This same question's next phase has not arrived within the bounded wait. The game may still be applying the delivered result. Report that and stop; no further polling.",
         });
       await new Promise((resolve) =>

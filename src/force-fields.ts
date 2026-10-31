@@ -103,13 +103,16 @@ export function useField(g: Game, a: Actor, o: Furniture) {
 export function redesign(
   g: Game,
   roadmap?: Roadmap,
-  options: { randomized?: boolean } = {},
+  options: {
+    randomized?: boolean;
+    blueprint?: import("./run-design-contract.mjs").RunStructureV3;
+  } = {},
 ) {
   g.rules = "force-fields";
   if (options.randomized) {
     const boundary = createBuildingFootprint(
       g.seed,
-      g.design?.design.footprint,
+      options.blueprint?.footprint ?? g.design?.design.footprint,
     );
     for (const f of g.floors) f.boundary = structuredClone(boundary);
   }
@@ -189,7 +192,7 @@ export function redesign(
         g.seed,
         floor.furniture.filter((o) => /-room\d-door$/.test(o.id)),
       );
-      if (g.design) {
+      if (g.design || options.blueprint) {
         const errors = [
           ...pursuitLayoutErrors(g, floor),
           ...furnishingErrors(floor),

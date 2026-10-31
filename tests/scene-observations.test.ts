@@ -13,6 +13,12 @@ import {
   sceneLookDescription,
 } from "../src/scene-observations";
 import { createGame } from "../src/world";
+import { createPlayableGame } from "../src/world";
+import { environmentDesignFixture } from "./helpers/environment-design";
+import { runDesignFingerprint } from "../src/run-design-contract.mjs";
+import { surfaceWorldPose } from "../src/environment-surfaces";
+import { expandContentText } from "../src/environment-contract.mjs";
+import { solid } from "../src/spatial";
 
 const roadmap = JSON.parse(
   readFileSync("public/curriculum.json", "utf8"),
@@ -138,4 +144,63 @@ test("NPC dialogue receives only current readable inscriptions and revalidates t
   );
   floor.furniture = [];
   assert.deepEqual(observableSceneDetails(game, npc), []);
+});
+
+test("version 3 reads the saved individual writing and art description, respecting the actual surface face and destroyed host", () => {
+  const design = environmentDesignFixture(),
+    game = createPlayableGame(42, roadmap, undefined, {
+      version: 1,
+      source: "fixture",
+      requestId: "read-individual-surfaces",
+      generationId: "read-individual-surfaces",
+      fingerprint: runDesignFingerprint(design),
+      design,
+    }),
+    floor = game.floors[0],
+    actor = game.survivors[0];
+  const candidates = floor.environment!.surfaces.filter(
+    (s) => s.role === "furniture-whiteboard",
+  );
+  assert.ok(candidates.length > 0);
+  const slot = candidates.find((s) => {
+    const p = surfaceWorldPose(floor, s)!;
+    return !solid(
+      floor,
+      { x: p.x - Math.sin(p.yaw) * 1.1, y: p.y + Math.cos(p.yaw) * 1.1 },
+      0.3,
+    );
+  })!;
+  assert.ok(slot);
+  const pose = surfaceWorldPose(floor, slot)!,
+    entry = floor.environment!.entries.find((e) => e.surfaceId === slot.id)!;
+  Object.assign(actor, {
+    floor: 0,
+    x: pose.x - Math.sin(pose.yaw) * 1.1,
+    y: pose.y + Math.cos(pose.yaw) * 1.1,
+  });
+  const detail = observableSceneDetails(game, actor, 1024).find(
+    (d) => d.id === `scene.surface:${slot.id}`,
+  );
+  assert.ok(detail);
+  assert.equal(
+    detail.title,
+    expandContentText(entry.title, floor.environment!.fragments),
+  );
+  assert.ok(
+    detail.text.includes(
+      expandContentText(entry.body, floor.environment!.fragments),
+    ),
+  );
+  if (entry.drawing) assert.ok(detail.text.includes(entry.description));
+  actor.x = pose.x + Math.sin(pose.yaw) * 1.1;
+  actor.y = pose.y - Math.cos(pose.yaw) * 1.1;
+  assert.ok(
+    !observableSceneDetails(game, actor, 1024).some((d) => d.id === detail.id),
+  );
+  actor.x = pose.x - Math.sin(pose.yaw) * 1.1;
+  actor.y = pose.y + Math.cos(pose.yaw) * 1.1;
+  pose.parent!.destroyed = true;
+  assert.ok(
+    !observableSceneDetails(game, actor, 1024).some((d) => d.id === detail.id),
+  );
 });

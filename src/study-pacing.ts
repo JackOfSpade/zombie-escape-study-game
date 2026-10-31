@@ -71,10 +71,17 @@ export function swarmPacing(g: Pick<Game, "pacing" | "design">) {
 
 /** Convert a freshly created game to the study profile, rewriting the spawn
  * and first-pickup schedules consistently. Intended for time-0 games. */
-export function applyStudyPacing(g: Game, depth = 1) {
+export function applyStudyPacing(
+  g: Game,
+  depth = 1,
+  blueprintPacing?: Partial<PacingProfile>,
+) {
   g.pacing = "study";
   g.nextSpawn = Math.max(g.time, STUDY_PACING.zombieGraceSeconds);
-  g.helicopter.next = Math.max(g.time, pacingProfile(g).firstHelicopter);
+  g.helicopter.next = Math.max(
+    g.time,
+    blueprintPacing?.firstHelicopter ?? pacingProfile(g).firstHelicopter,
+  );
   initializeFieldPacing(g, depth);
   g.notice =
     "Three minutes before zombies arrive. Enter the building and find a study terminal.";

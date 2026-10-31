@@ -1,5 +1,23 @@
 // Shared by the browser and relay. Design replies are bounded JSON data only.
-import { parseSceneDesign } from "./scene-catalog.mjs";
+import { parseSceneDesign, parseSceneStructure } from "./scene-catalog.mjs";
+import {
+  parseEnvironmentManifest,
+  parseEnvironmentContent,
+  parseEnvironmentRepairCandidate,
+  parseEnvironmentSurfaces,
+  parseEnvironmentSummaries,
+  environmentSurfaceFingerprint,
+  ENVIRONMENT_GUIDANCE,
+} from "./environment-contract.mjs";
+export {
+  parseEnvironmentManifest,
+  parseEnvironmentContent,
+  parseEnvironmentRepairCandidate,
+  parseEnvironmentSurfaces,
+  parseEnvironmentSummaries,
+  environmentSurfaceFingerprint,
+  summarizeEnvironment,
+} from "./environment-contract.mjs";
 const record = (v) => v !== null && typeof v === "object" && !Array.isArray(v);
 function requireThat(ok, message) {
   if (!ok) throw Error(`Run design: ${message}`);
@@ -65,8 +83,16 @@ const roles = ["builder", "analyst", "rusher", "medic", "skeptic"];
 const uint = (v, p) => number(v, 0, 4294967295, p, true);
 const clone = (v) => JSON.parse(JSON.stringify(v));
 
-export function parseRunDesign(v) {
-  bounded(v, v?.version === 2 ? 100000 : 24000);
+function parseBlueprint(v, provisional = false) {
+  const v3 = v?.version === 3;
+  bounded(
+    v,
+    v3 ? (provisional ? 100000 : 900000) : v?.version === 2 ? 100000 : 24000,
+  );
+  if (v3 && !provisional) {
+    const { environment: _, ...structure } = v;
+    bounded(structure, 100000);
+  }
   object(
     v,
     [
@@ -81,10 +107,16 @@ export function parseRunDesign(v) {
       "city",
       "exterior",
       "pacing",
+      ...(v3
+        ? ["relationships", ...(!provisional ? ["environment"] : [])]
+        : []),
     ],
     "design",
   );
-  requireThat(v.version === 1 || v.version === 2, "unsupported design version");
+  requireThat(
+    v.version === 1 || v.version === 2 || v3,
+    "unsupported design version",
+  );
   text(v.title, 64, "title");
   text(v.premise, 240, "premise");
   text(v.opening, 200, "opening");
@@ -120,9 +152,9 @@ export function parseRunDesign(v) {
         "furnitureDensity",
         "fieldQuotas",
         "power",
-        "stories",
+        ...(!v3 ? ["stories"] : []),
         "brokenGuard",
-        ...(v.version === 2 ? ["scene"] : []),
+        ...(v.version >= 2 ? ["scene"] : []),
       ],
       p,
     );
@@ -157,11 +189,12 @@ export function parseRunDesign(v) {
       f.power[2] === "lit",
       `${p}.power[2] must keep the free study hall lit`,
     );
-    array(f.stories, 6, 6, `${p}.stories`, (s, q) => {
-      object(s, ["title", "lines"], q);
-      text(s.title, 36, `${q}.title`);
-      array(s.lines, 1, 4, `${q}.lines`, (line, r) => text(line, 50, r));
-    });
+    if (!v3)
+      array(f.stories, 6, 6, `${p}.stories`, (s, q) => {
+        object(s, ["title", "lines"], q);
+        text(s.title, 36, `${q}.title`);
+        array(s.lines, 1, 4, `${q}.lines`, (line, r) => text(line, 50, r));
+      });
     object(f.brokenGuard, ["segment", "bay"], `${p}.brokenGuard`);
     choice(f.brokenGuard.segment, [3, 4], `${p}.brokenGuard.segment`);
     choice(f.brokenGuard.bay, [1, 2], `${p}.brokenGuard.bay`);
@@ -180,14 +213,35 @@ export function parseRunDesign(v) {
     new Set(names).size === 19 && !names.includes("you"),
     "roster needs 19 unique names distinct from You",
   );
-  if (v.version === 2)
+  if (v.version >= 2)
     v.floors.forEach((floor, index) =>
-      parseSceneDesign(
+      (v3 ? parseSceneStructure : parseSceneDesign)(
         floor.scene,
         v.roster.map((a) => a.name),
         `floors[${index}].scene`,
       ),
     );
+  if (v3) {
+    const pairs = new Set();
+    array(v.relationships, 1, 24, "relationships", (r, p) => {
+      object(r, ["from", "to", "kind", "detail"], p);
+      for (const k of ["from", "to"])
+        requireThat(
+          v.roster.some((a) => a.name === r[k]),
+          `${p}.${k} must name a roster survivor`,
+        );
+      requireThat(r.from !== r.to, `${p} cannot relate a person to themselves`);
+      choice(
+        r.kind,
+        ["colleague", "friend", "relative", "mentor", "rival"],
+        `${p}.kind`,
+      );
+      text(r.detail, 120, `${p}.detail`);
+      const pair = [r.from, r.to].sort().join("\u0000");
+      requireThat(!pairs.has(pair), `${p} repeats a relationship pair`);
+      pairs.add(pair);
+    });
+  }
   const c = v.city;
   object(
     c,
@@ -222,7 +276,7 @@ export function parseRunDesign(v) {
       "buildingSubtitle",
       "quarantineTitle",
       "quarantineSubtitle",
-      "streetLabels",
+      ...(!v3 ? ["streetLabels"] : []),
       "skyline",
     ],
     "exterior",
@@ -234,9 +288,10 @@ export function parseRunDesign(v) {
     "quarantineSubtitle",
   ])
     text(e[k], 48, `exterior.${k}`);
-  array(e.streetLabels, 8, 8, "exterior.streetLabels", (s, p) =>
-    text(s, 28, p),
-  );
+  if (!v3)
+    array(e.streetLabels, 8, 8, "exterior.streetLabels", (s, p) =>
+      text(s, 28, p),
+    );
   object(
     e.skyline,
     ["minHeight", "maxHeight", "damageRate"],
@@ -264,7 +319,19 @@ export function parseRunDesign(v) {
   number(p.npcThinkingScale, 0.2, 0.35, "pacing.npcThinkingScale");
   number(p.firstHelicopter, 420, 600, "pacing.firstHelicopter");
   number(p.helicopterInterval, 150, 210, "pacing.helicopterInterval");
+  if (v3 && !provisional) parseEnvironmentManifest(v.environment, v);
   return clone(v);
+}
+
+export function parseRunDesign(v) {
+  return parseBlueprint(v);
+}
+export function parseRunStructure(v) {
+  requireThat(v?.version === 3, "a structural proposal must be version 3");
+  return parseBlueprint(v, true);
+}
+export function runStructureFingerprint(v) {
+  return runDesignFingerprint(v);
 }
 
 // These summaries contain fictional design choices only, never learner state.
@@ -291,7 +358,7 @@ export function summarizeRunDesign(d) {
     d.city.boulevardOffset,
     d.city.districtSize,
   ];
-  if (d.version === 2) {
+  if (d.version >= 2) {
     const rooms = d.floors.flatMap((f) => f.scene.rooms),
       furniture = rooms.flatMap((r) => r.furniture),
       props = furniture.flatMap((o) => o.props),
@@ -340,7 +407,7 @@ export function summarizeRunDesign(d) {
     premise: d.premise,
     spatial: canonical(spatial),
     atmosphere: canonical(atmosphere),
-    cast: canonical(d.roster),
+    cast: canonical(d.version === 3 ? [d.roster, d.relationships] : d.roster),
     tempo: canonical(d.pacing),
   };
 }
@@ -371,6 +438,7 @@ export function runDesignNoveltyErrors(design, recent) {
   return errors;
 }
 export function parseRunDesignRequest(v) {
+  if (v?.version === 2) return parsePhasedRequest(v);
   // Composable maximum: five summaries, one valid candidate and repair errors.
   // Native handoff chunks large packets; 40 KB is only its inline threshold.
   bounded(v, v?.designVersion === 2 ? 640000 : 512000);
@@ -422,6 +490,10 @@ export function parseRunDesignRequest(v) {
   return clone(v);
 }
 export function parseRunDesignReply(v, request) {
+  if (request.version === 2)
+    return request.phase === "structure"
+      ? parseRunStructureReply(v, request)
+      : parseRunContentReply(v, request);
   object(v, ["requestId", "design"], "reply");
   requireThat(
     v.requestId === request.requestId,
@@ -433,6 +505,130 @@ export function parseRunDesignReply(v, request) {
     "reply design version does not match the requested design version",
   );
   return { requestId: v.requestId, design };
+}
+function parsePhasedRequest(v) {
+  bounded(v, 1500000);
+  choice(v.phase, ["structure", "content"], "phase");
+  requireThat(
+    v.designVersion === 3,
+    "version 2 requests require designVersion 3",
+  );
+  const content = v.phase === "content";
+  object(
+    v,
+    [
+      "version",
+      "designVersion",
+      "phase",
+      "requestId",
+      "generationId",
+      "seed",
+      ...(content
+        ? [
+            "structure",
+            "structureFingerprint",
+            "builderVersion",
+            "surfaces",
+            "surfaceFingerprint",
+            "recentContent",
+          ]
+        : ["recent"]),
+      ...(Object.hasOwn(v, "repair") ? ["repair"] : []),
+    ],
+    "request",
+  );
+  for (const k of ["requestId", "generationId"]) {
+    text(v[k], 128, k);
+    requireThat(
+      /^design-[a-zA-Z0-9-]+$/u.test(v[k]),
+      `${k} needs a design- identifier`,
+    );
+  }
+  uint(v.seed, "seed");
+  if (content) {
+    const structure = parseRunStructure(v.structure);
+    requireThat(
+      v.structureFingerprint === runStructureFingerprint(structure),
+      "content structure fingerprint mismatch",
+    );
+    text(v.builderVersion, 64, "builderVersion");
+    const surfaces = parseEnvironmentSurfaces(
+      v.surfaces,
+      structure.roster.map((a) => a.name),
+    );
+    requireThat(
+      v.surfaceFingerprint === environmentSurfaceFingerprint(surfaces),
+      "content surface fingerprint mismatch",
+    );
+    parseEnvironmentSummaries(v.recentContent);
+  } else {
+    parseRunDesignRequest({
+      version: 1,
+      requestId: v.requestId,
+      generationId: v.generationId,
+      seed: v.seed,
+      recent: v.recent,
+    });
+  }
+  if (v.repair) {
+    object(v.repair, ["candidate", "errors"], "repair");
+    if (content)
+      parseEnvironmentRepairCandidate(
+        v.repair.candidate,
+        v.structure,
+        v.surfaces,
+      );
+    else parseRunStructure(v.repair.candidate);
+    array(v.repair.errors, 1, 20, "repair.errors", (s, p) => text(s, 400, p));
+  }
+  return clone(v);
+}
+export function parseRunStructureReply(v, request) {
+  requireThat(
+    request.version === 2 && request.phase === "structure",
+    "not a structural request",
+  );
+  object(v, ["requestId", "structure"], "reply");
+  requireThat(
+    v.requestId === request.requestId,
+    "reply requestId does not match",
+  );
+  return { requestId: v.requestId, structure: parseRunStructure(v.structure) };
+}
+export function parseRunContentReply(v, request) {
+  requireThat(
+    request.version === 2 && request.phase === "content",
+    "not a content request",
+  );
+  object(v, ["requestId", "content"], "reply");
+  requireThat(
+    v.requestId === request.requestId,
+    "reply requestId does not match",
+  );
+  return {
+    requestId: v.requestId,
+    content: parseEnvironmentContent(
+      v.content,
+      request.structure,
+      request.surfaces,
+    ),
+  };
+}
+export function parseRunContentRepairCandidate(v, request) {
+  requireThat(
+    request.version === 2 && request.phase === "content",
+    "not a content request",
+  );
+  object(v, ["requestId", "content"], "reply");
+  requireThat(
+    v.requestId === request.requestId,
+    "reply requestId does not match",
+  );
+  return parseEnvironmentRepairCandidate(
+    v.content,
+    request.structure,
+    request.surfaces,
+  );
 }
 function canonical(v) {
   return JSON.stringify(v, (_key, x) =>
@@ -473,9 +669,10 @@ export function parseSavedRunDesign(v) {
   return { ...clone(v), design };
 }
 
-export const RUN_DESIGN_GUIDANCE = `Design a distinctive fictional zombie-escape office building as JSON, not a study question. Return exactly {requestId: the captured requestId, design: {...}}. Do not output code, HTML, URLs, learner claims or mechanical rule changes. The engine realizes your choices as collision-tested geometry. Give every floor its own coherent purpose and story; tie signs and notes to this cast and premise. Vary actual spatial choices, furnishing, cast, atmosphere and tempo, not only names or random seeds. Recent fictional summaries identify designs to avoid. If repair is supplied, correct all listed failures while retaining the intended theme. Do not conceal an invalid plan or claim validation was performed.
+export const RUN_DESIGN_GUIDANCE = `The exact captured request selects both version and phase. For request.version:2/designVersion:3/phase:structure, return exactly {requestId,structure:{version:3,...}}. The flattened structure uses the structural fields described below, but OMIT every floors[].stories and exterior.streetLabels. Include relationships:1..24 {from:exact roster name,to:another exact roster name,kind:colleague|friend|relative|mentor|rival,detail:1..120}; one relationship per person pair. Every floor scene has version:2 with the scene layout below, but OMIT furniture.label and prop.label/text. Room title/description and exterior names remain thematic context for later writing. This first phase creates geometry and cast only; never include environment or content. Structure≤100000 UTF-8 bytes. The engine constructs an isolated candidate, then requests content for its exact physical surfaces. For phase:content, follow the following separate content contract instead of returning any structural fields:\n${ENVIRONMENT_GUIDANCE}\n
+The remainder describes the shared structural schema and retained legacy requests. For retained request.version:1, return exactly {requestId:the captured requestId,design:{...}} following its designVersion; never upgrade that request. Design a distinctive fictional zombie-escape office building as JSON, not a study question. Do not output code, HTML, URLs, learner claims or mechanical rule changes. The engine realizes your choices as collision-tested geometry. Give every floor its own coherent purpose and story; tie signs and notes to this cast and premise. Vary actual spatial choices, furnishing, cast, atmosphere and tempo, not only names or random seeds. Recent fictional summaries identify designs to avoid. If repair is supplied, correct all listed failures while retaining the intended theme. Do not conceal an invalid plan or claim validation was performed.
 
-The captured payload selects the design version. If payload.designVersion is 2, return design.version:2 and include the scene objects below. If designVersion is absent, this is a retained version 1 request: return design.version:1 and OMIT scene on every floor. Never upgrade a retained request or downgrade a version 2 request.
+For retained request.version:1 only: If payload.designVersion is 2, return design.version:2 and include the scene objects below. If designVersion is absent, return design.version:1 and OMIT scene on every floor. Never upgrade a retained request or downgrade a version 2 request. Version3 structure requests use the exceptions stated above.
 
 The common required design fields and bounds are:
 version:as requested above; title(1-64 characters), premise(1-240), opening(1-200), roofName(1-48).

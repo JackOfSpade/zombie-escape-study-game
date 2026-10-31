@@ -111,9 +111,17 @@ function position(value, min, path) {
 }
 
 /** Validate data only. Physical placement is checked by the world builder. */
-export function parseSceneDesign(value, rosterNames, path = "scene") {
+export function parseSceneDesign(
+  value,
+  rosterNames,
+  path = "scene",
+  structural = false,
+) {
   object(value, ["version", "rooms"], path);
-  fail(value.version === 1, `${path} has an unsupported scene version`);
+  fail(
+    value.version === (structural ? 2 : 1),
+    `${path} has an unsupported scene version`,
+  );
   array(value.rooms, 4, 4, `${path}.rooms`);
   const rooms = new Set(),
     ids = new Set();
@@ -172,7 +180,7 @@ export function parseSceneDesign(value, rosterNames, path = "scene") {
           "color",
           "condition",
           "owner",
-          "label",
+          ...(!structural ? ["label"] : []),
           "props",
         ],
         q,
@@ -184,7 +192,7 @@ export function parseSceneDesign(value, rosterNames, path = "scene") {
       color(item.color, `${q}.color`);
       choice(item.condition, ["intact", "worn", "damaged"], `${q}.condition`);
       owner(item.owner, `${q}.owner`);
-      text(item.label, 0, 40, `${q}.label`);
+      if (!structural) text(item.label, 0, 40, `${q}.label`);
       array(item.props, 0, 8, `${q}.props`);
       fail(
         !item.props.length || SCENE_SURFACE_KINDS.includes(item.kind),
@@ -205,8 +213,7 @@ export function parseSceneDesign(value, rosterNames, path = "scene") {
             "accent",
             "condition",
             "owner",
-            "label",
-            "text",
+            ...(!structural ? ["label", "text"] : []),
           ],
           r,
         );
@@ -219,8 +226,10 @@ export function parseSceneDesign(value, rosterNames, path = "scene") {
         color(prop.accent, `${r}.accent`);
         choice(prop.condition, ["intact", "worn", "damaged"], `${r}.condition`);
         owner(prop.owner, `${r}.owner`);
-        text(prop.label, 0, 32, `${r}.label`);
-        text(prop.text, 0, 160, `${r}.text`);
+        if (!structural) {
+          text(prop.label, 0, 32, `${r}.label`);
+          text(prop.text, 0, 160, `${r}.text`);
+        }
       }
     }
     fail(roomProps > 0, `${p} needs at least one authored prop`);
@@ -235,4 +244,8 @@ export function parseSceneDesign(value, rosterNames, path = "scene") {
     `${path} exceeds ${SCENE_LIMITS.props} props`,
   );
   return JSON.parse(JSON.stringify(value));
+}
+
+export function parseSceneStructure(value, rosterNames, path = "scene") {
+  return parseSceneDesign(value, rosterNames, path, true);
 }

@@ -20,11 +20,14 @@ import {
 } from "../scene-catalog.mjs";
 import type { ResolvedSceneProp } from "../authored-scene";
 import {
-  furnitureHeight,
   furnitureSurfaceHeight,
   furnitureSurfaceBounds,
 } from "./furniture-height";
 import { InstancePool } from "./instances";
+import {
+  PROP_LABEL_FACES as LABEL_FACES,
+  furnitureLabelFace,
+} from "../environment-faces";
 import type { InteriorLightmap } from "./interior-lightmap";
 
 type Shape = "box" | "cylinder" | "cone" | "sphere";
@@ -42,20 +45,6 @@ type PropAppearance = Pick<
   ScenePropDesign,
   "kind" | "scale" | "color" | "accent" | "condition"
 >;
-const LABEL_FACES: Partial<
-  Record<
-    ScenePropDesign["kind"],
-    { y: number; z: number; w: number; h: number }
-  >
-> = {
-  mug: { y: 0.45, z: 0.453, w: 0.55, h: 0.36 },
-  bottle: { y: 0.34, z: 0.485, w: 0.7, h: 0.3 },
-  plant: { y: 0.19, z: 0.335, w: 0.5, h: 0.24 },
-  lamp: { y: 0.04, z: 0.451, w: 0.6, h: 0.065 },
-  trophy: { y: 0.08, z: 0.451, w: 0.7, h: 0.12 },
-  photo: { y: 0.5, z: 0.39, w: 0.82, h: 0.79 },
-};
-
 /** Geometry stays inside the same catalog envelope checked by the realizer. */
 export function authoredPropParts(prop: PropAppearance): PropPart[] {
   const size = PROP_CATALOG[prop.kind],
@@ -241,59 +230,8 @@ const CELL_W = 256,
   CELL_H = 128,
   COLUMNS = 8;
 
-function furnitureLabelFace(host: Furniture) {
-  const height = furnitureHeight(host.kind),
-    face = {
-      y: height * 0.6,
-      z: host.h / 2 + 0.004,
-      w: Math.min(host.w * 0.7, 0.5),
-      h: Math.min(height * 0.22, 0.15),
-    };
-  if (
-    [
-      "desk",
-      "table",
-      "cafeTable",
-      "coffeeTable",
-      "reception",
-      "chair",
-      "officeChair",
-      "armchair",
-      "sofa",
-    ].includes(host.kind)
-  ) {
-    // A table has open air beneath its top: put its tag on the front edge.
-    face.y = height;
-    face.h = 0.075;
-  } else if (host.kind === "shelf") {
-    face.y = height + 0.08;
-    face.h = 0.05;
-  } else if (host.kind === "plant") {
-    face.y = 0.22;
-    face.z = host.h * 0.325 + 0.004;
-    face.w = Math.min(host.w * 0.5, 0.5);
-  } else if (["screen", "whiteboard", "partition"].includes(host.kind)) {
-    face.y = height * 0.45;
-    face.z =
-      host.kind === "partition" ? host.h / 2 + 0.004 : host.h * 0.52 + 0.03;
-  } else if (host.kind === "cooler") {
-    face.y = 0.4;
-    face.z = host.h * 0.425 + 0.004;
-  } else if (host.kind === "printer") {
-    face.y = 0.83;
-    face.z = host.h * 0.51 + 0.022;
-  } else if (host.kind === "microwave") {
-    face.y = 0.85;
-    face.z = host.h * 0.51 + 0.022;
-  } else if (host.kind === "box") {
-    face.y = height * 0.55;
-    face.z = host.h * 0.51 + 0.018;
-  }
-  return face;
-}
-
 function labelAtlas(labels: Label[]) {
-  if (typeof document === "undefined") return undefined;
+  if (!labels.length || typeof document === "undefined") return undefined;
   const canvas = document.createElement("canvas");
   canvas.width = COLUMNS * CELL_W;
   canvas.height = Math.max(1, Math.ceil(labels.length / COLUMNS)) * CELL_H;
@@ -425,8 +363,10 @@ export class AuthoredScene {
       labelBindings: Omit<Binding, "pool" | "slot">[] = [],
       hosts = new Map(floor.furniture.map((f) => [f.id, f])),
       label = (value: Label, binding: Omit<Binding, "pool" | "slot">) => {
-        labels.push(value);
-        labelBindings.push(binding);
+        if (!floor.environment) {
+          labels.push(value);
+          labelBindings.push(binding);
+        }
       };
     for (const room of floor.scene?.rooms ?? []) {
       const { plaque } = room;
@@ -460,7 +400,7 @@ export class AuthoredScene {
       if (appearance.label || appearance.owner)
         label(
           {
-            title: appearance.label,
+            title: appearance.label ?? "",
             text: "",
             owner: appearance.owner,
             color: appearance.color,
@@ -521,8 +461,8 @@ export class AuthoredScene {
         onPhoto = prop.kind === "photo";
       label(
         {
-          title: prop.label,
-          text: prop.text,
+          title: prop.label ?? "",
+          text: prop.text ?? "",
           owner: prop.owner,
           color: prop.color,
           accent: prop.accent,
@@ -600,7 +540,7 @@ export class AuthoredScene {
       furniture: floor.scene?.furniture.length ?? 0,
       props: floor.scene?.props.length ?? 0,
       labels: labels.length,
-      drawCallBudget: 5,
+      drawCallBudget: floor.environment ? 4 : 5,
     };
     this.sync();
   }

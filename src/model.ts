@@ -321,7 +321,7 @@ export interface Furniture extends Point {
   appearance?: {
     color: string;
     condition: import("./scene-catalog.mjs").SceneCondition;
-    label: string;
+    label?: string;
     owner: string | null;
     room: number;
     designId: string;
@@ -379,6 +379,9 @@ export interface BuildingFootprint {
   rows: { left: number; right: number }[];
 }
 export interface Floor {
+  /** This floor's exact accepted surfaces/entries and shared fragments. Its
+   * fingerprint identifies the full canonical run inventory in Game.design. */
+  environment?: import("./environment-contract.mjs").EnvironmentManifest;
   /** Resolved object anchors, retained with the run rather than rerolled on load. */
   scene?: import("./authored-scene").ResolvedScene;
   /** Frozen authored choices; shared by rendering, collisions and NPC facts. */

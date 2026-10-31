@@ -10,6 +10,7 @@ export default defineConfig({
     "run-designer.spec.ts",
     "run-design-dressing.spec.ts",
     "authored-scene.spec.ts",
+    "environment-surfaces.spec.ts",
   ],
   workers: 1,
   retries: 0,

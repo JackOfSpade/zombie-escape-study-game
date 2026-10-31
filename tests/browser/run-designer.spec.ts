@@ -2,10 +2,13 @@ import { readFileSync } from "node:fs";
 import { expect, test, type Page } from "./helpers/offline-test";
 
 const harbor = JSON.parse(
-  readFileSync("tests/fixtures/run-designs/botanical-office.json", "utf8"),
+  readFileSync("tests/fixtures/run-designs/harbor-inscriptions.json", "utf8"),
 );
 const orchard = JSON.parse(
-  readFileSync("tests/fixtures/run-designs/observatory-records.json", "utf8"),
+  readFileSync(
+    "tests/fixtures/run-designs/observatory-inscriptions.json",
+    "utf8",
+  ),
 );
 
 async function designer(page: Page) {
@@ -16,9 +19,24 @@ async function designer(page: Page) {
     pending = new Map<string, (design: object) => void>();
   let capable = true,
     queued = false,
+    queuedPhase: "structure" | "content" = "structure",
     delayed = false,
     failedPoll = false;
   let answer = (_body: any) => harbor;
+  const reply = (body: any, proposed: any) => {
+    const requestId = body.payload.requestId;
+    if (body.payload.phase === "structure") {
+      const { environment: _environment, ...structure } = proposed;
+      return { requestId, structure };
+    }
+    const design = [proposed, harbor, orchard].find(
+      (d) => d.title === body.payload.structure.title,
+    );
+    if (!design)
+      throw Error("No captured synthetic content for this structure");
+    const { surfaces: _surfaces, ...content } = design.environment;
+    return { requestId, content };
+  };
   await page.addInitScript(() => {
     const random = crypto.getRandomValues.bind(crypto);
     Object.defineProperty(crypto, "getRandomValues", {
@@ -69,17 +87,17 @@ async function designer(page: Page) {
         return json({ error: "Unexpected synthetic operation" }, 400);
       calls.push(body);
       const id = body.payload.requestId;
-      if (delayed) {
+      if (delayed && body.payload.phase === "structure") {
         const design = await new Promise<object>((resolve) =>
           pending.set(id, resolve),
         );
-        await json({ requestId: id, design });
+        await json(reply(body, design));
         delivered.push(id);
         return;
       }
-      return queued
+      return queued && body.payload.phase === queuedPhase
         ? json({ handoff: { id, hash: `synthetic-${id}` } }, 202)
-        : json({ requestId: id, design: answer(body) });
+        : json(reply(body, answer(body)));
     }
     if (url.pathname === "/api/bridge/result") {
       const id = url.searchParams.get("id")!;
@@ -102,8 +120,9 @@ async function designer(page: Page) {
     setCapable(value: boolean) {
       capable = value;
     },
-    setQueued(value: boolean) {
+    setQueued(value: boolean, phase: "structure" | "content" = "structure") {
       queued = value;
+      queuedPhase = phase;
     },
     setDelayed(value: boolean) {
       delayed = value;
@@ -121,10 +140,7 @@ async function designer(page: Page) {
         waiting(design);
         return;
       }
-      results.set(call.payload.requestId, {
-        requestId: call.payload.requestId,
-        design,
-      });
+      results.set(call.payload.requestId, reply(call, design));
     },
   };
 }
@@ -150,6 +166,7 @@ async function state(page: Page) {
       floorNames: g.floors.map((f: any) => f.name),
       tiles: g.floors.map((f: any) => f.tiles),
       scenes: g.floors.map((f: any) => f.scene),
+      environments: g.floors.map((f: any) => f.environment),
       names: g.survivors.slice(1).map((a: any) => a.name),
     };
   });
@@ -176,10 +193,15 @@ test("new-game AI design reaches the full app and a saved reload keeps the exact
   await expect.poll(async () => (await state(page)).status).toBe("playing");
   await pause(page);
   const before = await state(page);
-  expect(relay.calls).toHaveLength(1);
+  expect(relay.calls).toHaveLength(2);
   expect(relay.calls[0].provider).toBe("chatgpt-handoff");
-  expect(relay.calls[0].payload.designVersion).toBe(2);
-  expect(before.design.design.version).toBe(2);
+  expect(relay.calls[0].payload.designVersion).toBe(3);
+  expect(relay.calls.map((c) => c.payload.phase)).toEqual([
+    "structure",
+    "content",
+  ]);
+  expect(before.design.design.version).toBe(3);
+  expect(before.environments[0].entries.length).toBeGreaterThan(50);
   expect(before.scenes[0].props.length).toBeGreaterThan(0);
   expect(relay.calls[0].nativeScope.encounterId).toBe("run-design");
   expect(before.design.design.title).toBe(harbor.title);
@@ -202,7 +224,8 @@ test("new-game AI design reaches the full app and a saved reload keeps the exact
   expect(restored.tiles).toEqual(before.tiles);
   expect(restored.floorNames).toEqual(before.floorNames);
   expect(restored.names).toEqual(before.names);
-  expect(relay.calls).toHaveLength(1);
+  expect(restored.environments).toEqual(before.environments);
+  expect(relay.calls).toHaveLength(2);
   await expect(page.locator("#run-design-dialog")).toHaveCount(0);
 });
 
@@ -259,7 +282,35 @@ test("reloading a pending design retries the same captured request and chat rath
   await expect
     .poll(async () => (await state(page)).design?.design.title)
     .toBe(harbor.title);
-  expect(relay.calls).toHaveLength(2);
+  expect(relay.calls).toHaveLength(3);
+});
+
+test("reloading while individual writing is pending retains the exact object inventory and content request", async ({
+  page,
+}) => {
+  const relay = await designer(page);
+  relay.setQueued(true, "content");
+  await open(page);
+  const original = await state(page);
+  await page.locator("#start").click();
+  await expect.poll(() => relay.calls.length).toBe(2);
+  const captured = structuredClone(relay.calls[1]);
+  expect(captured.payload.phase).toBe("content");
+  expect(captured.payload.surfaces).toEqual(harbor.environment.surfaces);
+  expect((await state(page)).id).toBe(original.id);
+  await flush(page);
+  await page.reload();
+  await page.waitForFunction(() => !!(window as any).__deadAir);
+  await page.locator("#start").click();
+  await expect.poll(() => relay.calls.length).toBe(3);
+  expect(relay.calls[2]).toEqual(captured);
+  expect((await state(page)).id).toBe(original.id);
+  relay.finish(captured);
+  await expect.poll(async () => (await state(page)).status).toBe("playing");
+  expect((await state(page)).design.design.environment).toEqual(
+    harbor.environment,
+  );
+  expect(relay.calls).toHaveLength(3);
 });
 
 test("restart sends recent fictional designs and repairs a repeated design before replacing the run", async ({
@@ -279,9 +330,12 @@ test("restart sends recent fictional designs and repairs a repeated design befor
   const after = await state(page);
   expect(after.id).not.toBe(before.id);
   expect(after.tiles).not.toEqual(before.tiles);
-  expect(relay.calls).toHaveLength(3);
-  const repeat = relay.calls[1],
-    repair = relay.calls[2];
+  expect(relay.calls).toHaveLength(5);
+  const structureCalls = relay.calls.filter(
+    (c) => c.payload.phase === "structure",
+  );
+  const repeat = structureCalls[1],
+    repair = structureCalls[2];
   expect(repeat.payload.recent[0].title).toBe(harbor.title);
   expect(repair.payload.repair.candidate.title).toBe(harbor.title);
   expect(repair.payload.repair.errors.length).toBeGreaterThan(0);
@@ -291,6 +345,7 @@ test("restart sends recent fictional designs and repairs a repeated design befor
   expect(Object.keys(repeat.payload).sort()).toEqual([
     "designVersion",
     "generationId",
+    "phase",
     "recent",
     "requestId",
     "seed",
@@ -324,7 +379,16 @@ test("a late result from a cancelled design cannot replace the current run or th
   await expect
     .poll(async () => (await state(page)).design?.design.title)
     .toBe(orchard.title);
-  expect((await state(page)).design.requestId).toBe(current.payload.requestId);
+  const content = relay.calls.find(
+    (call) =>
+      call.payload.phase === "content" &&
+      call.payload.generationId === current.payload.generationId,
+  );
+  expect(content).toBeDefined();
+  expect((await state(page)).design.requestId).toBe(content.payload.requestId);
+  expect((await state(page)).design.generationId).toBe(
+    current.payload.generationId,
+  );
 });
 
 test("cancelling before the bridge replies ignores that delayed reply while another design is pending", async ({
@@ -353,7 +417,16 @@ test("cancelling before the bridge replies ignores that delayed reply while anot
   await expect
     .poll(async () => (await state(page)).design?.design.title)
     .toBe(orchard.title);
-  expect((await state(page)).design.requestId).toBe(current.payload.requestId);
+  const content = relay.calls.find(
+    (call) =>
+      call.payload.phase === "content" &&
+      call.payload.generationId === current.payload.generationId,
+  );
+  expect(content).toBeDefined();
+  expect((await state(page)).design.requestId).toBe(content.payload.requestId);
+  expect((await state(page)).design.generationId).toBe(
+    current.payload.generationId,
+  );
 });
 
 test("settled design failures retain receipts until Cancel, Escape or explicit procedural fallback", async ({
@@ -413,7 +486,12 @@ test("looking at an authored object reveals its readable caption without replaci
   });
   await expect(page.locator("#view3d")).toBeVisible();
   const target = await page.evaluate(async () => {
-    const { propWorldPose } = await import("/src/authored-scene.ts" as string),
+    const { surfaceWorldPose } = await import(
+        "/src/environment-surfaces.ts" as string
+      ),
+      { expandContentText } = await import(
+        "/src/environment-contract.mjs" as string
+      ),
       { sceneLookDescription } = await import(
         "/src/scene-observations.ts" as string
       ),
@@ -422,8 +500,19 @@ test("looking at an authored object reveals its readable caption without replaci
       g = app.game,
       f = g.floors[0],
       a = g.survivors[0];
-    for (const prop of f.scene.props) {
-      const pose = propWorldPose(f, prop);
+    for (const slot of f.environment.surfaces.filter(
+      (s: any) => s.role === "prop-face",
+    )) {
+      const pose = surfaceWorldPose(f, slot);
+      if (!pose?.parent) continue;
+      const entry = f.environment.entries.find(
+          (e: any) => e.surfaceId === slot.id,
+        ),
+        title = expandContentText(entry.title, f.environment.fragments),
+        text =
+          expandContentText(entry.body, f.environment.fragments) ||
+          entry.description;
+      if (!title || !text) continue;
       for (let i = 0; i < 16; i++) {
         const angle = (i * Math.PI) / 8,
           point = {
@@ -434,12 +523,12 @@ test("looking at an authored object reveals its readable caption without replaci
         Object.assign(a, point, { floor: 0 });
         const yaw = Math.atan2(pose.y - a.y, pose.x - a.x),
           pitch = Math.atan2(
-            pose.elevation + prop.h * 0.5 - 1.6,
+            pose.z - 1.6,
             Math.hypot(pose.x - a.x, pose.y - a.y),
           );
-        if (!sceneLookDescription(g, yaw, pitch).includes(prop.text)) continue;
+        if (!sceneLookDescription(g, yaw, pitch).includes(text)) continue;
         app.setLook(yaw, pitch);
-        return { parent: pose.parent.id, title: prop.label, text: prop.text };
+        return { parent: pose.parent.id, title, text };
       }
     }
     throw Error("No reachable authored object to read");

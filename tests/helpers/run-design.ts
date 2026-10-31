@@ -9,18 +9,23 @@ import {
 export function runDesignFixture(
   name: "harbor-archive" | "glass-orchard" = "harbor-archive",
 ) {
-  return parseRunDesign(
+  const design = parseRunDesign(
     JSON.parse(readFileSync(`tests/fixtures/run-designs/${name}.json`, "utf8")),
   );
+  if (design.version === 3)
+    throw Error("Expected a historical run-design fixture");
+  return design;
 }
 
 /** Synthetic object-by-object scenes; no live AI or real save data. */
 export function sceneDesignFixture(
   name: "botanical-office" | "observatory-records" = "botanical-office",
 ) {
-  return parseRunDesign(
+  const design = parseRunDesign(
     JSON.parse(readFileSync(`tests/fixtures/run-designs/${name}.json`, "utf8")),
   );
+  if (design.version === 3) throw Error("Expected a historical scene fixture");
+  return design;
 }
 
 export function savedRunDesign(

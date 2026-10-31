@@ -10,17 +10,19 @@ The `RunDesign` contract (`src/run-design-contract.mjs` and its TypeScript decla
 - Building footprint shape, width, depth and setbacks.
 - Per-floor plan family, study-room order, furniture functions and density, permitted subroom types, field quotas and a seed for smaller spatial details.
 - Nineteen named survivors with roles, skill, risk and sociability.
-- Per-room power, six authored story cards per floor, and the damaged exterior guard bay.
+- Per-room power and the damaged exterior guard bay. Historical versions 1 and 2 also have six story cards per floor.
 - City road dimensions, district size, height range, palette and damage; building/quarantine signs, eight street/shop labels and skyline characteristics.
 - Bounded horde cadence/capacity, NPC thought rate and helicopter timing.
 
-New requests ask for version 2, which adds an individual scene for each study room:
+Version 2 introduced an individual scene for each study room:
 
 - A room title, purpose, named owner, surface/metal/accent palette and condition.
 - Specific pieces of physical furniture with a requested position within the room, rotation, color, condition, label and owner.
 - Individual mugs, books, papers, pens, photos, notes, plants, bottles, phones, boxes, lamps and trophies attached to named furniture. Each has its own position on the surface, rotation, scale, colors, condition, label, owner and text.
 
-Owners must belong to the authored survivor roster. The designer can connect a person's objects, notes and room purpose into a consistent fictional story. It supplies structured data from an approved catalog; no generated scripts, arbitrary asset URLs or executable world code are accepted. Version 1 saves and already captured requests retain their original contract and behavior.
+Owners must belong to the authored survivor roster. The designer can connect a person's objects, notes and room purpose into a consistent fictional story. It supplies structured data from an approved catalog; no generated scripts, arbitrary asset URLs or executable world code are accepted. Version 1 and 2 saves and already captured requests retain their original contract and behavior.
+
+New requests use version 3 and two captured phases. The first authors the physical structure, room purposes, objects, survivors and their fictional relationships. The engine constructs a private candidate and identifies every actual eligible writing and illustration surface. The second authors one entry per stable surface ID. This replaces the six shared floor stories and eight shared street-label rows for new runs. Accepted designs contain the complete original inventory, individual text, explicit shared fragments and bounded drawings. See [individual environmental writing and artwork](ENVIRONMENT_AUTHORING.md) for the full inventory and fixed-text exceptions.
 
 Explicit furniture is placed before the procedural filler. The engine chooses the nearest valid position to the requested room anchor, preserving terminal access, passage clearance and egress. Furniture uses its ordinary visible geometry and native collision body. Worn pieces start at 85% health and damaged pieces at 45%, so the choice affects their usefulness as barricades. Surface props are decorative and follow their supporting furniture when it moves or rotates; destroying or removing that support hides its decorations. They add no invisible collision volumes.
 
@@ -32,10 +34,10 @@ The engine still supplies unspecified furniture, small procedural details, physi
 
 ## Generation and offline behavior
 
-1. A new-run request captures a fresh seed, independent generation/chat IDs and up to five recent fictional design summaries. It contains no learner state, curriculum, conversations, credentials or real save content.
+1. A new-run request captures a fresh seed, independent generation/chat IDs and up to five recent fictional design and writing summaries. It contains no learner state, curriculum, conversations, credentials or real save content.
 2. The UI stores the exact request before release and queues `design-run` through the configured ChatGPT handoff. It provides a copyable chat request and connection controls. There is no API-key integration.
-3. The relay validates request/reply shape and correlation. The client validates the complete design, constructs an isolated candidate and checks the real building, floor-plan and furnishing invariants before replacing the active world.
-4. Geometry failures or repeated designs request bounded repairs under the same generation/chat, with a new request ID for each revised packet. There are at most three model calls per attempt. Exact transport retries retain the original packet and ID. A native completion can fetch one bound repair continuation; it stops when no further job arrives.
+3. The relay validates request/reply shape and correlation. The client validates the structure, constructs a private candidate and checks the real building, floor-plan and furnishing invariants. Its exact object inventory is captured in a second request for writing and artwork. No incomplete candidate becomes an active game or accepted save.
+4. Geometry failures, repeated designs, and invalid writing request bounded repairs under the same generation/chat, with a new request ID for each revised packet. Version 3 persists a maximum of three attempts per phase; an explicit Retry can continue an exhausted phase's saved repair. Exact transport retries retain the original packet and ID. Reload cannot reset the budget or silently rebind writing to a different inventory. Native completion can return a bound next phase or repair; it stops when no further job arrives.
 5. Offline, timed-out or exhausted attempts remain visible with Retry, Cancel and **Use procedural run instead**. Fallback is an explicit player choice. Cancellation leaves the previous run intact and rejects late results.
 
 The UI never presents procedural output as AI-authored. A bridge process being present does not mean ChatGPT is listening; a connected chat must actually serve the design request. Large captured packets use the existing exact chunk-reading protocol.
