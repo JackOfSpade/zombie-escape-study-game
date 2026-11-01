@@ -25,6 +25,8 @@ Diagnostics stay in this browser under `recent-game-diagnostics-v1`, separate fr
 
 Detailed snapshots identify sampled zombies and their current target/next route nodes. `zombieCount` and `zombiesOmitted` disclose the 80-zombie sampling cap. World events include their actual occurrence time, encounter and position where available, separately from capture time.
 
+`marks` records the last logged world event and recent study transport states, so a page reload does not replay them into the same run; a new run also skips archived study requests that settled before its log began.
+
 Old v1 logs still load. Missing or malformed audit metadata does not discard valid old detail records. Already-evicted history cannot be recovered; a newly observed historical run is marked partial.
 
 Verify with `node --import tsx --test tests/run-logs.test.ts tests/frame-performance.test.ts`. Tests use memory-only synthetic worlds, including long spectator sessions, reloads, late study receipts, timeline compaction, Unicode bursts and repeated run eviction. They do not read real saves or learning history.

@@ -10,6 +10,7 @@ import {
 } from "./run-log-audit";
 export const LOG_KEY = "recent-game-diagnostics-v1";
 export const LOG_LIMITS = { games: 3, entries: 400, bytesPerGame: 256_000 };
+const TRANSPORT_MARKS = 64;
 interface Entry {
   at: number;
   type: string;
@@ -21,6 +22,8 @@ interface RunLog {
   started: string;
   entries: Entry[];
   audit?: RunAudit;
+  /** What this run has already logged, so a page reload never replays it. */
+  marks?: { world: number; transport: Record<string, string> };
   summary?: {
     duration: number;
     outcome: string;
@@ -161,7 +164,9 @@ export class RunLogs {
         : `,"summary":${JSON.stringify(run.summary)}`;
     const audit =
       run.audit === undefined ? "" : `,"audit":${auditJson(run.audit)}`;
-    return `]${summary}${audit}}`;
+    const marks =
+      run.marks === undefined ? "" : `,"marks":${JSON.stringify(run.marks)}`;
+    return `]${summary}${audit}${marks}}`;
   }
   private drop(run: RunLog, c: RunCache, count: number) {
     if (count <= 0) return;
@@ -289,7 +294,9 @@ export class RunLogs {
       previous.time <= g.time
     )
       return;
-    for (const e of g.events.filter((e) => e.seq > (previous?.seq ?? 0)))
+    const logged =
+      previous?.seq ?? this.runs.find((r) => r.id === g.id)?.marks?.world ?? 0;
+    for (const e of g.events.filter((e) => e.seq > logged))
       this.record(g, "world", {
         seq: e.seq,
         occurredAt: e.at,
@@ -404,7 +411,36 @@ export class RunLogs {
       status: g.status,
       paused,
     });
+    const run = this.runs.find((r) => r.id === g.id);
+    if (run) (run.marks ??= { world: 0, transport: {} }).world = g.seq;
     this.flush();
+  }
+  /** Marks a study transport state, returning whether it is new to this run's
+   * log. An archived request that settled before this log began belongs to an
+   * earlier run's history, so a new run does not repeat it. */
+  noteTransport(
+    g: Game,
+    id: string,
+    state: string,
+    archivedSettledAt?: number,
+  ) {
+    const run = this.runs.find((r) => r.id === g.id);
+    const seen = run?.marks?.transport;
+    if (seen?.[id] === state) return false;
+    if (
+      archivedSettledAt !== undefined &&
+      seen?.[id] === undefined &&
+      archivedSettledAt < (run ? Date.parse(run.started) : Date.now())
+    )
+      return false;
+    if (run) {
+      const marks = (run.marks ??= { world: 0, transport: {} });
+      delete marks.transport[id];
+      marks.transport[id] = state;
+      const ids = Object.keys(marks.transport);
+      if (ids.length > TRANSPORT_MARKS) delete marks.transport[ids[0]];
+    }
+    return true;
   }
   export() {
     return JSON.stringify(
@@ -431,6 +467,40 @@ export class RunLogs {
     });
     return this.queue;
   }
+}
+
+/** Logs written before marks existed fall back to their retained world events. */
+function restoredMarks(value: unknown, run: RunLog): RunLog["marks"] {
+  if (
+    isRecord(value) &&
+    typeof value.world === "number" &&
+    Number.isFinite(value.world) &&
+    isRecord(value.transport)
+  ) {
+    const transport = Object.fromEntries(
+      Object.entries(value.transport)
+        .filter(
+          (mark): mark is [string, string] =>
+            mark[0].length <= 256 &&
+            typeof mark[1] === "string" &&
+            mark[1].length <= 256,
+        )
+        .slice(-TRANSPORT_MARKS),
+    );
+    return { world: value.world, transport };
+  }
+  const seqs = [
+    ...run.entries,
+    ...(run.audit?.events ?? []),
+    ...(run.audit?.spectator ?? []),
+  ].flatMap((e) =>
+    e.type === "world" && isRecord(e.data) && typeof e.data.seq === "number"
+      ? [e.data.seq]
+      : [],
+  );
+  return seqs.length
+    ? { world: Math.max(...seqs), transport: {} }
+    : undefined;
 }
 
 function restoredRun(value: unknown): RunLog | undefined {
@@ -496,5 +566,7 @@ function restoredRun(value: unknown): RunLog | undefined {
   }
   const audit = restoreAudit(value.audit);
   if (audit) run.audit = audit;
+  const marks = restoredMarks(value.marks, run);
+  if (marks) run.marks = marks;
   return run;
 }

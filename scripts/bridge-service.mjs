@@ -22,6 +22,10 @@ export const defaults = {
   entry: fileURLToPath(new URL("./bridge-server.mjs", import.meta.url)),
 };
 const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+// The relay validates its whole durable queue before it can report ready; that
+// takes seconds near the queue's byte cap, and killing it would never let it
+// finish compacting the queue that made it slow.
+const STARTUP_TIMEOUT_MS = 60_000;
 class BridgeTransportError extends Error {}
 const unavailable = (method) =>
   new BridgeTransportError(
@@ -115,7 +119,9 @@ export async function ensureBridge(options = {}) {
   privateDirectory(o.directory);
   const lock = join(o.directory, "start.lock");
   let descriptor;
-  for (let attempt = 0; attempt < 120; attempt++) {
+  // A concurrent caller waits out the lock holder's whole startup allowance.
+  const lockDeadline = Date.now() + STARTUP_TIMEOUT_MS + 5000;
+  while (Date.now() < lockDeadline) {
     const owner = record(o);
     verifyRecord(o, owner);
     const live = await request(o, owner);
@@ -186,7 +192,7 @@ export async function ensureBridge(options = {}) {
           reject(
             Error("Bridge startup timed out; inspect its private service log"),
           ),
-        10000,
+        STARTUP_TIMEOUT_MS,
       );
       child.once("error", reject);
       child.once("exit", (code) =>

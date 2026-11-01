@@ -1,6 +1,12 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import {
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -655,5 +661,160 @@ test("actual local HTTP routes advertise design-run and enforce exact cancellati
     await new Promise((resolve, reject) =>
       server.close((error) => (error ? reject(error) : resolve())),
     );
+  }
+});
+
+test("the chat's default wait outlasts the game's validation between design stages", async () => {
+  const queue = createHandoffQueue(),
+    app = createTerminalRelayApp({ queue });
+  queue.enable(true);
+  const first = request("design-slow-validation-one"),
+    receipt = queue.enqueue("design-run", first, scope, chat);
+  const turn = get(app);
+  const sent = finish(app, turn, answer(first));
+  queue.result(receipt.id, receipt.hash);
+  const second = request("design-slow-validation-two");
+  // A complete candidate took the live game 11 s to validate before this stage.
+  const released = new Promise((done) =>
+    setTimeout(() => {
+      queue.enqueue("design-run", second, scope, chat);
+      done();
+    }, 5300),
+  );
+  const next = (
+    await app.call(
+      "get_current_study_question",
+      { chat, after: sent.completion.continuation.after },
+      owner,
+    )
+  ).structuredContent;
+  await released;
+  assert.equal(next.status, "prepare");
+  assert.equal(next.requestId, second.requestId);
+});
+
+test("superseded design stages shed their packets but keep exact receipts", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "design-compact-"));
+  const file = join(dir, "jobs.json");
+  try {
+    const queue = createHandoffQueue({ file }),
+      app = createTerminalRelayApp({ queue, continuationWaitMs: 5 });
+    queue.enable(true);
+    const first = request("design-compact-one"),
+      receipt = queue.enqueue("design-run", first, scope, chat);
+    const turn = get(app);
+    const delivered = answer(first);
+    finish(app, turn, delivered);
+    const sizeBefore = statSync(file).size;
+
+    // An unread answer must keep its packet even when a later stage exists.
+    const unread = request("design-compact-two");
+    queue.enqueue("design-run", unread, scope, chat);
+    assert.ok(statSync(file).size > sizeBefore);
+    const stored = () =>
+      JSON.parse(readFileSync(file, "utf8")).jobs.find(
+        (j) => j.requestId === first.requestId,
+      );
+    assert.equal(stored().compacted, undefined);
+
+    assert.equal(queue.result(receipt.id, receipt.hash).status, "done");
+    const third = request("design-compact-three");
+    queue.enqueue("design-run", third, scope, chat);
+    assert.equal(stored().compacted, true);
+    assert.deepEqual(Object.keys(stored().payload).sort(), [
+      "generationId",
+      "requestId",
+    ]);
+
+    // An exact retry after a lost acknowledgement still reaches the same answer.
+    assert.deepEqual(queue.enqueue("design-run", first, scope, chat), receipt);
+    assert.deepEqual(queue.result(receipt.id, receipt.hash), {
+      status: "done",
+      answer: delivered,
+    });
+    assert.throws(() => queue.reopen(receipt.id), /superseded/);
+
+    // A bridge restart accepts the compact form and keeps the newest packet.
+    const restored = createHandoffQueue({ file });
+    restored.enable(true);
+    assert.deepEqual(restored.result(receipt.id, receipt.hash), {
+      status: "done",
+      answer: delivered,
+    });
+    const jobs = JSON.parse(readFileSync(file, "utf8")).jobs;
+    assert.ok(jobs.at(-1).payload.structure ?? jobs.at(-1).payload.recent);
+    assert.equal(jobs.at(-1).compacted, undefined);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("loading an old queue saves its compaction so the next start is cheap", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "design-compact-"));
+  const file = join(dir, "jobs.json");
+  try {
+    const queue = createHandoffQueue({ file }),
+      app = createTerminalRelayApp({ queue, continuationWaitMs: 5 });
+    queue.enable(true);
+    const first = request("design-load-one"),
+      receipt = queue.enqueue("design-run", first, scope, chat);
+    const delivered = answer(first);
+    finish(app, get(app), delivered);
+    assert.equal(queue.result(receipt.id, receipt.hash).status, "done");
+    // Reproduce a file written before compaction: a superseded, fully read
+    // stage that still holds its packet on disk.
+    const later = request("design-load-two");
+    const saved = JSON.parse(readFileSync(file, "utf8"));
+    const old = saved.jobs[0];
+    old.resultReadAt = old.completedAt;
+    saved.jobs.push({
+      ...old,
+      id: "later-stage",
+      requestId: later.requestId,
+      payload: later,
+      hash: createHash("sha256")
+        .update(JSON.stringify({ operation: old.operation, payload: later }))
+        .digest("hex"),
+      status: "queued",
+      answer: undefined,
+      answerHash: undefined,
+      resultReadAt: undefined,
+    });
+    writeFileSync(file, JSON.stringify(saved));
+    const before = statSync(file).size;
+
+    const restored = createHandoffQueue({ file });
+    const stored = JSON.parse(readFileSync(file, "utf8")).jobs;
+    assert.equal(stored[0].compacted, true);
+    assert.equal(stored[1].compacted, undefined);
+    assert.ok(statSync(file).size < before);
+    restored.enable(true);
+    assert.deepEqual(restored.result(receipt.id, receipt.hash), {
+      status: "done",
+      answer: delivered,
+    });
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("a compact marker cannot disguise an unanswered or tampered design job", () => {
+  const dir = mkdtempSync(join(tmpdir(), "design-compact-"));
+  const file = join(dir, "jobs.json");
+  try {
+    const queue = createHandoffQueue({ file });
+    queue.enable(true);
+    const p = request("design-compact-queued");
+    queue.enqueue("design-run", p, scope, chat);
+    const saved = JSON.parse(readFileSync(file, "utf8"));
+    saved.jobs[0].compacted = true;
+    saved.jobs[0].payload = {
+      requestId: p.requestId,
+      generationId: p.generationId,
+    };
+    writeFileSync(file, JSON.stringify(saved), { mode: 0o600 });
+    assert.throws(() => createHandoffQueue({ file }), /Corrupt/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
   }
 });

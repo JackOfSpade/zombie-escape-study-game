@@ -79,6 +79,26 @@ async function launcher(options) {
   return JSON.parse(output.trim());
 }
 
+test("a relay that needs over ten seconds to load its queue still starts", async () => {
+  const f = await fixture();
+  try {
+    // A synchronous delay matches a large queue being validated at startup.
+    writeFileSync(
+      f.options.entry,
+      `Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0,10500);\n` +
+        readFileSync(f.options.entry, "utf8"),
+    );
+    const [one, two] = await Promise.all([
+      launcher(f.options),
+      launcher(f.options),
+    ]);
+    assert.equal(one.pid, two.pid);
+    assert.equal((await bridgeStatus(f.options)).pid, one.pid);
+  } finally {
+    await f.close();
+  }
+});
+
 async function controlledService(handler) {
   const f = await fixture();
   const owner = {

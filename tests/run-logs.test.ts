@@ -789,3 +789,99 @@ test("a delayed final frame keeps its death events and final snapshot in the pla
   assert.equal(JSON.stringify(run.entries), playable);
   assert.equal(run.audit!.spectator.at(-1)!.at, 33);
 });
+
+function storedLogs() {
+  let saved: string | null = null;
+  return {
+    read: async () => saved,
+    write: async (value: string) => {
+      saved = value;
+    },
+  };
+}
+function worldEvent(g: Game, type: string) {
+  g.events.push({ seq: ++g.seq, at: g.time, type, floor: 0, text: type });
+}
+
+test("reloading never replays world events or study transport into the same run", async () => {
+  const storage = storedLogs();
+  const { g } = scene();
+  g.id = "reload-replay";
+  let logs = new RunLogs(storage);
+  await logs.load();
+  worldEvent(g, "survivor-stairs");
+  logs.capture(g);
+  assert.equal(logs.noteTransport(g, "question-1", "pending"), true);
+  assert.equal(logs.noteTransport(g, "question-1", "pending"), false);
+  await logs.flush();
+  const worldCount = () =>
+    logs.runs[0].entries.filter((e) => e.type === "world").length;
+  for (let reload = 0; reload < 5; reload++) {
+    logs = new RunLogs(storage);
+    await logs.load();
+    logs.capture(g, true);
+    assert.equal(worldCount(), 1);
+    assert.equal(logs.noteTransport(g, "question-1", "pending"), false);
+    await logs.flush();
+  }
+  assert.equal(logs.noteTransport(g, "question-1", "applied"), true);
+  worldEvent(g, "survivor-stairs");
+  g.time += 3;
+  logs.capture(g);
+  assert.equal(worldCount(), 2);
+  const seqs = logs.runs[0].entries
+    .filter((e) => e.type === "world")
+    .map((e) => (e.data as { seq: number }).seq);
+  assert.deepEqual(seqs, [1, 2]);
+});
+
+test("a log written before reload marks resumes from its retained world events", async () => {
+  const storage = storedLogs();
+  const { g } = scene();
+  g.id = "legacy-marks";
+  worldEvent(g, "survivor-stairs");
+  await storage.write(
+    JSON.stringify({
+      version: 1,
+      runs: [
+        {
+          id: g.id,
+          seed: g.seed,
+          started: new Date().toISOString(),
+          entries: [{ at: 0, type: "world", data: { seq: 1 } }],
+        },
+      ],
+    }),
+  );
+  const logs = new RunLogs(storage);
+  await logs.load();
+  logs.capture(g, true);
+  assert.equal(
+    logs.runs[0].entries.filter((e) => e.type === "world").length,
+    1,
+  );
+});
+
+test("a new run does not repeat study history that settled before its log began", async () => {
+  const { g } = scene();
+  g.id = "archive-history";
+  const logs = new RunLogs(memory());
+  logs.record(g, "start");
+  const started = Date.parse(logs.runs[0].started);
+  assert.equal(logs.noteTransport(g, "old", "applied", started - 1000), false);
+  assert.equal(logs.noteTransport(g, "late", "applied", started + 1000), true);
+  assert.equal(logs.noteTransport(g, "live", "pending"), true);
+  // An archived request this run already saw pending still reports its receipt.
+  assert.equal(logs.noteTransport(g, "live", "applied", started - 1000), true);
+});
+
+test("transport marks stay bounded inside the run's byte budget", async () => {
+  const { g } = scene();
+  g.id = "transport-bound";
+  const logs = new RunLogs(memory());
+  logs.record(g, "start");
+  for (let i = 0; i < 500; i++)
+    logs.noteTransport(g, `direct-run-${i}`, `pending/${i}`);
+  assert.equal(Object.keys(logs.runs[0].marks!.transport).length, 64);
+  assert.ok(logs.noteTransport(g, "direct-run-499", "pending/499") === false);
+});

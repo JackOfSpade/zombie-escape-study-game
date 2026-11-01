@@ -791,6 +791,34 @@ function validateAnswer(job, answer) {
 }
 
 /** Durable, bounded local transport only. Academic validation remains in the game. */
+/** Each design stage carries the whole candidate, so retained stages grow the
+ * state file quadratically and every save rewrites all of it. Once the game has
+ * read a stage's answer and released a later one, only its receipt identity and
+ * answer are ever used again (an exact retry or a duplicate completion). */
+function compactDesignHistory(jobs) {
+  let compacted = false;
+  const latest = new Map();
+  for (const job of jobs)
+    if (job.operation === "design-run" && !job.compacted)
+      latest.set(job.payload.generationId, job.id);
+  for (const job of jobs)
+    if (
+      job.operation === "design-run" &&
+      !job.compacted &&
+      job.status === "done" &&
+      job.resultReadAt !== undefined &&
+      validBinding(job.payload.generationId) &&
+      latest.get(job.payload.generationId) !== job.id
+    ) {
+      job.payload = {
+        requestId: job.requestId,
+        generationId: job.payload.generationId,
+      };
+      job.compacted = true;
+      compacted = true;
+    }
+  return compacted;
+}
 export function createHandoffQueue({
   file,
   now = Date.now,
@@ -798,6 +826,7 @@ export function createHandoffQueue({
   maxJobs = 128,
 } = {}) {
   let state = { schema: 1, enabled: false, autonomousWork: false, jobs: [] };
+  let compactedOnLoad = false;
   if (file) {
     mkdirSync(dirname(file), { recursive: true, mode: 0o700 });
     const parent = lstatSync(dirname(file));
@@ -823,20 +852,24 @@ export function createHandoffQueue({
           !HANDOFF_OPERATIONS.includes(job.operation) ||
           !object(job.payload) ||
           job.requestId !== job.payload.requestId ||
-          job.hash !==
-            hash(
-              JSON.stringify({
-                operation: job.operation,
-                payload: job.payload,
-              }),
-            ) ||
+          (job.compacted === true
+            ? job.operation !== "design-run" ||
+              job.status !== "done" ||
+              !/^[a-f0-9]{64}$/.test(job.hash ?? "")
+            : job.hash !==
+              hash(
+                JSON.stringify({
+                  operation: job.operation,
+                  payload: job.payload,
+                }),
+              )) ||
           !["queued", "working", "done"].includes(job.status) ||
           (job.status === "done" &&
             job.answerHash !== hash(JSON.stringify(job.answer)))
         )
           throw Error("Corrupt handoff request or answer identity");
         ids.add(job.id);
-        if (job.operation === "design-run") {
+        if (job.operation === "design-run" && !job.compacted) {
           parseRunDesignRequest(job.payload);
           if (!validChatCode(job.chatCode))
             throw Error("Corrupt run design chat code");
@@ -852,6 +885,7 @@ export function createHandoffQueue({
         enabled: false,
         autonomousWork: false,
       }; // Per-launch explicit release; do not restore authorization.
+      compactedOnLoad = compactDesignHistory(state.jobs);
       for (const job of state.jobs)
         if (
           job.status === "working" &&
@@ -881,6 +915,9 @@ export function createHandoffQueue({
     );
     renameSync(tmp, file);
   };
+  // Without this, a restart keeps revalidating every old stage until a new
+  // request happens to save, which a slow startup may never reach.
+  if (compactedOnLoad) save();
   const checkEnabled = () => {
     if (!state.enabled)
       throw Error("ChatGPT handoff is disabled; release it in game settings");
@@ -1206,6 +1243,7 @@ export function createHandoffQueue({
         ...(chatCode !== undefined ? { chatCode } : {}),
       };
       state.jobs = [...keep, job];
+      compactDesignHistory(state.jobs);
       save();
       const retained = new Set(state.jobs.map((j) => j.id));
       for (const id of polled.keys()) if (!retained.has(id)) polled.delete(id);
@@ -1481,6 +1519,8 @@ export function createHandoffQueue({
       const job = state.jobs.find((j) => j.id === id && j.status === "done");
       if (!job)
         throw Error("Only an answered handoff can be explicitly corrected");
+      if (job.compacted)
+        throw Error("A superseded run-design stage cannot be corrected");
       checkAutonomous(job.operation, job.payload);
       (job.corrections ??= []).push({
         round: job.round ?? 0,
