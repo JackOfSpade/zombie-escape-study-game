@@ -796,6 +796,7 @@ function validateAnswer(job, answer) {
  * read a stage's answer and released a later one, only its receipt identity and
  * answer are ever used again (an exact retry or a duplicate completion). */
 function compactDesignHistory(jobs) {
+  let compacted = false;
   const latest = new Map();
   for (const job of jobs)
     if (job.operation === "design-run" && !job.compacted)
@@ -814,7 +815,9 @@ function compactDesignHistory(jobs) {
         generationId: job.payload.generationId,
       };
       job.compacted = true;
+      compacted = true;
     }
+  return compacted;
 }
 export function createHandoffQueue({
   file,
@@ -823,6 +826,7 @@ export function createHandoffQueue({
   maxJobs = 128,
 } = {}) {
   let state = { schema: 1, enabled: false, autonomousWork: false, jobs: [] };
+  let compactedOnLoad = false;
   if (file) {
     mkdirSync(dirname(file), { recursive: true, mode: 0o700 });
     const parent = lstatSync(dirname(file));
@@ -881,7 +885,7 @@ export function createHandoffQueue({
         enabled: false,
         autonomousWork: false,
       }; // Per-launch explicit release; do not restore authorization.
-      compactDesignHistory(state.jobs);
+      compactedOnLoad = compactDesignHistory(state.jobs);
       for (const job of state.jobs)
         if (
           job.status === "working" &&
@@ -911,6 +915,9 @@ export function createHandoffQueue({
     );
     renameSync(tmp, file);
   };
+  // Without this, a restart keeps revalidating every old stage until a new
+  // request happens to save, which a slow startup may never reach.
+  if (compactedOnLoad) save();
   const checkEnabled = () => {
     if (!state.enabled)
       throw Error("ChatGPT handoff is disabled; release it in game settings");

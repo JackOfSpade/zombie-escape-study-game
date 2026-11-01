@@ -749,6 +749,55 @@ test("superseded design stages shed their packets but keep exact receipts", asyn
   }
 });
 
+test("loading an old queue saves its compaction so the next start is cheap", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "design-compact-"));
+  const file = join(dir, "jobs.json");
+  try {
+    const queue = createHandoffQueue({ file }),
+      app = createTerminalRelayApp({ queue, continuationWaitMs: 5 });
+    queue.enable(true);
+    const first = request("design-load-one"),
+      receipt = queue.enqueue("design-run", first, scope, chat);
+    const delivered = answer(first);
+    finish(app, get(app), delivered);
+    assert.equal(queue.result(receipt.id, receipt.hash).status, "done");
+    // Reproduce a file written before compaction: a superseded, fully read
+    // stage that still holds its packet on disk.
+    const later = request("design-load-two");
+    const saved = JSON.parse(readFileSync(file, "utf8"));
+    const old = saved.jobs[0];
+    old.resultReadAt = old.completedAt;
+    saved.jobs.push({
+      ...old,
+      id: "later-stage",
+      requestId: later.requestId,
+      payload: later,
+      hash: createHash("sha256")
+        .update(JSON.stringify({ operation: old.operation, payload: later }))
+        .digest("hex"),
+      status: "queued",
+      answer: undefined,
+      answerHash: undefined,
+      resultReadAt: undefined,
+    });
+    writeFileSync(file, JSON.stringify(saved));
+    const before = statSync(file).size;
+
+    const restored = createHandoffQueue({ file });
+    const stored = JSON.parse(readFileSync(file, "utf8")).jobs;
+    assert.equal(stored[0].compacted, true);
+    assert.equal(stored[1].compacted, undefined);
+    assert.ok(statSync(file).size < before);
+    restored.enable(true);
+    assert.deepEqual(restored.result(receipt.id, receipt.hash), {
+      status: "done",
+      answer: delivered,
+    });
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("a compact marker cannot disguise an unanswered or tampered design job", () => {
   const dir = mkdtempSync(join(tmpdir(), "design-compact-"));
   const file = join(dir, "jobs.json");
