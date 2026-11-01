@@ -314,6 +314,8 @@ export const ACTIVE_WINDOW_MS = 20_000;
  * minute, so the window must outlast that cadence; it still frees a turn left
  * behind by a reload or an earlier run within about a minute. */
 export const REQUESTER_LIVE_MS = HANDOFF_REQUESTER_LIVE_MS;
+const STUDY_CONTINUATION_WAIT_MS = 5000;
+const DESIGN_CONTINUATION_WAIT_MS = 25_000;
 export function createTerminalRelayApp({
   queue,
   now = Date.now,
@@ -321,7 +323,7 @@ export function createTerminalRelayApp({
   promptLimit = PROMPT_LIMIT,
   activeWindowMs = ACTIVE_WINDOW_MS,
   requesterLiveMs = REQUESTER_LIVE_MS,
-  continuationWaitMs = 5000,
+  continuationWaitMs,
 } = {}) {
   if (!queue) throw Error("The terminal relay requires the handoff queue");
   const sessions = new Map();
@@ -827,8 +829,16 @@ export function createTerminalRelayApp({
         nativeJobScope(job),
         prior.operation === "generate",
       );
+    // The game validates a complete candidate before it can release the next
+    // run-design stage, which takes longer as accepted writing accumulates.
+    const waitMs =
+      continuationWaitMs ??
+      (prior.operation === "design-run"
+        ? DESIGN_CONTINUATION_WAIT_MS
+        : STUDY_CONTINUATION_WAIT_MS);
     const until =
-      Date.now() + Math.min(5000, Math.max(0, Number(continuationWaitMs) || 0));
+      Date.now() +
+      Math.min(DESIGN_CONTINUATION_WAIT_MS, Math.max(0, Number(waitMs) || 0));
     while (true) {
       if (
         s.turn?.status === "claimed" &&

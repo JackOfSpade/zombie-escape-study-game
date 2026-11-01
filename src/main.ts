@@ -494,15 +494,24 @@ function prepareNativeQuestion(e: Encounter): Promise<void> {
 }
 const nativeLogStates = new WeakMap<object, string>();
 function nativeStudyChanged() {
-  for (const e of new Set([
-    ...Object.values(game.encounters),
-    ...game.study.archives,
-  ])) {
+  const current = new Set(Object.values(game.encounters));
+  for (const e of new Set([...current, ...game.study.archives])) {
     const s = e.directStudy;
     if (!s) continue;
     const marker = `${s.state}/${s.transportPhase ?? ""}/${s.responseReceivedAt ?? ""}/${s.appliedAt ?? ""}`;
     if (nativeLogStates.get(s) === marker) continue;
     nativeLogStates.set(s, marker);
+    if (
+      !runLogs.noteTransport(
+        game,
+        s.id,
+        marker,
+        !current.has(e) && (s.state === "applied" || s.state === "superseded")
+          ? (s.appliedAt ?? s.responseReceivedAt ?? s.createdAt)
+          : undefined,
+      )
+    )
+      continue;
     runLogs.record(game, "native-study-transport", {
       requestId: s.id,
       state: s.state,
