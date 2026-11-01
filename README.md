@@ -1,6 +1,6 @@
 # zombie-escape-study-game
 
-A local browser-based, real-time first-person survival/study game with a Classic top-down view. Nineteen autonomous NPC survivors share a procedurally generated four-floor building with the human. Reach recurring four-seat rooftop helicopters while incoming street fronts converge on the ground-floor entrance.
+A local browser-based, real-time first-person survival/study game with a Classic top-down view. Nineteen autonomous NPC survivors share an AI-designed four-floor building with the human. Every new run goes through the reviewed design pipeline before play. Reach recurring four-seat rooftop helicopters while incoming street fronts converge on the ground-floor entrance.
 
 **Current study flow:** the game occupies one tab; answers and tutoring happen in an ordinary ChatGPT chat beside it. The game receives the attributed conversation in one final completion callback per question. Live question generation and formal learning assessment use separate, bounded tool steps in that same chat. Existing learning evidence and the original roadmap remain intact. The connector is a ChatGPT handoff; it does not certify native ChatGPT Study Mode or grading quality.
 

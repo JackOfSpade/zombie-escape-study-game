@@ -1,7 +1,5 @@
-import {
-  chooseProceduralRun,
-  startProceduralRun,
-} from "./helpers/procedural-run";
+import { detachAuthoredScene } from "./helpers/synthetic-world";
+import { chooseDesignedRun, startDesignedRun } from "./helpers/designed-run";
 import { openGameMenu } from "./helpers/game-menu";
 import { selectTopDown } from "./helpers/view-mode";
 import { expect, test, type Page } from "@playwright/test";
@@ -126,6 +124,7 @@ test("physical station access respects occlusion while an issued native question
 }) => {
   const relay = await mockNativeStudy(page);
   await enterNativeGame(page);
+  await detachAuthoredScene(page);
   await selectTopDown(page);
   await page.evaluate(() => {
     const g = (window as any).__deadAir.game,
@@ -197,7 +196,7 @@ test("UI settings and curriculum stay in the pause menu; narrow layout remains u
 }) => {
   await page.setViewportSize({ width: 780, height: 900 });
   await page.goto("/");
-  await startProceduralRun(page);
+  await startDesignedRun(page);
   await openGameMenu(page);
   await page.getByRole("button", { name: "Settings", exact: true }).click();
   await expect(page.getByText("Transmission settings")).toBeVisible();
@@ -419,7 +418,7 @@ test("partial development work survives combat death while a fresh run closes it
   await expect(page.locator("#start-card")).toBeHidden();
   await page.getByRole("button", { name: "Run summary" }).click();
   await page.getByRole("button", { name: "Begin another run" }).click();
-  await chooseProceduralRun(page);
+  await chooseDesignedRun(page);
   await expect(page.locator("#start-card")).toBeHidden();
   const state = await page.evaluate(() => {
     const g = (window as any).__deadAir.game;
@@ -621,7 +620,7 @@ for (const fixtureKind of ["checkpoint", "transfer", "historical"] as const) {
     await page
       .getByRole("button", { name: "Start a live study run", exact: true })
       .click();
-    await chooseProceduralRun(page);
+    await chooseDesignedRun(page);
     // A new live run is a fresh force-field world; keep the legacy fixture.
     // The live run starts once the last run's learning is saved.
     await page.waitForFunction(
@@ -905,7 +904,7 @@ test("durable saves retain a large archive beyond localStorage capacity", async 
   page,
 }) => {
   await page.goto("/");
-  await startProceduralRun(page);
+  await startDesignedRun(page);
   const size = 8_000_000;
   await page.evaluate((size) => {
     const g = (window as any).__deadAir.game,
@@ -1075,7 +1074,7 @@ test("roadmap review preview: uploaded Markdown reports ancestry and protected c
 }) => {
   const roadmap = JSON.parse(await readFile("public/curriculum.json", "utf8"));
   await page.goto("/");
-  await startProceduralRun(page);
+  await startDesignedRun(page);
   await openGameMenu(page);
   await page.locator("#curriculum-button").click();
   await page.getByText("Review an updated roadmap", { exact: true }).click();
@@ -1169,7 +1168,7 @@ test("audio and accessibility: real sound output, mute, stable reduced-motion ca
   await mockNativeStudy(page);
   await page.goto("/");
   await selectTopDown(page);
-  await startProceduralRun(page);
+  await startDesignedRun(page);
   const audio = await page.evaluate(async () => {
     const modulePath = "/src/audio.ts",
       { AudioDirector } = await import(modulePath);
@@ -1536,7 +1535,7 @@ test("practical observations: unreviewed output is inert, persists without chang
 }) => {
   await page.setViewportSize({ width: 430, height: 900 });
   await page.goto("/");
-  await startProceduralRun(page);
+  await startDesignedRun(page);
   const before = await page.evaluate(() => {
     const g = (window as any).__deadAir.game;
     g.zombies = [];
@@ -1626,7 +1625,7 @@ test("environment packet survives an actual browser-storage write failure and ca
   page,
 }) => {
   await page.goto("/");
-  await startProceduralRun(page);
+  await startDesignedRun(page);
   await page.evaluate(async () => {
     const root = "/src/",
       p = await import(root + "persistence.ts");
@@ -1788,7 +1787,7 @@ for (const { storageFailure, provider } of [
     await page.evaluate(() => {
       (window as any).__deadAir.game.settings.view = "top-down";
     });
-    await startProceduralRun(page);
+    await startDesignedRun(page);
     const before = await page.evaluate(async () => {
       const g = (window as any).__deadAir.game,
         root = "/src/",

@@ -270,6 +270,15 @@ test("separate game connector requires local pairing, PKCE, a signed client asse
     const nativeGetter = relayTools.find(
       (t: any) => t.name === "get_current_study_question",
     );
+    const contextReader = relayTools.find(
+      (t: any) => t.name === "read_study_terminal_context",
+    );
+    for (const alias of ["chat", "chat_code", "chatCode"])
+      assert.deepEqual(
+        contextReader.inputSchema.properties[alias],
+        nativeGetter.inputSchema.properties[alias],
+        "public context reads advertise the same chat binding as the getter",
+      );
     assert.equal(
       nativeGetter._meta.ui,
       undefined,
@@ -881,6 +890,80 @@ test("separate game connector requires local pairing, PKCE, a signed client asse
       ).structuredContent.completion.continuation.expected,
       "assessment",
     );
+    // Large chat-scoped preparation must remain readable through the actual
+    // protected tool dispatcher without exposing its chunks to another chat.
+    const contextChat = "CONTEXT1";
+    const scopedPayload = {
+      ...preparationPayload,
+      requestId: "synthetic-protected-scoped-context",
+      curriculum: "PRIVATE_SCOPED_CONTEXT_ROW 🙂\n".repeat(6000),
+    };
+    const scopedReceipt = q.enqueue(
+      "generate",
+      scopedPayload,
+      nativeScope,
+      contextChat,
+    );
+    q.result(scopedReceipt.id, scopedReceipt.hash);
+    const scopedTurn = (
+      await relayCall("get_current_study_question", { chat: contextChat })
+    ).structuredContent;
+    assert.equal(scopedTurn.phase, "prepare");
+    assert.ok(!scopedTurn.prompt.includes(scopedPayload.curriculum));
+    const contextArgs = {
+      relayId: scopedTurn.relayId,
+      turnId: scopedTurn.turnId,
+      part: "payload",
+      index: 0,
+    };
+    for (const [args, error] of [
+      [contextArgs, /chat code/i],
+      [{ ...contextArgs, chat: "OTHERCHAT" }, /disconnected/i],
+    ] as const) {
+      const rejected = await relayCall("read_study_terminal_context", args);
+      assert.equal(rejected.isError, true);
+      assert.match(JSON.parse(rejected.content[0].text).note, error);
+      assert.ok(
+        !JSON.stringify(rejected).includes("PRIVATE_SCOPED_CONTEXT_ROW"),
+      );
+    }
+    assert.deepEqual(
+      (await relayCall("get_current_study_question", { chat: contextChat }))
+        .structuredContent,
+      scopedTurn,
+      "rejected context reads preserve the pending scoped claim",
+    );
+    const firstChunk = (
+      await relayCall("read_study_terminal_context", {
+        ...contextArgs,
+        chat: contextChat,
+      })
+    ).structuredContent;
+    assert.ok(firstChunk.parts > 1);
+    const chunks = [firstChunk.text];
+    for (let index = 1; index < firstChunk.parts; index++)
+      chunks.push(
+        (
+          await relayCall("read_study_terminal_context", {
+            ...contextArgs,
+            chat: contextChat,
+            index,
+          })
+        ).structuredContent.text,
+      );
+    assert.deepEqual(JSON.parse(chunks.join("")), scopedPayload);
+    const scopedCompletion = (
+      await relayCall("finish_study_preparation", {
+        relayId: scopedTurn.relayId,
+        turnId: scopedTurn.turnId,
+        jobFingerprint: scopedTurn.jobFingerprint,
+        response: JSON.stringify(
+          q.result(preparationReceipt.id, preparationReceipt.hash).answer,
+        ),
+      })
+    ).structuredContent;
+    assert.equal(scopedCompletion.completion.status, "sent");
+    assert.equal(q.result(scopedReceipt.id, scopedReceipt.hash).status, "done");
     await post(
       "/mcp",
       { jsonrpc: "2.0", id: randomUUID(), method: "tools/list" },
@@ -940,6 +1023,7 @@ test("separate game connector requires local pairing, PKCE, a signed client asse
       held.claim,
       "SYNTHETIC_NATIVE_PRIVATE",
       "PRIVATE_PREPARATION_SOURCE_ROWS",
+      "PRIVATE_SCOPED_CONTEXT_ROW",
     ])
       assert.ok(!diagnosticText.includes(secret));
     // A consumer cannot mutate the retained diagnostic events through status.

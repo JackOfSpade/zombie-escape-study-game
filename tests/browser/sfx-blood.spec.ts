@@ -1,10 +1,12 @@
-import { startProceduralRun } from "./helpers/procedural-run";
+import { detachAuthoredScene } from "./helpers/synthetic-world";
+import { startDesignedRun } from "./helpers/designed-run";
 import { expect, test } from "@playwright/test";
 test("downloaded SFX decode and play through real low-pass filters; permanent blood reloads", async ({
   page,
 }) => {
   await page.goto("/");
-  await startProceduralRun(page);
+  await startDesignedRun(page);
+  await detachAuthoredScene(page);
   const proof = await page.evaluate(async () => {
     const { AudioDirector } = await import("/src/audio.ts" as string),
       { SFX } = await import("/src/sfx.ts" as string);

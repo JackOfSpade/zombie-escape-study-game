@@ -459,7 +459,7 @@ function message(request: QualityRunDesignRequest) {
 }
 
 /** The caller alone installs the returned completed game. This routine never
- * changes a live run, starts a procedural fallback or contacts a model itself. */
+ * changes a live run or contacts a model itself. */
 export async function prepareQualityRun<T>(
   draft: QualityDesignDraft,
   options: QualityOptions<T>,
@@ -471,7 +471,14 @@ export async function prepareQualityRun<T>(
     throw Error(
       "This client cannot prepare a reviewed run. Update the game before retrying.",
     );
-  if (draft.exhausted) throw Error(draft.pauseReason);
+  if (draft.exhausted)
+    throw Error(
+      // Older saved drafts can contain the retired fallback in their status text.
+      draft.pauseReason.replace(
+        "Choose Retry to continue, Cancel, or an explicit procedural run.",
+        "Choose Retry to continue or Cancel.",
+      ),
+    );
   // Validate callers that resume an in-memory draft as strictly as a disk reload.
   parseQualityDraft(draft);
   let candidate: ProvisionalRun | undefined;
@@ -512,7 +519,7 @@ export async function prepareQualityRun<T>(
   const setPaused = (reason: string) => {
     draft.exhausted = true;
     draft.pauseReason =
-      `${reason} Your accepted work and exact request are saved. Choose Retry to continue, Cancel, or an explicit procedural run.`.slice(
+      `${reason} Your accepted work and exact request are saved. Choose Retry to continue or Cancel.`.slice(
         0,
         600,
       );

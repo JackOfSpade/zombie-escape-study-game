@@ -44,13 +44,13 @@ Rendering uses padded shared texture atlases, aspect-aware text layout and insta
 
 The accepted version 3 design stores the original surface inventory and all writing and artwork. Save decoding validates canonical bindings without generating replacement text or re-enumerating moved furniture. Checkpoints and offline replays retain identical object content. Historical version 1 and 2 designs keep their existing shared textures and single-phase request behavior.
 
-Pending drafts retain their exact phase, request ID, chat code, captured history, inventory fingerprint, builder version and attempt budget. Quality draft version 3 additionally retains accepted batches and compact review/convergence state, without copying every prior full request. Reload rebuilds only the private candidate and verifies it against the captured inventory before resuming. A changed builder cannot silently attach old writing to new objects. Retry, cancellation, late-result rejection and explicit procedural fallback retain their existing purpose. Retained request/draft version 2 continues its original two-phase behavior without an automatic upgrade.
+Pending drafts retain their exact phase, request ID, chat code, captured history, inventory fingerprint, builder version and attempt budget. Quality draft version 3 additionally retains accepted batches and compact review/convergence state, without copying every prior full request. Reload rebuilds only the private candidate and verifies it against the captured inventory before resuming. A changed builder cannot silently attach old writing to new objects. Retry, cancellation and late-result rejection preserve the active run. New runs require the reviewed version 3 pipeline, with no procedural bypass. Retained request/draft version 2 continues its original two-phase behavior without an automatic upgrade.
 
 ## Remaining fixed or shared content
 
 The engine owns stair arrows, destination floor numbers, access requirements, terminal status, interaction prompts, helipad/seat facts, extraction instructions, live phone status and accessibility control labels. Curriculum, questions and assessments are outside environmental authoring. Survivor names still come from the saved AI roster; live dialogue follows its separate observation and study rules.
 
-Procedural material textures, lighting, smoke, fire and the ordinary visual asset catalog remain shared engine resources. New runs customize their eligible illustrations and writing through data. Historical saves retain the six-story/eight-street-label systems for exact compatibility; choosing procedural fallback explicitly retains the local generator's stock text and art.
+Procedural material textures, lighting, smoke, fire and the ordinary visual asset catalog remain shared engine resources. New runs customize their eligible illustrations and writing through data. Historical saves retain their original text and art for exact compatibility. Every new run uses reviewed environmental writing and artwork.
 
 ## Deterministic verification
 

@@ -1,4 +1,4 @@
-import { startProceduralRun } from "./procedural-run";
+import { startDesignedRun } from "./designed-run";
 import type { Page } from "@playwright/test";
 
 /**
@@ -16,7 +16,7 @@ export async function enterLegacyBuilding(page: Page) {
   await page.evaluate(() => {
     (window as any).__deadAir.game.settings.view = "top-down";
   });
-  await startProceduralRun(page);
+  await startDesignedRun(page);
   await useLegacyWorld(page);
 }
 
@@ -36,10 +36,8 @@ export async function useLegacyWorld(page: Page) {
     // This is the actual historical factory, including its pacing and fresh
     // lifecycle. Object.assign alone would retain absent optional fields from
     // the playable world, silently mixing study timing with legacy geometry.
-    delete g.rules;
-    delete g.pacing;
-    delete g.endedAt;
-    delete g.lastStudyEncounter;
+    for (const key of Object.keys(g))
+      if (!Object.hasOwn(legacy, key)) delete g[key];
     Object.assign(g, legacy, { status: "playing" });
   });
 }

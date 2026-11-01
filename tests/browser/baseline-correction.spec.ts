@@ -1,4 +1,4 @@
-import { startProceduralRun } from "./helpers/procedural-run";
+import { startDesignedRun } from "./helpers/designed-run";
 import { openGameMenu } from "./helpers/game-menu";
 // Actual UI, controlled source judgment; no real learner data is corrected.
 import { expect, test } from "@playwright/test";
@@ -36,7 +36,7 @@ test("original checkpoint correction exposes complete historical review before a
     });
   });
   await page.goto("/");
-  await startProceduralRun(page);
+  await startDesignedRun(page);
   await page.evaluate(() => {
     const g = (window as any).__deadAir.game;
     g.study.profile = "live";

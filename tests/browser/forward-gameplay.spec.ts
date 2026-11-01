@@ -1,4 +1,4 @@
-import { startProceduralRun } from "./helpers/procedural-run";
+import { startDesignedRun } from "./helpers/designed-run";
 import { expect, test } from "@playwright/test";
 import { readFileSync } from "node:fs";
 const stacked = JSON.parse(
@@ -17,7 +17,7 @@ test("new runs share one randomized boundary on every floor and retain it after 
   page,
 }) => {
   await page.goto("/");
-  await startProceduralRun(page);
+  await startDesignedRun(page);
   const before = await page.evaluate(() => {
     const g = (window as any).__deadAir.game;
     return {
@@ -86,11 +86,13 @@ test("the actual Space key climbs a two-object barricade and records its attempt
   page,
 }) => {
   await page.goto("/");
-  await startProceduralRun(page);
+  await startDesignedRun(page);
   await page.evaluate(async (s) => {
     const { TestRunner } = await import("/src/gametest/runner.ts" as string);
     const g = (window as any).__deadAir.game,
       scenario = new TestRunner(s, (window as any).__deadAir.roadmap).game;
+    for (const key of Object.keys(g))
+      if (!Object.hasOwn(scenario, key)) delete g[key];
     Object.assign(g, scenario);
     // The legacy barricade scenario has no rules field; a fresh run's
     // force-field rules must not survive the swap, since they disable vaulting.

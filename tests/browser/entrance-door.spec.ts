@@ -1,16 +1,18 @@
-import { startProceduralRun } from "./helpers/procedural-run";
+import { startDesignedRun } from "./helpers/designed-run";
 import { expect, test } from "@playwright/test";
 test("last-run seed: E releases the physical first entrance and keyboard input physically enters", async ({
   page,
 }) => {
   await page.goto("/");
-  await startProceduralRun(page);
+  await startDesignedRun(page);
   await page.evaluate(async () => {
     const { createGame } = await import("/src/world.ts" as string),
       { step } = await import("/src/engine.ts" as string);
     const g = (window as any).__deadAir.game,
       fresh = createGame(1137190675, (window as any).__deadAir.roadmap);
     fresh.settings.view = "top-down";
+    for (const key of Object.keys(g))
+      if (!Object.hasOwn(fresh, key)) delete g[key];
     Object.assign(g, fresh);
     g.status = "playing";
     g.survivors = [g.survivors[0]];
@@ -58,7 +60,7 @@ test("opening countdown prevents all zombie spawns until ten simulation seconds"
   page,
 }) => {
   await page.goto("/");
-  await startProceduralRun(page);
+  await startDesignedRun(page);
   // Fresh runs use the force-field swarm wording; legacy worlds say zombies.
   await expect(page.locator("#next-description")).toContainText(
     /(Swarm begins|Zombies spawn) in/,

@@ -1,8 +1,10 @@
-import { startProceduralRun } from "./helpers/procedural-run";
+import { detachAuthoredScene } from "./helpers/synthetic-world";
+import { startDesignedRun } from "./helpers/designed-run";
 import { expect, test, type Page } from "@playwright/test";
 async function scene(page: Page) {
   await page.goto("/");
-  await startProceduralRun(page);
+  await startDesignedRun(page);
+  await detachAuthoredScene(page);
   await page.evaluate(() => {
     const g = (window as any).__deadAir.game,
       a = g.survivors[0],

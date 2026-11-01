@@ -1,4 +1,4 @@
-import { chooseProceduralRun } from "./helpers/procedural-run";
+import { chooseDesignedRun } from "./helpers/designed-run";
 import { expect, test, type Page } from "./helpers/offline-test";
 import { enterLegacyBuilding } from "./helpers/legacy-world";
 import {
@@ -155,7 +155,7 @@ test("pause restart retains original progress and archives unfinished human work
   });
   await page.keyboard.press("Escape");
   await page.locator("#restart-game").click();
-  await chooseProceduralRun(page);
+  await chooseDesignedRun(page);
   await expect(page.locator("#pause-menu")).not.toBeVisible();
   const after = await page.evaluate((captured) => {
     const g = (window as any).__deadAir.game;
@@ -272,7 +272,7 @@ test("diagnostics retain only newest three runs, including pause/restart and no 
   for (let i = 0; i < 3; i++) {
     await page.keyboard.press("Escape");
     await page.locator("#restart-game").click();
-    await chooseProceduralRun(page);
+    await chooseDesignedRun(page);
     await expect(page.locator("#pause-menu")).not.toBeVisible();
   }
   await page.keyboard.press("Escape");
@@ -301,7 +301,7 @@ test("restart saves learning before the new run; save and quit shows the saved r
   const first = await page.evaluate(() => (window as any).__deadAir.game.id);
   await page.keyboard.press("Escape");
   await page.locator("#restart-game").click();
-  await chooseProceduralRun(page);
+  await chooseDesignedRun(page);
   await expect(page.locator("#pause-menu")).not.toBeVisible();
   const restarted = await page.evaluate(() => {
     const g = (window as any).__deadAir.game;

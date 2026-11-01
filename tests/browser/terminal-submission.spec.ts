@@ -1,4 +1,4 @@
-import { startProceduralRun } from "./helpers/procedural-run";
+import { startDesignedRun } from "./helpers/designed-run";
 import { expect, test } from "@playwright/test";
 import {
   enterNativeGame,
@@ -97,7 +97,7 @@ test("a legacy shared question uses native private study and keeps private histo
     });
   });
   await page.goto("/");
-  await startProceduralRun(page);
+  await startDesignedRun(page);
   const id = await page.evaluate(async () => {
     const d = (window as any).__deadAir,
       g = d.game,

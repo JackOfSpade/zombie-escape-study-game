@@ -150,9 +150,12 @@ export const terminalRelayTools = () =>
       name: "read_study_terminal_context",
       title: "Read omitted terminal context",
       description:
-        "Read a captured context part that the current @study terminal turn omitted for size. Use the exact relayId and turnId from that turn and the part name it lists.",
+        "Read a captured context part that the current @study terminal turn omitted for size, with its exact relayId, turnId and part name, and the chat code from the player's request.",
       inputSchema: schema(
         {
+          chat: chatCodeSchema,
+          chat_code: chatCodeSchema,
+          chatCode: chatCodeSchema,
           relayId: id,
           turnId: id,
           part: { type: "string", enum: DIRECT_CONTEXT_PARTS },
@@ -498,7 +501,7 @@ export function createTerminalRelayApp({
               characters: serialized.length,
             },
             requiredReads:
-              "Read every payload index with read_study_terminal_context before finishing; concatenate in index order. The frozen JSON includes all original source rows, policies, authored artifacts and assistance provenance; no omitted part is optional.",
+              "Read every payload index with read_study_terminal_context before finishing; pass this chat's chat code as chat on every scoped read and concatenate in index order. The frozen JSON includes all original source rows, policies, authored artifacts and assistance provenance; no omitted part is optional.",
           }
         : { payload: p }),
     };
@@ -583,7 +586,7 @@ export function createTerminalRelayApp({
         ? {
             omitted,
             omittedNote:
-              "These parts exceed the conversation turn size. Read any you need with read_study_terminal_context using this relayId and turnId before judging curriculum scope.",
+              "These parts exceed the conversation turn size. Read any you need with read_study_terminal_context using this relayId and turnId, passing this chat's chat code as chat on every scoped read, before judging curriculum scope.",
           }
         : {}),
     });
@@ -966,6 +969,34 @@ export function createTerminalRelayApp({
       if (name === "read_study_terminal_context") {
         if (s.turn?.turnId !== args.turnId || s.turn.status !== "claimed")
           throw Error("That terminal turn is not pending");
+        const codes = [args.chat, args.chat_code, args.chatCode].filter(
+          (code) => code !== undefined,
+        );
+        if (
+          codes.some(
+            (code) =>
+              typeof code !== "string" || !/^[A-Z0-9]{6,16}$/.test(code),
+          )
+        )
+          throw Error("Invalid chat code");
+        if (new Set(codes).size > 1) throw Error("Conflicting chat codes");
+        const chat = codes[0];
+        checkChat(s.turn);
+        if (s.turn.chatCode !== undefined && chat === undefined)
+          throw Error(
+            "This terminal context requires the chat code from the player's game request. Pass it as chat on every context read.",
+          );
+        if (chat !== s.turn.chatCode)
+          throw Error(
+            "This chat was disconnected: its code does not match this terminal turn. No context was read.",
+          );
+        if (
+          s.turn.chatCode !== undefined &&
+          !queue.requesterLive(s.turn.jobId, requesterLiveMs)
+        )
+          throw Error(
+            "The game is no longer waiting for this terminal context",
+          );
         if (!s.turn.omitted.includes(args.part))
           throw Error("That part was included in the turn message");
         const value = s.turn.context[args.part];

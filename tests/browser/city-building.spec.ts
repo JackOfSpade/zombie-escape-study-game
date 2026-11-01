@@ -1,4 +1,4 @@
-import { startProceduralRun } from "./helpers/procedural-run";
+import { startDesignedRun } from "./helpers/designed-run";
 import { mkdir } from "node:fs/promises";
 import { expect, test, type Page } from "./helpers/offline-test";
 
@@ -251,7 +251,7 @@ test("live first-person keyboard movement starts a walking flight, stops on rele
       );
   });
   await page.goto("/");
-  await startProceduralRun(page);
+  await startDesignedRun(page);
   await expect(page.locator("#view3d")).toBeVisible();
   await page.evaluate(() => {
     const d = (window as any).__deadAir,

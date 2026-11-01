@@ -615,6 +615,160 @@ test("large saved work and learner answers stay exact and retrievable within the
   assert.equal(queue.result(receipt.id, receipt.hash).answer.complete, true);
 });
 
+test("context tools advertise the same chat code aliases as the native getter", () => {
+  const tools = terminalRelayTools();
+  const getter = tools.find(
+    (tool) => tool.name === "get_current_study_question",
+  );
+  const reader = tools.find(
+    (tool) => tool.name === "read_study_terminal_context",
+  );
+  for (const alias of ["chat", "chat_code", "chatCode"])
+    assert.deepEqual(
+      reader.inputSchema.properties[alias],
+      getter.inputSchema.properties[alias],
+    );
+  // Legacy terminal turns predate chat codes and still use this reader.
+  assert.deepEqual(reader.inputSchema.required, ["relayId", "turnId", "part"]);
+});
+
+test("scoped preparation chunks require their exact chat code before crediting a read", () => {
+  const { queue, app } = setup();
+  queue.enable(true);
+  const chat = "CONTEXT01";
+  const scope = { runId: "synthetic-context-run", encounterId: "station-one" };
+  const payload = {
+    requestId: "synthetic-scoped-preparation-context",
+    encounterId: scope.encounterId,
+    curriculum: "Exact synthetic source 🙂\n".repeat(6000),
+  };
+  const receipt = queue.enqueue("generate", payload, scope, chat);
+  const current = (code) =>
+    state(app.call("get_current_study_question", { chat: code }, owner));
+  const turn = current(chat);
+  const args = {
+    relayId: turn.relayId,
+    turnId: turn.turnId,
+    part: "payload",
+    index: 0,
+  };
+  const read = (extra) =>
+    state(
+      app.call("read_study_terminal_context", { ...args, ...extra }, owner),
+    );
+  const finish = () =>
+    app.call(
+      "finish_study_preparation",
+      {
+        relayId: turn.relayId,
+        turnId: turn.turnId,
+        jobFingerprint: turn.jobFingerprint,
+        response: "{}",
+      },
+      owner,
+    );
+  assert.match(turn.prompt, /read_study_terminal_context.*chat code/);
+  assert.throws(() => read({}), /chat code/);
+  assert.throws(() => read({ chat: "OTHER001" }), /disconnected/);
+  for (const chat of ["lowercase", "short", 12345678, null])
+    assert.throws(() => read({ chat }), /Invalid chat code/);
+  assert.throws(
+    () => read({ chat, chat_code: "OTHER001" }),
+    /Conflicting chat codes/,
+  );
+  assert.throws(() => finish(), /Read every frozen/);
+  const first = read({ chat });
+  assert.ok(first.parts > 1);
+  const parts = [first.text];
+  for (let index = 1; index < first.parts; index++) {
+    assert.throws(() => read({ index, chat: "OTHER001" }), /disconnected/);
+    assert.throws(() => finish(), /Read every frozen/);
+    const alias = index % 2 ? "chat_code" : "chatCode";
+    parts.push(read({ index, [alias]: chat }).text);
+  }
+  assert.deepEqual(JSON.parse(parts.join("")), payload);
+  assert.deepEqual(current(chat), turn, "rejected reads preserve the claim");
+  assert.equal(queue.result(receipt.id, receipt.hash).status, "pending");
+
+  // Reopening the exact same request transfers it to a new chat even before
+  // that chat calls the getter. Old cached turns must immediately lose access.
+  queue.enqueue("generate", payload, scope, "CONTEXT02");
+  assert.throws(() => read({ chat }), /disconnected/);
+  assert.throws(() => read({ chat: "CONTEXT02" }), /disconnected/);
+  const reopened = current("CONTEXT02");
+  assert.notEqual(reopened.turnId, turn.turnId);
+  const restored = state(
+    app.call(
+      "read_study_terminal_context",
+      {
+        ...args,
+        turnId: reopened.turnId,
+        chat: "CONTEXT02",
+      },
+      owner,
+    ),
+  );
+  assert.equal(restored.text, first.text);
+});
+
+test("scoped direct-question context rejects another chat and a stopped requester", () => {
+  let clock = 1000;
+  const queue = waitingGame(createHandoffQueue({ now: () => clock }));
+  const app = createTerminalRelayApp({ queue, now: () => clock });
+  queue.enable(true);
+  const scope = { runId: "synthetic-direct-context-run", encounterId: "one" };
+  queue.enqueue(
+    "tutor",
+    dialoguePayload("synthetic-direct-context", [human("answer", 1)], {
+      ...scope,
+      mode: "terminal-direct",
+      questionFingerprint: "synthetic-direct-context-fingerprint",
+      curriculum: "Exact synthetic curriculum\n".repeat(3000),
+    }),
+    scope,
+    "DIRECT01",
+  );
+  const turn = state(
+    app.call("get_current_study_question", { chat: "DIRECT01" }, owner),
+  );
+  const args = {
+    relayId: turn.relayId,
+    turnId: turn.turnId,
+    part: "curriculum",
+  };
+  assert.throws(
+    () => app.call("read_study_terminal_context", args, owner),
+    /chat code/,
+  );
+  assert.throws(
+    () =>
+      app.call(
+        "read_study_terminal_context",
+        { ...args, chat: "OTHER001" },
+        owner,
+      ),
+    /disconnected/,
+  );
+  const read = JSON.parse(
+    app.call(
+      "read_study_terminal_context",
+      { ...args, chat: "DIRECT01" },
+      owner,
+    ).content[0].text,
+  );
+  assert.equal(read.text, "Exact synthetic curriculum\n".repeat(3000));
+  clock += REQUESTER_LIVE_MS + 1;
+  assert.throws(
+    () =>
+      app.call(
+        "read_study_terminal_context",
+        { ...args, chat: "DIRECT01" },
+        owner,
+      ),
+    /no longer waiting/,
+  );
+});
+
 test("status counts only app sessions that are still calling in as active", () => {
   let clock = 1_000_000;
   const queue = waitingGame(createHandoffQueue());

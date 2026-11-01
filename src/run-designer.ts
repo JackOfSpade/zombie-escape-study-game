@@ -164,7 +164,7 @@ export function clearDesignDraft(targetRunId: string) {
     const draft = readDesignDraft(targetRunId);
     if (draft) localStorage.removeItem(DRAFT_KEY);
   } catch {
-    // Explicit cancellation/fallback can discard an unreadable design draft.
+    // Explicit cancellation can discard an unreadable design draft.
     // This key contains fictional generation requests, never a game or learner save.
     localStorage.removeItem(DRAFT_KEY);
   }
@@ -288,7 +288,7 @@ export async function prepareDesignedRun<T>(
         !status().capabilities.includes("design-run")
       )
         throw Error(
-          "AI run design is unavailable. Connect or update the ChatGPT bridge, then retry; you can also choose a procedural run.",
+          "AI run design is unavailable. Connect or update the ChatGPT bridge, then retry. Your current run stays saved.",
         );
       return bridgeRequest("design-run", request, progress, {
         signal,
@@ -357,7 +357,7 @@ export async function prepareDesignedRun<T>(
     await options.capture(draft);
     if (attempt + 1 === DESIGN_ATTEMPTS)
       throw Error(
-        "This design still needs repair after three attempts. Your request is saved; retry with ChatGPT, cancel, or choose a procedural run.",
+        "This design still needs repair after three attempts. Your request is saved; retry with ChatGPT or cancel.",
       );
     options.progress?.(
       "The design needs changes. Asking ChatGPT to repair it while keeping this run’s theme…",
@@ -378,7 +378,7 @@ async function prepareAuthoredRun<T>(
     );
   if (draft.exhausted)
     throw Error(
-      "This design needs more changes after three attempts. Choose Retry to continue the saved request, cancel, or choose a procedural run.",
+      "This design needs more changes after three attempts. Choose Retry to continue the saved request or Cancel.",
     );
   let candidate: ProvisionalRun | undefined;
   const rebuild = (request: ContentRunDesignRequest) => {
@@ -510,7 +510,7 @@ async function prepareAuthoredRun<T>(
     options.signal.throwIfAborted();
     if (draft.exhausted)
       throw Error(
-        "This design still needs changes after three attempts. Your exact repair request is saved; choose Retry, Cancel, or a procedural run.",
+        "This design still needs changes after three attempts. Your exact repair request is saved; choose Retry or Cancel.",
       );
     options.progress?.(
       "Asking ChatGPT to repair this design while keeping its setting and object bindings…",

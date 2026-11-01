@@ -1,4 +1,5 @@
-import { startProceduralRun } from "./helpers/procedural-run";
+import { detachAuthoredScene } from "./helpers/synthetic-world";
+import { startDesignedRun } from "./helpers/designed-run";
 import { expect, test, type Page } from "./helpers/offline-test";
 import { flushNativeSave, mockNativeStudy } from "./native-study-harness";
 import { openGameMenu, openPlayerMenu } from "./helpers/game-menu";
@@ -39,7 +40,8 @@ async function startFirstPerson(
     };
   }, lock);
   await page.goto("/");
-  await startProceduralRun(page);
+  await startDesignedRun(page);
+  await detachAuthoredScene(page);
   await page.evaluate(() => {
     const g = (window as any).__deadAir.game,
       a = g.survivors[0],

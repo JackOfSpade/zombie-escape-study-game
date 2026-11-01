@@ -1,7 +1,4 @@
-import {
-  chooseProceduralRun,
-  startProceduralRun,
-} from "./helpers/procedural-run";
+import { chooseDesignedRun, startDesignedRun } from "./helpers/designed-run";
 // Actual isolated queue/relay with controlled native host turns. No real ChatGPT
 // account, model, learner save or service is touched by this fixture.
 import { expect, test } from "@playwright/test";
@@ -35,7 +32,8 @@ test("native ChatGPT transport preserves generation and question through reload;
   const tool = (name: string, args: unknown = {}) =>
     relay.call(
       name,
-      name === "get_current_study_question"
+      name === "get_current_study_question" ||
+        name === "read_study_terminal_context"
         ? { chat, ...(args as object) }
         : args,
       owner,
@@ -135,7 +133,7 @@ test("native ChatGPT transport preserves generation and question through reload;
   };
   try {
     await page.goto("/");
-    await startProceduralRun(page);
+    await startDesignedRun(page);
     // Keep this transport flow fast in headless Chromium's software WebGL.
     await selectTopDown(page);
     await openGameMenu(page);
@@ -157,7 +155,7 @@ test("native ChatGPT transport preserves generation and question through reload;
     await page
       .getByRole("button", { name: "Start a live study run", exact: true })
       .click();
-    await chooseProceduralRun(page);
+    await chooseDesignedRun(page);
     // Restart has always awaited the durable learning save. Position only the
     // replacement live world, after the existing asynchronous restart finishes.
     await page.waitForFunction((previous) => {

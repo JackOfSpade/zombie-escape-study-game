@@ -253,7 +253,7 @@ test("new-game AI design reaches the full app and a saved reload keeps the exact
   await expect(page.locator("#run-design-dialog")).toHaveCount(0);
 });
 
-test("an offline designer keeps the current game intact until explicit procedural fallback", async ({
+test("an offline first launch can only retry or cancel until a reviewed design is ready", async ({
   page,
 }) => {
   const relay = await designer(page);
@@ -262,20 +262,64 @@ test("an offline designer keeps the current game intact until explicit procedura
   const before = await state(page);
   await page.locator("#start").click();
   await expect(page.locator("#run-design-status")).toContainText("unavailable");
-  expect((await state(page)).id).toBe(before.id);
-  expect((await state(page)).status).toBe("ready");
+  await expect(page.locator("#run-design-procedural")).toHaveCount(0);
+  expect(await state(page)).toEqual(before);
+  expect(before.status).toBe("ready");
+  expect(before.preparing).toBe(true);
+  await page.locator("#run-design-retry").click();
+  await expect(page.locator("#run-design-retry")).toBeEnabled();
+  expect(await state(page)).toEqual(before);
+  expect(relay.calls).toHaveLength(0);
   await page.locator("#run-design-cancel").click();
   await expect(page.locator("#run-design-dialog")).toHaveCount(0);
   expect(await state(page)).toEqual(before);
   await page.locator("#start").click();
   await expect(page.locator("#run-design-status")).toContainText("unavailable");
-  await page.locator("#run-design-procedural").click();
+  relay.setCapable(true);
+  await page.locator("#run-design-retry").click();
   await expect.poll(async () => (await state(page)).status).toBe("playing");
   const after = await state(page);
   expect(after.id).not.toBe(before.id);
   expect(after.preparing).toBe(false);
-  expect(after.design).toBeUndefined();
-  expect(relay.calls).toHaveLength(0);
+  expect(after.design.design.title).toBe(harbor.title);
+  expect(relay.calls.map((c) => c.payload.phase)).toEqual(harborPhases);
+});
+
+test("an offline restart preserves the accepted run until the replacement passes review", async ({
+  page,
+}) => {
+  const relay = await designer(page);
+  await open(page);
+  await page.locator("#start").click();
+  await expect.poll(async () => (await state(page)).status).toBe("playing");
+  await pause(page);
+  const before = await state(page);
+  relay.setCapable(false);
+  await page.locator("#restart-game").click();
+  await expect(page.locator("#run-design-status")).toContainText("unavailable");
+  await expect(page.locator("#run-design-procedural")).toHaveCount(0);
+  expect(await state(page)).toEqual(before);
+  await page.locator("#run-design-cancel").click();
+  await expect(page.locator("#run-design-dialog")).toHaveCount(0);
+  await expect(page.locator("#pause-menu")).toBeVisible();
+  expect(await state(page)).toEqual(before);
+  await page.locator("#restart-game").click();
+  await expect(page.locator("#run-design-status")).toContainText("unavailable");
+  expect(await state(page)).toEqual(before);
+  relay.setAnswer(() => orchard);
+  relay.setCapable(true);
+  await page.locator("#run-design-retry").click();
+  await expect
+    .poll(async () => (await state(page)).design?.design.title)
+    .toBe(orchard.title);
+  const after = await state(page);
+  expect(after.id).not.toBe(before.id);
+  expect(after.preparing).toBe(false);
+  const replacement = relay.calls.filter(
+    (call) => call.payload.generationId === after.design.generationId,
+  );
+  expect(replacement[0].payload.phase).toBe("concepts");
+  expect(replacement.at(-1).payload.phase).toBe("content-review");
 });
 
 test("reloading a pending design retries the same captured request and chat rather than rerolling", async ({
@@ -542,7 +586,7 @@ test("cancelling before the bridge replies ignores that delayed reply while anot
   );
 });
 
-test("settled design failures retain receipts until Cancel, Escape or explicit procedural fallback", async ({
+test("settled design failures retain receipts until Cancel or Escape without starting a run", async ({
   page,
 }) => {
   const relay = await designer(page);
@@ -550,7 +594,7 @@ test("settled design failures retain receipts until Cancel, Escape or explicit p
   relay.setFailedPoll(true);
   await open(page);
   const before = await state(page);
-  for (const dismissal of ["cancel", "escape", "procedural"]) {
+  for (const dismissal of ["cancel", "escape"]) {
     await page.locator("#start").click();
     await expect(page.locator("#run-design-status")).toContainText(
       "Synthetic design request interrupted",
@@ -573,12 +617,26 @@ test("settled design failures retain receipts until Cancel, Escape or explicit p
         localStorage.getItem("dead-air-run-design-draft-v1"),
       ),
     ).toBeNull();
-    if (dismissal !== "procedural") expect(await state(page)).toEqual(before);
+    expect(await state(page)).toEqual(before);
   }
+  expect((await state(page)).status).toBe("ready");
+  expect((await state(page)).preparing).toBe(true);
+  await page.locator("#start").click();
+  await expect(page.locator("#run-design-status")).toContainText(
+    "Synthetic design request interrupted",
+  );
+  await expect(page.locator("#run-design-procedural")).toHaveCount(0);
+  const retry = relay.calls.at(-1)!;
+  relay.setFailedPoll(false);
+  relay.setQueued(false);
+  relay.finish(retry);
+  await page.locator("#run-design-retry").click();
   await expect.poll(async () => (await state(page)).status).toBe("playing");
   const after = await state(page);
   expect(after.id).not.toBe(before.id);
-  expect(after.design).toBeUndefined();
+  expect(after.design.design.title).toBe(harbor.title);
+  expect(after.design.generationId).toBe(retry.payload.generationId);
+  expect(relay.calls.at(-1).payload.phase).toBe("content-review");
 });
 
 test("looking at an authored object reveals its readable caption without replacing furniture controls", async ({

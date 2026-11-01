@@ -1,4 +1,4 @@
-import { startProceduralRun } from "./helpers/procedural-run";
+import { startDesignedRun } from "./helpers/designed-run";
 import { expect, test } from "@playwright/test";
 test("entrance reinforcements continue beyond ninety births and preserve their actual deadline through reload", async ({
   page,
@@ -14,7 +14,7 @@ test("entrance reinforcements continue beyond ninety births and preserve their a
     }),
   );
   await page.goto("/");
-  await startProceduralRun(page);
+  await startDesignedRun(page);
   const before = await page.evaluate(() => {
     const g = (window as any).__deadAir.game,
       a = g.survivors[0];

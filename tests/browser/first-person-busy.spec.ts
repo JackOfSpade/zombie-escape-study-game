@@ -1,11 +1,11 @@
-import { startProceduralRun } from "./helpers/procedural-run";
+import { startDesignedRun } from "./helpers/designed-run";
 import { expect, test } from "./helpers/offline-test";
 
 test("busy first-person scene reports bounded render time and draw calls", async ({
   page,
 }, testInfo) => {
   await page.goto("/");
-  await startProceduralRun(page);
+  await startDesignedRun(page);
   await page.evaluate(async () => {
     const { TestRunner } = await import("/src/gametest/runner.ts" as string),
       { emptyScenario } = await import("/src/gametest/schema.ts" as string),
@@ -44,6 +44,8 @@ test("busy first-person scene reports bounded render time and draw calls", async
     for (const z of staged.zombies) {
       z.target = { x: 11, y: 17 };
     }
+    for (const key of Object.keys(d.game))
+      if (!Object.hasOwn(staged, key)) delete d.game[key];
     Object.assign(d.game, staged, {
       settings: { ...d.game.settings, view: "first-person" },
     });

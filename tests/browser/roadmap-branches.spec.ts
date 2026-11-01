@@ -1,4 +1,4 @@
-import { startProceduralRun } from "./helpers/procedural-run";
+import { startDesignedRun } from "./helpers/designed-run";
 import { openGameMenu } from "./helpers/game-menu";
 // Synthetic native protocol and source rows, not real learner certification.
 import { expect, test } from "@playwright/test";
@@ -75,7 +75,7 @@ test("source-qualified branch review exposes unresolved history, downloads exact
     });
   });
   await page.goto("/");
-  await startProceduralRun(page);
+  await startDesignedRun(page);
   const local = await page.evaluate(async (initial) => {
     const root = "/src/",
       g = (window as any).__deadAir.game,

@@ -731,6 +731,7 @@ test("native ordinary-chat callback reaches the real game client once, including
             const read = app.call(
               "read_study_terminal_context",
               {
+                chat: studyChatCode(),
                 relayId: turn.relayId,
                 turnId: turn.turnId,
                 part: "topicAssessmentContext",

@@ -18,9 +18,9 @@ import {
 } from "./run-designer";
 import type { SavedRunDesign } from "./run-design-contract.mjs";
 
-export type RunChoice = { seed: number; saved?: SavedRunDesign };
+export type RunChoice = { seed: number; saved: SavedRunDesign };
 let choosing = false;
-/** Explicit fallback/cancel controls; the active run is untouched until accepted. */
+/** Only a completed design can replace the active run; cancellation leaves it intact. */
 export async function chooseRunDesign(
   game: Game,
   roadmap: Roadmap,
@@ -31,7 +31,7 @@ export async function chooseRunDesign(
   const dialog = document.createElement("dialog");
   dialog.id = "run-design-dialog";
   dialog.className = "run-design-dialog";
-  dialog.innerHTML = `<span class="eyebrow">A NEW ESCAPE</span><h2>Let AI shape this run.</h2><p>ChatGPT explores different ideas, develops each room, then reviews the writing and artwork. This can take a while. Your current run stays saved throughout.</p><p id="run-design-status" role="status">Connecting to the designer…</p><div class="run-design-actions"><button id="run-design-connect">Connect ChatGPT ↗</button><button id="run-design-retry" class="quiet">Retry design</button></div><details><summary>ChatGPT request</summary><textarea id="run-design-prompt" readonly rows="6" aria-label="Run design ChatGPT request"></textarea><button id="run-design-copy" class="quiet">Copy request</button></details><div class="run-design-actions"><button id="run-design-procedural" class="quiet">Use procedural run instead</button><button id="run-design-cancel" class="quiet">Cancel</button></div><small>Reviewed designs are checked before play and saved with the run. A procedural run uses the local generator.</small>`;
+  dialog.innerHTML = `<span class="eyebrow">A NEW ESCAPE</span><h2>Let AI shape this run.</h2><p>ChatGPT explores different ideas, develops each room, then reviews the writing and artwork. This can take a while. Your current run stays saved throughout.</p><p id="run-design-status" role="status">Connecting to the designer…</p><div class="run-design-actions"><button id="run-design-connect">Connect ChatGPT ↗</button><button id="run-design-retry" class="quiet">Retry design</button></div><details><summary>ChatGPT request</summary><textarea id="run-design-prompt" readonly rows="6" aria-label="Run design ChatGPT request"></textarea><button id="run-design-copy" class="quiet">Copy request</button></details><div class="run-design-actions"><button id="run-design-cancel" class="quiet">Cancel</button></div><small>Every new run is reviewed, checked before play and saved with its design.</small>`;
   document.body.append(dialog);
   const message = dialog.querySelector<HTMLElement>("#run-design-status")!;
   const retry = dialog.querySelector<HTMLButtonElement>("#run-design-retry")!;
@@ -51,7 +51,7 @@ export async function chooseRunDesign(
     if (closed) return;
     closed = true;
     active?.abort();
-    if (!choice?.saved) {
+    if (!choice) {
       void cancelDesignDraft(draft).catch(() => {});
       try {
         clearDesignDraft(game.id);
@@ -136,12 +136,6 @@ export async function chooseRunDesign(
     if (draft) retryDesignDraft(draft);
     void attempt();
   };
-  dialog.querySelector<HTMLButtonElement>("#run-design-procedural")!.onclick =
-    () =>
-      finish({
-        seed:
-          draft?.request.seed ?? crypto.getRandomValues(new Uint32Array(1))[0],
-      });
   dialog.querySelector<HTMLButtonElement>("#run-design-cancel")!.onclick = () =>
     finish(undefined);
   dialog.addEventListener("cancel", (event) => {

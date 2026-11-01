@@ -1,4 +1,4 @@
-import { startProceduralRun } from "./helpers/procedural-run";
+import { startDesignedRun } from "./helpers/designed-run";
 import { openGameMenu } from "./helpers/game-menu";
 import { selectTopDown } from "./helpers/view-mode";
 // Synthetic bridge responses exercise the real UI/adapter, not native semantic quality.
@@ -174,7 +174,7 @@ for (const scenario of [
       });
     });
     await page.goto("/");
-    await startProceduralRun(page);
+    await startDesignedRun(page);
     // Roadmap menus are view-independent; headless WebGL is software-rendered.
     await selectTopDown(page);
     const before = await page.evaluate(() => {

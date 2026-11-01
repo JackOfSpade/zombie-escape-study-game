@@ -1,4 +1,4 @@
-import { startProceduralRun } from "./helpers/procedural-run";
+import { startDesignedRun } from "./helpers/designed-run";
 import { openGameMenu } from "./helpers/game-menu";
 import { expect, test } from "@playwright/test";
 
@@ -6,7 +6,7 @@ test("importing a lower-sequence run still assesses its retained human completio
   page,
 }) => {
   await page.goto("/");
-  await startProceduralRun(page);
+  await startDesignedRun(page);
   const saved = await page.evaluate(async () => {
     const root = "/src/",
       { createGame } = await import(root + "world.ts"),
@@ -92,7 +92,7 @@ test("retrying an assessment durably captures its pending request before a reply
   });
   try {
     await page.goto("/");
-    await startProceduralRun(page);
+    await startDesignedRun(page);
     await page.evaluate(async () => {
       const root = "/src/",
         { assess } = await import(root + "ai.ts"),

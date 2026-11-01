@@ -248,7 +248,13 @@ test("large Unicode design repairs preserve every recent design through required
     const read = (index) =>
       app.call(
         "read_study_terminal_context",
-        { relayId: turn.relayId, turnId: turn.turnId, part: "payload", index },
+        {
+          chat,
+          relayId: turn.relayId,
+          turnId: turn.turnId,
+          part: "payload",
+          index,
+        },
         owner,
       ).structuredContent;
     const first = read(0);
@@ -348,7 +354,13 @@ test("a large version 2 repair carries complete object scenes through exact nati
   const read = (index) =>
     app.call(
       "read_study_terminal_context",
-      { relayId: turn.relayId, turnId: turn.turnId, part: "payload", index },
+      {
+        chat,
+        relayId: turn.relayId,
+        turnId: turn.turnId,
+        part: "payload",
+        index,
+      },
       owner,
     ).structuredContent;
   const first = read(0),
@@ -390,7 +402,13 @@ test("a near-limit scene repair chunks the payload when its complete instruction
   assert.throws(() => finish(app, turn, response), /Read every/);
   const part = app.call(
     "read_study_terminal_context",
-    { relayId: turn.relayId, turnId: turn.turnId, part: "payload", index: 0 },
+    {
+      chat,
+      relayId: turn.relayId,
+      turnId: turn.turnId,
+      part: "payload",
+      index: 0,
+    },
     owner,
   ).structuredContent;
   assert.equal(part.parts, 1);
@@ -509,7 +527,13 @@ test("version 3 follows an exact structure-to-content continuation and requires 
   const read = (index) =>
     app.call(
       "read_study_terminal_context",
-      { relayId: next.relayId, turnId: next.turnId, part: "payload", index },
+      {
+        chat,
+        relayId: next.relayId,
+        turnId: next.turnId,
+        part: "payload",
+        index,
+      },
       owner,
     ).structuredContent;
   const first = read(0),

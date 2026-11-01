@@ -623,7 +623,7 @@ export interface Settings {
   reducedFlash: boolean;
 }
 export interface Game {
-  /** First-start preview awaiting an explicit AI design or procedural choice. */
+  /** First-start preview awaiting a completed, reviewed AI design. */
   preparingRun?: boolean;
   /** Accepted AI blueprint and provenance. Loading never requests a replacement. */
   design?: import("./run-design-contract.mjs").SavedRunDesign;

@@ -1,4 +1,4 @@
-import { startProceduralRun } from "./helpers/procedural-run";
+import { startDesignedRun } from "./helpers/designed-run";
 import { expect, test } from "@playwright/test";
 import { selectTopDown } from "./helpers/view-mode";
 import { mockNativeStudy, nativeState } from "./native-study-harness";
@@ -9,7 +9,7 @@ test("fresh run uses force fields, personal keys and native ChatGPT study", asyn
   const relay = await mockNativeStudy(page);
   page.on("pageerror", (e) => errors.push(e.message));
   await page.goto("/");
-  await startProceduralRun(page);
+  await startDesignedRun(page);
   await selectTopDown(page);
   const state = await page.evaluate(async () => {
     const g = (window as any).__deadAir.game;

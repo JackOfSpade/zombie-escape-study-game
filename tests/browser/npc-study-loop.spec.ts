@@ -1,10 +1,10 @@
-import { startProceduralRun } from "./helpers/procedural-run";
+import { startDesignedRun } from "./helpers/designed-run";
 import { expect, test } from "@playwright/test";
 test("browser engine draws a pursuer away and resumes physical solo terminal work", async ({
   page,
 }) => {
   await page.goto("/");
-  await startProceduralRun(page);
+  await startDesignedRun(page);
   const result = await page.evaluate(async () => {
     const root = "/src/";
     const [

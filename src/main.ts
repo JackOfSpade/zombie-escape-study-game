@@ -183,28 +183,38 @@ window.addEventListener("pagehide", () => npcVoices.dispose());
 try {
   const saved = await load();
   game = recover(
-    saved ?? newPlayableGame(crypto.getRandomValues(new Uint32Array(1))[0]),
+    saved ?? newRunPreview(crypto.getRandomValues(new Uint32Array(1))[0]),
   );
-  if (!saved) game.preparingRun = true;
   // A design dialog pauses its preview temporarily; that is not a player pause
   // menu that should cover the Start button after reloading a pending request.
   if (game.preparingRun && game.status === "ready") game.paused = false;
 } catch (err) {
-  game = newPlayableGame(123456);
+  game = newRunPreview(123456);
   saveRecoveryError = `Saved progress could not be loaded: ${String(err)}. Existing checkpoints have been protected. Retry loading, or export recovery data before restoring a backup.`;
   saveError = saveRecoveryError;
 }
+/** The local world is only a backdrop while the first design is being prepared. */
+function newRunPreview(seed: number) {
+  const study = initialStudy(roadmap);
+  activateRunFocus(study);
+  const preview = createGame(seed, roadmap, study);
+  preview.preparingRun = true;
+  return preview;
+}
 // Apply the role profile before the factory prepares development questions.
-function newPlayableGame(
-  seed: number,
-  study = initialStudy(roadmap),
-  design?: SavedRunDesign,
-) {
+function activateRunFocus(study: Game["study"]) {
   activateCareerFocus(
     roadmap,
     study,
     study.careerFocus ?? study.learner?.careerFocus ?? "product-feature-owner",
   );
+}
+function newPlayableGame(
+  seed: number,
+  study: Game["study"],
+  design: SavedRunDesign,
+) {
+  activateRunFocus(study);
   return createGame(seed, roadmap, study, design);
 }
 activateCareerFocus(
@@ -994,7 +1004,7 @@ async function beginDesignedRun() {
 }
 function finishRunDesign(previousId: string, choice: RunChoice) {
   try {
-    if (choice.saved) rememberDesign(choice.saved);
+    rememberDesign(choice.saved);
     clearDesignDraft(previousId);
   } catch {
     // The run itself is already durable; blocked optional history is not data loss.
@@ -1115,9 +1125,7 @@ async function fresh(statusLine?: HTMLElement) {
     : assessed
       ? "Learning progress saved. New run started."
       : "Learning progress saved; assessments finish in the background.";
-  game.notice = game.design
-    ? `${game.notice} ${learningNotice}`
-    : learningNotice;
+  game.notice = `${game.notice} ${learningNotice}`;
   say("");
   $<HTMLDialogElement>("#pause-menu").close();
   active = undefined;

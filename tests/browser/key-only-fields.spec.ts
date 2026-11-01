@@ -1,10 +1,10 @@
-import { startProceduralRun } from "./helpers/procedural-run";
+import { startDesignedRun } from "./helpers/designed-run";
 import { expect, test } from "@playwright/test";
 test("E at a red field with zero keys denies entry without a timed unlock", async ({
   page,
 }) => {
   await page.goto("/");
-  await startProceduralRun(page);
+  await startDesignedRun(page);
   await page.evaluate(async () => {
     const root = "/src/";
     const { TestRunner } = await import(
@@ -18,10 +18,11 @@ test("E at a red field with zero keys denies entry without a timed unlock", asyn
     s.simulation = "game";
     s.entities = s.entities.filter((e: any) => e.kind !== "npc");
     const roadmap = await (await fetch("/curriculum.json")).json();
-    Object.assign(
-      (window as any).__deadAir.game,
-      new TestRunner(s, roadmap).game,
-    );
+    const live = (window as any).__deadAir.game,
+      staged = new TestRunner(s, roadmap).game;
+    for (const key of Object.keys(live))
+      if (!Object.hasOwn(staged, key)) delete live[key];
+    Object.assign(live, staged);
     (window as any).__deadAir.game.settings.view = "top-down";
     (window as any).__fieldLabels = [];
     const fill = CanvasRenderingContext2D.prototype.fillText;
@@ -65,7 +66,7 @@ test("E at a red field spends a key even beside another survivor's solo terminal
   page,
 }) => {
   await page.goto("/");
-  await startProceduralRun(page);
+  await startDesignedRun(page);
   await page.evaluate(async () => {
     const root = "/src/";
     const { TestRunner } = await import(
@@ -83,7 +84,10 @@ test("E at a red field spends a key even beside another survivor's solo terminal
     const solo = structuredClone(
       Object.values(live.encounters).find((e: any) => e.mode === "solo"),
     ) as any;
-    Object.assign(live, new TestRunner(s, roadmap).game);
+    const staged = new TestRunner(s, roadmap).game;
+    for (const key of Object.keys(live))
+      if (!Object.hasOwn(staged, key)) delete live[key];
+    Object.assign(live, staged);
     live.settings.view = "top-down";
     // A neighbour's terminal in reach and nearer than the field's frame used
     // to take E, so a player holding a key could never open the field.

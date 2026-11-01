@@ -87,6 +87,7 @@ test("the real native relay carries every quality stage, exact chunks and bound 
           app.call(
             "read_study_terminal_context",
             {
+              chat: draft.chatCode,
               relayId: turn.relayId,
               turnId: turn.turnId,
               part: "payload",

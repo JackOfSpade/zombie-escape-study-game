@@ -1,4 +1,4 @@
-import { startProceduralRun } from "./helpers/procedural-run";
+import { startDesignedRun } from "./helpers/designed-run";
 import { expect, test } from "@playwright/test";
 import { readFileSync } from "node:fs";
 const fixture = JSON.parse(
@@ -8,11 +8,13 @@ test("Space continues past five mixed barricades when each blocks the previous l
   page,
 }) => {
   await page.goto("/");
-  await startProceduralRun(page);
+  await startDesignedRun(page);
   await page.evaluate(async (s) => {
     const { TestRunner } = await import("/src/gametest/runner.ts" as string);
     const g = (window as any).__deadAir.game,
       scenario = new TestRunner(s, (window as any).__deadAir.roadmap).game;
+    for (const key of Object.keys(g))
+      if (!Object.hasOwn(scenario, key)) delete g[key];
     Object.assign(g, scenario);
     // A fresh run's force-field rules disable vaulting; use the scenario's.
     g.rules = scenario.rules;
