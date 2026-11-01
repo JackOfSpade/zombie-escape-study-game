@@ -197,6 +197,58 @@ async function state(page: Page) {
     };
   });
 }
+async function gameplayState(page: Page) {
+  return page.evaluate(() => {
+    const g = (window as any).__deadAir.game;
+    return {
+      time: g.time,
+      tick: g.tick ?? 0,
+      survivors: g.survivors.map((a: any) => ({
+        id: a.id,
+        x: a.x,
+        y: a.y,
+        floor: a.floor,
+        hp: a.hp,
+      })),
+      zombies: g.zombies.map((a: any) => ({
+        id: a.id,
+        x: a.x,
+        y: a.y,
+        floor: a.floor,
+        hp: a.hp,
+      })),
+    };
+  });
+}
+async function expectFrozen(page: Page) {
+  const before = await gameplayState(page);
+  // Let actual application frames run while the player has stepped away.
+  await page.evaluate(
+    () =>
+      new Promise<void>((done) => {
+        const until = performance.now() + 1000;
+        const frame = () => {
+          if (performance.now() >= until) done();
+          else requestAnimationFrame(frame);
+        };
+        requestAnimationFrame(frame);
+      }),
+  );
+  expect(await gameplayState(page)).toEqual(before);
+  return before;
+}
+async function prepared(page: Page) {
+  await expect.poll(async () => (await state(page)).preparing).toBe(false);
+  expect((await state(page)).status).toBe("ready");
+  await expect(page.locator("#run-design-dialog")).toHaveCount(0);
+  await expect(page.locator("#start-card")).toBeVisible();
+  await expect(page.locator("#start")).toHaveText("Start game ↗");
+}
+async function startPrepared(page: Page) {
+  await prepared(page);
+  await page.locator("#start").click();
+  await expect.poll(async () => (await state(page)).status).toBe("playing");
+}
 async function flush(page: Page) {
   await page.evaluate(async () => {
     const { flushSaves } = await import("/src/persistence.ts" as string);
@@ -209,6 +261,150 @@ async function pause(page: Page) {
   await flush(page);
 }
 
+for (const { clipboardDenied, popupBlocked } of [
+  { clipboardDenied: false, popupBlocked: false },
+  { clipboardDenied: true, popupBlocked: false },
+  { clipboardDenied: true, popupBlocked: true },
+]) {
+  test(`designer Connect prefills an unsent ChatGPT draft without showing the prompt, clipboard ${clipboardDenied ? "denied" : "available"}, popup ${popupBlocked ? "blocked" : "available"}`, async ({
+    page,
+    context,
+  }) => {
+    const relay = await designer(page);
+    relay.setQueued(true);
+    await context.route("https://chatgpt.com/**", (route) =>
+      route.fulfill({
+        contentType: "text/html",
+        body: "<title>Synthetic ChatGPT draft</title>",
+      }),
+    );
+    await page.addInitScript(
+      ({ clipboardDenied, popupBlocked }) => {
+        const nativeOpen = window.open.bind(window);
+        (window as any).__designerChatUrls = [];
+        window.open = (...args: Parameters<typeof window.open>) => {
+          (window as any).__designerChatUrls.push(String(args[0]));
+          return popupBlocked ? null : nativeOpen(...args);
+        };
+        Object.defineProperty(navigator, "clipboard", {
+          configurable: true,
+          value: {
+            writeText: async () => {
+              if (clipboardDenied)
+                throw new DOMException("Denied", "NotAllowedError");
+            },
+          },
+        });
+      },
+      { clipboardDenied, popupBlocked },
+    );
+    await open(page);
+    const before = await state(page);
+    await page.locator("#start").click();
+    await expect.poll(() => relay.calls.length).toBe(1);
+    const request = relay.calls[0];
+    const expectedPrompt = await page.evaluate(async () => {
+      const { readDesignDraft, designChatPrompt } = await import(
+        "/src/run-designer.ts" as string
+      );
+      const draft = readDesignDraft((window as any).__deadAir.game.id);
+      if (!draft) throw Error("Missing synthetic designer draft");
+      return designChatPrompt(draft);
+    });
+    const popup = popupBlocked ? undefined : page.waitForEvent("popup");
+    await page.locator("#run-design-connect").click();
+    const openedUrls = await page.evaluate(
+      () => (window as any).__designerChatUrls as string[],
+    );
+    expect(openedUrls).toHaveLength(1);
+    const url = new URL(openedUrls[0]);
+    expect(url.origin).toBe("https://chatgpt.com");
+    expect(url.searchParams.get("q")).toBe(expectedPrompt);
+    expect(url.searchParams.get("submit")).toBe("false");
+    if (popup) {
+      const chat = await popup;
+      await chat.waitForURL(openedUrls[0]);
+      await expect(chat).toHaveTitle("Synthetic ChatGPT draft");
+      await chat.close();
+    }
+    const dialog = page.locator("#run-design-dialog");
+    await expect(dialog.locator("textarea, details")).toHaveCount(0);
+    await expect(
+      dialog.getByRole("button", { name: "Copy request" }),
+    ).toHaveCount(0);
+    await expect(
+      dialog.getByRole("link", { name: /^Open ChatGPT/ }),
+    ).toHaveAttribute("href", openedUrls[0]);
+    if (!clipboardDenied && !popupBlocked)
+      await dialog.screenshot({
+        path: ".artifacts/handoff/design/chatgpt-prefill-dialog.png",
+      });
+    expect(relay.calls).toHaveLength(1);
+    expect(await state(page)).toEqual(before);
+    await page.locator("#run-design-cancel").click();
+    await expect(dialog).toHaveCount(0);
+    await expect
+      .poll(() => relay.cancelled)
+      .toContain(request.payload.requestId);
+    expect(relay.calls).toHaveLength(1);
+    expect(await state(page)).toEqual(before);
+  });
+}
+
+test("prepared runs wait for an explicit Start before gameplay and across reload", async ({
+  page,
+}) => {
+  const relay = await designer(page);
+  relay.setQueued(true);
+  await open(page);
+  await page.locator("#start").click();
+  await expect.poll(() => relay.calls.length).toBe(1);
+  await expect(page.locator("#run-design-dialog")).toBeVisible();
+  await expect(page.getByRole("progressbar")).toBeVisible();
+  await expect(page.locator("#run-design-dialog")).toContainText("press Start");
+  const loading = await expectFrozen(page);
+  expect(loading.time).toBe(0);
+  const viewport = page.viewportSize()!;
+  await page.screenshot({
+    path: ".artifacts/handoff/design/ai-design-loading.png",
+  });
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.screenshot({
+    path: ".artifacts/handoff/design/ai-design-loading-narrow.png",
+  });
+  await page.setViewportSize(viewport);
+  relay.setQueued(false);
+  relay.finish(relay.calls[0]);
+  await prepared(page);
+  await expect(page.locator("#start-card")).toContainText(
+    "Your escape is ready",
+  );
+  const ready = await expectFrozen(page);
+  expect(ready.time).toBe(0);
+  const completed = await state(page);
+  const requests = relay.calls.length;
+  await flush(page);
+  await page.reload();
+  await page.waitForFunction(() => !!(window as any).__deadAir);
+  await prepared(page);
+  expect(await state(page)).toEqual(completed);
+  expect(await expectFrozen(page)).toEqual(ready);
+  expect(relay.calls).toHaveLength(requests);
+  await page.locator("#start-card").screenshot({
+    path: ".artifacts/handoff/design/ai-design-ready.png",
+  });
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.screenshot({
+    path: ".artifacts/handoff/design/ai-design-ready-narrow.png",
+  });
+  await page.setViewportSize(viewport);
+  await page.locator("#start").click();
+  await expect.poll(async () => (await state(page)).status).toBe("playing");
+  await expect
+    .poll(async () => (await gameplayState(page)).time)
+    .toBeGreaterThan(ready.time);
+});
+
 test("new-game AI design reaches the full app and a saved reload keeps the exact authored world", async ({
   page,
 }) => {
@@ -216,7 +412,7 @@ test("new-game AI design reaches the full app and a saved reload keeps the exact
   await open(page);
   expect((await state(page)).preparing).toBe(true);
   await page.locator("#start").click();
-  await expect.poll(async () => (await state(page)).status).toBe("playing");
+  await startPrepared(page);
   await pause(page);
   const before = await state(page);
   expect(relay.calls).toHaveLength(harborPhases.length);
@@ -277,7 +473,7 @@ test("an offline first launch can only retry or cancel until a reviewed design i
   await expect(page.locator("#run-design-status")).toContainText("unavailable");
   relay.setCapable(true);
   await page.locator("#run-design-retry").click();
-  await expect.poll(async () => (await state(page)).status).toBe("playing");
+  await startPrepared(page);
   const after = await state(page);
   expect(after.id).not.toBe(before.id);
   expect(after.preparing).toBe(false);
@@ -291,7 +487,7 @@ test("an offline restart preserves the accepted run until the replacement passes
   const relay = await designer(page);
   await open(page);
   await page.locator("#start").click();
-  await expect.poll(async () => (await state(page)).status).toBe("playing");
+  await startPrepared(page);
   await pause(page);
   const before = await state(page);
   relay.setCapable(false);
@@ -320,6 +516,16 @@ test("an offline restart preserves the accepted run until the replacement passes
   );
   expect(replacement[0].payload.phase).toBe("concepts");
   expect(replacement.at(-1).payload.phase).toBe("content-review");
+  await prepared(page);
+  await expect(page.locator("#pause-menu")).not.toBeVisible();
+  await expectFrozen(page);
+  await flush(page);
+  await page.reload();
+  await page.waitForFunction(() => !!(window as any).__deadAir);
+  await prepared(page);
+  expect(await state(page)).toEqual(after);
+  await expectFrozen(page);
+  await startPrepared(page);
 });
 
 test("reloading a pending design retries the same captured request and chat rather than rerolling", async ({
@@ -378,7 +584,7 @@ test("reloading while individual writing is pending retains the exact object inv
   expect((await state(page)).id).toBe(original.id);
   relay.setQueued(false);
   relay.finish(captured);
-  await expect.poll(async () => (await state(page)).status).toBe("playing");
+  await startPrepared(page);
   expect((await state(page)).design.design.environment).toEqual(
     harbor.environment,
   );
@@ -392,7 +598,7 @@ test("restart sends recent fictional designs and repairs a repeated design befor
   relay.setAnswer((body) => (body.payload.repair ? orchard : harbor));
   await open(page);
   await page.locator("#start").click();
-  await expect.poll(async () => (await state(page)).status).toBe("playing");
+  await startPrepared(page);
   const before = await state(page);
   await pause(page);
   await page.locator("#restart-game").click();
@@ -492,7 +698,7 @@ test("editorial review resumes exactly after reload and revises only its identif
   expect((await state(page)).id).toBe(original.id);
   relay.setQueued(false);
   relay.finish(captured);
-  await expect.poll(async () => (await state(page)).status).toBe("playing");
+  await startPrepared(page);
   const after = await state(page);
   const entries = after.design.design.environment.entries;
   expect(entries.find((e: any) => e.surfaceId === slot.id).body).toEqual([
@@ -631,7 +837,7 @@ test("settled design failures retain receipts until Cancel or Escape without sta
   relay.setQueued(false);
   relay.finish(retry);
   await page.locator("#run-design-retry").click();
-  await expect.poll(async () => (await state(page)).status).toBe("playing");
+  await startPrepared(page);
   const after = await state(page);
   expect(after.id).not.toBe(before.id);
   expect(after.design.design.title).toBe(harbor.title);
@@ -647,7 +853,7 @@ test("looking at an authored object reveals its readable caption without replaci
   await designer(page);
   await open(page);
   await page.locator("#start").click();
-  await expect.poll(async () => (await state(page)).status).toBe("playing");
+  await startPrepared(page);
   await page.evaluate(() => {
     const g = (window as any).__deadAir.game;
     g.settings.view = "first-person";

@@ -992,8 +992,8 @@ async function beginDesignedRun() {
       choice.saved,
     );
     game.settings = previous.settings;
+    readyRun();
     if (await persist()) finishRunDesign(previous.id, choice);
-    begin();
   } catch (error) {
     game.notice = `Run could not start: ${String(error)}`;
     const p = document.querySelector("#start-card p");
@@ -1010,6 +1010,22 @@ function finishRunDesign(previousId: string, choice: RunChoice) {
     // The run itself is already durable; blocked optional history is not data loss.
     game.notice += " Recent-design history could not be saved.";
   }
+}
+/** Preparation can finish while the player is away. Only Start enters play. */
+function readyRun() {
+  running = false;
+  game.status = "ready";
+  game.paused = false;
+  quitMenu = false;
+  acc = 0;
+  keys.clear();
+  jumpRequested = false;
+  audio.stop();
+  document.body.classList.remove("agent-tools", "surge");
+  $<HTMLDialogElement>("#pause-menu").close();
+  leaveSpectator();
+  startCard();
+  $("#start").focus({ preventScroll: true });
 }
 function begin() {
   if (saveRecoveryError) return;
@@ -1121,9 +1137,9 @@ async function fresh(statusLine?: HTMLElement) {
   game = newPlayableGame(choice.seed, previous.study, choice.saved);
   game.settings = previous.settings;
   const learningNotice = !saved
-    ? "New run started. The last run's learning could not be saved."
+    ? "New run ready. The last run's learning could not be saved."
     : assessed
-      ? "Learning progress saved. New run started."
+      ? "Learning progress saved. New run ready."
       : "Learning progress saved; assessments finish in the background.";
   game.notice = `${game.notice} ${learningNotice}`;
   say("");
@@ -1134,8 +1150,8 @@ async function fresh(statusLine?: HTMLElement) {
   keys.clear();
   jumpRequested = false;
   closeTerminal();
+  readyRun();
   if (await persist()) finishRunDesign(previous.id, choice);
-  begin();
   return true;
 }
 function startCard() {
@@ -1177,7 +1193,7 @@ function startCard() {
     ? (currentNativeQuestion() ?? unfinishedLastQuestion(game, lastQuestion))
     : undefined;
   if (game.status === "ready")
-    card.innerHTML = `<span class="eyebrow">${game.design?.source === "chatgpt-handoff" ? "AN AI-DESIGNED ESCAPE" : game.design ? "AN AUTHORED ESCAPE" : "A REAL-TIME STUDY ESCAPE"}</span><h2>${game.design ? escape(game.design.design.title) : "The dead are<br>on your heels."}</h2><p>${game.design ? escape(game.design.design.premise) : "Twenty survivors. Four floors. Four seats.<br>Choose your route. Learn your way out."}${game.preparingRun ? "<br>AI will design your new run before play." : ""}</p><button id="start">Enter the building ↗</button><small class="agent-only">${escape(status().detail)}</small>`;
+    card.innerHTML = `<span class="eyebrow">${game.preparingRun ? "A NEW ESCAPE" : "YOUR ESCAPE IS READY"}</span><h2>${game.design ? escape(game.design.design.title) : "The dead are<br>on your heels."}</h2><p>${game.design ? escape(game.design.design.premise) : "Twenty survivors. Four floors. Four seats.<br>Choose your route. Learn your way out."}</p>${game.preparingRun ? "<p>ChatGPT will prepare your game session before play.</p>" : '<p id="run-ready-status" role="status">Your escape is ready. Take your time. Nothing moves until you press Start.</p>'}<button id="start">${game.preparingRun ? "Prepare game ↗" : "Start game ↗"}</button><small class="agent-only">${escape(status().detail)}</small>`;
   else
     card.innerHTML = `<span class="eyebrow">${game.status === "escaped" ? "TRANSMISSION RECEIVED" : "SIGNAL LOST"}</span><h2>${game.status === "escaped" ? "You made it." : "Your work survives."}</h2><p>${escape(game.notice)}<br>${game.stats.rescued} extracted · ${game.stats.deaths} lost · ${Math.floor(game.endedAt ?? game.time)} seconds</p>${finishable ? '<button id="finish-question">Continue in ChatGPT ↗</button>' : ""}<button id="again">Begin another run ↗</button><button id="backup" class="quiet agent-only">Export work & evidence</button><button id="spectate" class="quiet">Watch the building ↗</button>`;
   document.getElementById("start")?.addEventListener("click", begin);

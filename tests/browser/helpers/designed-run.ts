@@ -62,7 +62,7 @@ async function syntheticDesigner(page: Page, activate = true) {
             status: 503,
             json: { error: "Synthetic run designer has not been enabled." },
           });
-        // Restore the real requested view before acceptance calls begin(), so
+        // Restore the real requested view before the player presses Start, so
         // first-person entry still performs its ordinary mouse-capture action.
         if (body.payload.phase === "content-review")
           await page.evaluate((view) => {
@@ -121,11 +121,6 @@ async function finishSyntheticDesign(page: Page, state: SyntheticDesigner) {
     });
   } finally {
     state.restoring = false;
-    if (state.previousTimeout! > 0)
-      test.setTimeout(
-        state.previousTimeout! +
-          Math.ceil(performance.now() - state.preparationStarted!),
-      );
   }
 }
 
@@ -138,7 +133,7 @@ export async function chooseDesignedRun(page: Page) {
   // enabled its designer. Retry that captured request through the same UI.
   const outcome = await page.waitForFunction((previous) => {
     const game = (window as any).__deadAir.game;
-    if (game.id !== previous && game.status === "playing" && !game.preparingRun)
+    if (game.id !== previous && game.status === "ready" && !game.preparingRun)
       return "complete";
     const retry =
       document.querySelector<HTMLButtonElement>("#run-design-retry");
@@ -151,18 +146,31 @@ export async function chooseDesignedRun(page: Page) {
     return (
       game &&
       game.id !== previous &&
-      game.status === "playing" &&
+      game.status === "ready" &&
       !game.preparingRun &&
       !game.paused &&
       game.design?.design.version === 3
     );
   }, previousId);
   await expect(dialog).toHaveCount(0);
-  await expect(page.locator("#start-card")).toBeHidden();
+  await expect(page.locator("#start-card")).toBeVisible();
   await finishSyntheticDesign(page, designer);
+  await page.locator("#start").click();
+  await page.waitForFunction(() => {
+    const game = (window as any).__deadAir.game;
+    return game.status === "playing" && !game.paused;
+  });
+  await expect(page.locator("#start-card")).toBeHidden();
+  // Keep the setup allowance through Start and first-person initialization,
+  // matching the prior helper's preparation budget before gameplay assertions.
+  if (designer.previousTimeout! > 0)
+    test.setTimeout(
+      designer.previousTimeout! +
+        Math.ceil(performance.now() - designer.preparationStarted!),
+    );
 }
 
-/** Saved ready runs resume directly; fresh runs require a reviewed design. */
+/** Ready runs start on click; fresh runs require design and a second Start click. */
 export async function startDesignedRun(page: Page) {
   await page.waitForFunction(() => !!(window as any).__deadAir);
   const preparing = await page.evaluate(

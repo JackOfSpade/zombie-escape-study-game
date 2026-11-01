@@ -311,7 +311,7 @@ test("restart saves learning before the new run; save and quit shows the saved r
   expect(restarted.id).not.toBe(first);
   expect(restarted.opening).toBe(environmentDesignFixture().opening);
   expect(restarted.notice).toBe(
-    `${restarted.opening} Zombies are already approaching. The entrance is behind you; they will reach it in about three minutes. Learning progress saved. New run started.`,
+    `${restarted.opening} Zombies are already approaching. The entrance is behind you; they will reach it in about three minutes. Learning progress saved. New run ready.`,
   );
 
   await page.keyboard.press("Escape");

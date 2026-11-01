@@ -31,12 +31,12 @@ export async function chooseRunDesign(
   const dialog = document.createElement("dialog");
   dialog.id = "run-design-dialog";
   dialog.className = "run-design-dialog";
-  dialog.innerHTML = `<span class="eyebrow">A NEW ESCAPE</span><h2>Let AI shape this run.</h2><p>ChatGPT explores different ideas, develops each room, then reviews the writing and artwork. This can take a while. Your current run stays saved throughout.</p><p id="run-design-status" role="status">Connecting to the designer…</p><div class="run-design-actions"><button id="run-design-connect">Connect ChatGPT ↗</button><button id="run-design-retry" class="quiet">Retry design</button></div><details><summary>ChatGPT request</summary><textarea id="run-design-prompt" readonly rows="6" aria-label="Run design ChatGPT request"></textarea><button id="run-design-copy" class="quiet">Copy request</button></details><div class="run-design-actions"><button id="run-design-cancel" class="quiet">Cancel</button></div><small>Every new run is reviewed, checked before play and saved with its design.</small>`;
+  dialog.setAttribute("aria-labelledby", "run-design-title");
+  dialog.innerHTML = `<span class="eyebrow">SETTING UP YOUR SESSION</span><h2 id="run-design-title">Preparing your escape.</h2><p>ChatGPT explores different ideas, develops each room, then reviews the writing and artwork. This can take a while. Your current run stays saved throughout.</p><div id="run-design-loading" role="progressbar" aria-label="Preparing game session"><span class="run-design-spinner" aria-hidden="true"></span><span>Building your session</span></div><p id="run-design-status" role="status">Connecting to the designer…</p><p class="run-design-wait">You can step away. When everything is ready, the game will wait for you to press Start.</p><div class="run-design-actions"><button id="run-design-connect">Connect ChatGPT ↗</button><button id="run-design-retry" class="quiet">Retry design</button></div><p id="run-design-handoff" hidden>Your request is filled in when ChatGPT opens. Choose your model and thinking level, then press Send. <a id="run-design-open" target="_blank" rel="noopener noreferrer">Open ChatGPT ↗</a></p><div class="run-design-actions"><button id="run-design-cancel" class="quiet">Cancel</button></div><small>Every new run is reviewed, checked before play and saved with its design.</small>`;
   document.body.append(dialog);
   const message = dialog.querySelector<HTMLElement>("#run-design-status")!;
+  const loading = dialog.querySelector<HTMLElement>("#run-design-loading")!;
   const retry = dialog.querySelector<HTMLButtonElement>("#run-design-retry")!;
-  const prompt =
-    dialog.querySelector<HTMLTextAreaElement>("#run-design-prompt")!;
   const previousPause = game.paused;
   if (game.status === "playing") game.paused = true;
   dialog.showModal();
@@ -70,12 +70,12 @@ export async function chooseRunDesign(
     active = new AbortController();
     const controller = active;
     retry.disabled = true;
+    loading.hidden = false;
     try {
       draft ??=
         readDesignDraft(game.id) ??
         newDesignDraft(game.id, crypto.getRandomValues(new Uint32Array(1))[0]);
       saveDesignDraft(draft);
-      prompt.value = designChatPrompt(draft);
       await checkBridge();
       controller.signal.throwIfAborted();
       const result = await prepareDesignedRun(draft, {
@@ -97,41 +97,33 @@ export async function chooseRunDesign(
       });
       finish({ seed: result.seed, saved: result.saved });
     } catch (error) {
-      if (!closed)
+      if (!closed) {
+        loading.hidden = true;
         message.textContent =
           error instanceof Error ? error.message : String(error);
+      }
     } finally {
       if (active === controller) active = undefined;
       retry.disabled = false;
     }
   };
-  const copy = async () => {
-    if (!draft) return;
-    prompt.value = designChatPrompt(draft);
-    try {
-      await navigator.clipboard.writeText(prompt.value);
-      if (!closed)
-        message.textContent =
-          "Request copied. Paste it in a new ChatGPT chat with the game plugin connected.";
-    } catch {
-      dialog.querySelector("details")!.open = true;
-      prompt.focus();
-      prompt.select();
-      message.textContent =
-        "Select and copy this request into a new ChatGPT chat.";
-    }
-  };
   dialog.querySelector<HTMLButtonElement>("#run-design-connect")!.onclick =
     () => {
-      window.open("https://chatgpt.com/", "_blank", "noopener,noreferrer");
-      void copy();
+      if (!draft) return;
+      const url = new URL("https://chatgpt.com/");
+      url.searchParams.set("q", designChatPrompt(draft));
+      // Fill the composer without sending, leaving model/thinking selection
+      // to the player. Keep the same URL available if a popup is blocked.
+      url.searchParams.set("submit", "false");
+      dialog.querySelector<HTMLAnchorElement>("#run-design-open")!.href =
+        url.href;
+      dialog.querySelector<HTMLElement>("#run-design-handoff")!.hidden = false;
+      // Open during the click; awaiting bridge setup loses popup permission.
+      window.open(url.href, "_blank", "noopener,noreferrer");
       void connect().then(() => {
         if (!active && !closed) void attempt();
       });
     };
-  dialog.querySelector<HTMLButtonElement>("#run-design-copy")!.onclick = () => {
-    void copy();
-  };
   retry.onclick = () => {
     if (draft) retryDesignDraft(draft);
     void attempt();

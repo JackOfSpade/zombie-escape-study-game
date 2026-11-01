@@ -56,9 +56,7 @@ test("an unreadable checkpoint stays protected through lifecycle saves until a v
   await expect(page.locator("#save-recovery-status")).toContainText(
     "Existing checkpoints have been protected",
   );
-  await expect(
-    page.getByRole("button", { name: "Enter the building" }),
-  ).toHaveCount(0);
+  await expect(page.locator("#start")).toHaveCount(0);
   expect(await rawDurableSave(page)).toBeNull();
   await page.evaluate(() => {
     window.dispatchEvent(new Event("blur"));
@@ -111,13 +109,9 @@ test("an unreadable checkpoint stays protected through lifecycle saves until a v
     buffer: Buffer.from(backup),
   });
   await expect(page.locator("#save-recovery-status")).toHaveCount(0);
-  await expect(
-    page.getByRole("button", { name: "Enter the building" }),
-  ).toBeVisible();
+  await expect(page.getByRole("button", { name: "Start game" })).toBeVisible();
   await page.reload();
-  await expect(
-    page.getByRole("button", { name: "Enter the building" }),
-  ).toBeVisible();
+  await expect(page.getByRole("button", { name: "Start game" })).toBeVisible();
   expect(
     await page.evaluate(
       () => (window as any).__deadAir.game.encounters["f0-room0"].chatDraft,
