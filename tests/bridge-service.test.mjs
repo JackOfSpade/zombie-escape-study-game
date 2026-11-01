@@ -3,7 +3,9 @@ import { createServer } from "node:http";
 import { spawn } from "node:child_process";
 import {
   mkdtempSync,
+  mkdirSync,
   readFileSync,
+  realpathSync,
   rmSync,
   writeFileSync,
   utimesSync,
@@ -16,6 +18,7 @@ import {
   ensureBridge,
   stopBridge,
 } from "../scripts/bridge-service.mjs";
+import { sha256 } from "../scripts/lib/digest.mjs";
 const manager = new URL("../scripts/bridge-service.mjs", import.meta.url).href;
 const serverModule = new URL("../scripts/bridge-server.mjs", import.meta.url)
   .href;
@@ -75,6 +78,153 @@ async function launcher(options) {
   assert.equal(code, 0, errors);
   return JSON.parse(output.trim());
 }
+
+async function controlledService(handler) {
+  const f = await fixture();
+  const owner = {
+    version: 1,
+    root: sha256(realpathSync(f.root)),
+    port: f.options.port,
+    pid: process.pid,
+    instance: "synthetic-shutdown",
+    token: "a".repeat(64),
+    running: true,
+  };
+  mkdirSync(f.options.directory, { mode: 0o700 });
+  writeFileSync(
+    join(f.options.directory, "service.json"),
+    JSON.stringify(owner),
+    { mode: 0o600 },
+  );
+  const server = createServer((req, res) => {
+    assert.equal(req.headers["x-bridge-control"], owner.token);
+    handler(req, res, () => {
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify(owner));
+    });
+  });
+  await new Promise((resolve) =>
+    server.listen(f.options.port, "127.0.0.1", resolve),
+  );
+  const close = async () => {
+    server.closeAllConnections();
+    if (server.listening) await new Promise((resolve) => server.close(resolve));
+  };
+  return {
+    ...f,
+    close,
+    cleanup: async () => {
+      await close();
+      rmSync(f.root, { recursive: true, force: true });
+    },
+  };
+}
+
+test("acknowledged shutdown tolerates temporary unresponsive health checks until its socket closes", async () => {
+  let stopping = false,
+    posts = 0,
+    timer;
+  const f = await controlledService((req, _res, answer) => {
+    if (req.method === "POST") {
+      posts++;
+      stopping = true;
+      answer();
+      timer = setTimeout(() => void f.close(), 1600);
+    } else if (!stopping) answer();
+  });
+  try {
+    assert.deepEqual(await stopBridge(f.options), { running: false });
+    assert.equal(
+      posts,
+      1,
+      "shutdown is requested once, never signalled or repeated",
+    );
+  } finally {
+    clearTimeout(timer);
+    await f.cleanup();
+  }
+});
+
+test("a shutdown request with no acknowledgement reports that its outcome is uncertain", async () => {
+  let posts = 0;
+  const f = await controlledService((req, _res, answer) => {
+    if (req.method === "POST") posts++;
+    else answer();
+  });
+  try {
+    await assert.rejects(
+      stopBridge(f.options),
+      /not acknowledged.*may still be in progress/,
+    );
+    assert.equal(posts, 1);
+  } finally {
+    await f.cleanup();
+  }
+});
+
+test("shutdown waiting never adopts an unverified listener after its acknowledged request", async () => {
+  let stopping = false,
+    posts = 0;
+  const f = await controlledService((req, res, answer) => {
+    if (req.method === "POST") {
+      posts++;
+      stopping = true;
+      answer();
+    } else if (stopping) {
+      res.writeHead(403);
+      res.end("{}");
+    } else answer();
+  });
+  try {
+    await assert.rejects(stopBridge(f.options), /unverified listener/);
+    assert.equal(posts, 1);
+  } finally {
+    await f.cleanup();
+  }
+});
+
+test(
+  "acknowledged shutdown waiting has a bounded deadline and reports pending exit accurately",
+  { timeout: 15000 },
+  async () => {
+    let posts = 0;
+    const f = await controlledService((req, _res, answer) => {
+      if (req.method === "POST") posts++;
+      answer();
+    });
+    try {
+      await assert.rejects(
+        stopBridge(f.options),
+        /shutdown was acknowledged but exit is still pending/,
+      );
+      assert.equal(posts, 1);
+    } finally {
+      await f.cleanup();
+    }
+  },
+);
+
+test("unresponsive startup and pre-shutdown checks remain conservative", async () => {
+  let posts = 0;
+  const f = await controlledService((req) => {
+    if (req.method === "POST") posts++;
+  });
+  try {
+    await assert.rejects(ensureBridge(f.options), /did not respond/);
+    await assert.rejects(stopBridge(f.options), /did not respond/);
+    assert.equal(posts, 0, "an unverified listener never receives shutdown");
+    assert.throws(
+      () => readFileSync(join(f.options.directory, "start.lock")),
+      /ENOENT/,
+    );
+    assert.throws(
+      () => readFileSync(join(f.options.directory, "service.log")),
+      /ENOENT/,
+    );
+  } finally {
+    await f.cleanup();
+  }
+});
 
 test("game launcher exits and restarts without rotating the worker or losing a pending claim", async () => {
   const f = await fixture();

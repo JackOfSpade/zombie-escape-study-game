@@ -348,7 +348,34 @@ export function parseQualityRequest(v) {
 }
 export function runQualityContentNoveltyErrors(content, recentContent) {
   const recent = parseEnvironmentSummaries(recentContent),
-    errors = [];
+    errors = [],
+    inRunArt = new Map(),
+    shareableArt = new Map(
+      content.fragments
+        .filter((f) => f.kind === "branding" || f.kind === "clue")
+        .map((f) => [f.id, f]),
+    );
+  // Compare the drawing data itself. A hash or a changed object key order must
+  // not turn different art into a match or conceal identical art.
+  const drawingData = (drawing) =>
+    JSON.stringify(drawing, (_key, value) =>
+      record(value)
+        ? Object.fromEntries(
+            Object.keys(value)
+              .sort()
+              .map((key) => [key, value[key]]),
+          )
+        : value,
+    );
+  const sharedArtFragments = (entry) =>
+    new Set(
+      [...entry.title, ...entry.body].flatMap((part) => {
+        const fragment = shareableArt.get(part.fragmentId);
+        return fragment?.surfaces.includes(entry.surfaceId)
+          ? [fragment.id]
+          : [];
+      }),
+    );
   const phrases = recent
     .flatMap((s) => s.phrases)
     .filter((s) => normalizeEnvironmentText(s).length >= 12);
@@ -398,6 +425,20 @@ export function runQualityContentNoveltyErrors(content, recentContent) {
       errors.push(
         `surface:${e.surfaceId} repeats recent-run artwork; choose a different subject and composition.`,
       );
+    if (e.drawing) {
+      const signature = drawingData(e.drawing),
+        shared = sharedArtFragments(e),
+        previous = inRunArt.get(signature) ?? [],
+        conflict = previous.find(
+          (earlier) => ![...shared].some((id) => earlier.shared.has(id)),
+        );
+      if (conflict)
+        errors.push(
+          `surface:${e.surfaceId} repeats artwork from surface:${conflict.id} within this run; make a distinct drawing or reference the same declared branding/clue fragment on both surfaces.`,
+        );
+      previous.push({ id: e.surfaceId, shared });
+      inRunArt.set(signature, previous);
+    }
     if (errors.length >= 20) break;
   }
   return errors.slice(0, 20);
@@ -497,7 +538,7 @@ export function qualityGuidance() {
 All replies contain exactly the captured requestId and the fields for their phase. concepts: return concepts, exactly3 {id:lowercase slug<=40,title<=64,premise<=240,spatialIdentity<=240,castTension<=240,visualLanguage<=240,everydayLife<=240,escapeMood<=240,novelty<=240}. Propose genuinely different spatial experiences, institutions, ordinary routines, relationships and visual motifs, using recent summaries to avoid repetition. selection: return {selectedId,rationale<=600}; independently compare the captured alternatives and select the strongest coherent, distinctive direction rather than automatically choosing the first.
 structure: return {structure:RunStructureV3}, using the selected concept and rationale and the version3 structural schema below; honor repair.candidate/errors if present. structure-review: return {findings:Finding[]}; examine the actual supplied structure/inventory against concept, recent runs, room identities, relationships, furnishing variety and coherent ordinary-life details. Finding={id:lowercase slug<=40,priority:major|minor,target,problem<=300,evidence<=300,recommendation<=300}, at most12 unique actionable findings. Cite concrete supplied data and a useful change; no numerical self-scores, vague praise, speculative mechanics, or invented validators. Structure targets: run, floor:0..3, room:<floor>:<room0..3>, survivor:<exact roster name>, or surface:<exact inventory ID>. Empty findings means no material improvement identified.
 content-plan: return {plan:{rooms:RoomPlan[],fragments:RepeatFragment[]}}. RoomPlan={id,story<=400,ordinaryLife<=400,occupantEvidence<=400,artDirection<=400}. Include every actual inventory group exactly once: exterior for all exterior surfaces; f<floor>-room<room> for interior room surfaces; f<floor>-common for interior surfaces without a room. Each group needs a distinct coherent story and evidence of prior occupants, not a generic crisis theme. Plan ordinary workplace artifacts alongside evacuation and survivor traces. Connect selected objects through roster relationships without making every note part of one emergency. Set explicit shared fragments now using the environmental fragment schema; fragments and memberships cannot change during writing.
-content-batch: return {entries:SurfaceContent[]} for exactly targets, no other surfaces. Read the global plan and accepted content, but focus on this room/group. Vary concise/long writing, subjects, voices, visual compositions and presentation to suit each object's real dimensions. All prior entries and global fragments stay fixed. content-review: return {findings:Finding[]} with targets only run or surface:<exact ID>. Review the complete assembled writing/art for contradictions, weak room stories, overly generic or repetitive passages/drawings, insufficient ordinary-life evidence, recent-run resemblance and factual game-rule claims. Do not manufacture changes just to prolong review. content-revision: return {entries:SurfaceContent[]} replacing every explicitly targeted surface and no others; a run-level finding permits a coherent patch of up to24 known entries. Do not change fragments, geometry, inventory, or untouched entries. A revision must make meaningful progress on its evidence; mere renaming, recoloring, padding or reverting earlier fixes is not progress.
+content-batch: return {entries:SurfaceContent[]} for exactly targets, no other surfaces. Read the global plan and accepted content, but focus on this room/group. Vary concise/long writing, subjects, voices, visual compositions and presentation to suit each object's real dimensions. Within this quality flow, identical drawings are allowed only when both surfaces reference the same declared branding or clue fragment; a direction fragment permits repeated fixed text, not repeated art. All prior entries and global fragments stay fixed. content-review: return {findings:Finding[]} with targets only run or surface:<exact ID>. Review the complete assembled writing/art for contradictions, weak room stories, overly generic or repetitive passages/drawings, insufficient ordinary-life evidence, recent-run resemblance and factual game-rule claims. Compare time stamps across floors and check that the opening's concrete promises have a visible narrative payoff. Do not manufacture changes just to prolong review. content-revision: return {entries:SurfaceContent[]} replacing every explicitly targeted surface and no others; a run-level finding permits a coherent patch of up to24 known entries. Do not change fragments, geometry, inventory, or untouched entries. A revision must make meaningful progress on its evidence; mere renaming, recoloring, padding or reverting earlier fixes is not progress.
 The environment schema, text/readability budgets, per-drawing/run complexity limits and exact bindings below still apply. Shared fragments are not blanket exceptions for copied ordinary prose. Recent writing and exact non-brand artwork reuse is rejected. The controller performs targeted repairs/reviews until ready or demonstrated diminishing returns; unresolved major/hard failures remain visible for Retry/Cancel. Validated data is not a guarantee of artistic quality.`;
 }
 export const QUALITY_GUIDANCE = qualityGuidance();

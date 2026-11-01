@@ -156,7 +156,15 @@ export function createHandoffRoutes(
           send(
             res,
             result.status === "done" ? 200 : 202,
-            result.status === "done" ? result.answer : { status: "pending" },
+            result.status === "done"
+              ? result.answer
+              : {
+                  status: "pending",
+                  handoff: queue.progress(
+                    url.searchParams.get("id"),
+                    url.searchParams.get("hash"),
+                  ),
+                },
           );
           return true;
         }

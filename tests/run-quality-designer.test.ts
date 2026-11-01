@@ -894,3 +894,126 @@ test("changed builders and tampered approval fingerprints cannot silently rebind
   );
   assert.throws(() => parseQualityDraft({ ...current, attempts: 0 }), /budget/);
 });
+
+test("a failed final world check pauses durably and Retry preserves the approved review", async () => {
+  const current = await atPhase("content-review");
+  let durable = "",
+    finalizations = 0,
+    sends = 0;
+  await assert.rejects(
+    prepareQualityRun(
+      current,
+      options({
+        capture: (d) => {
+          durable = JSON.stringify(parseQualityDraft(d));
+        },
+        finalize: () => {
+          finalizations++;
+          throw Error("Synthetic final environment binding failure");
+        },
+      }),
+      async (...args) => {
+        sends++;
+        return send(...args);
+      },
+    ),
+    /final saved world could not be prepared: Synthetic final environment binding failure/,
+  );
+  assert.equal(sends, 1);
+  assert.equal(finalizations, 1);
+  const restored = parseQualityDraft(JSON.parse(durable));
+  assert.equal(restored.exhausted, true);
+  assert.equal(restored.reviews.content.stop, "ready");
+  assert.match(
+    restored.pauseReason,
+    /Synthetic final environment binding failure/,
+  );
+  retryQualityDraft(restored);
+  assert.equal(restored.exhausted, false);
+  assert.equal(restored.reviews.content.stop, "ready");
+  const result = await prepareQualityRun(restored, options(), async () =>
+    assert.fail("The approved review must not be delivered again"),
+  );
+  assert.deepEqual(result.saved.design, design);
+});
+
+test("an approved older draft with repeated art repairs only the later surface before a fresh review", async () => {
+  const current = await atPhase("content-review");
+  assert.equal(current.request.phase, "content-review");
+  if (current.request.phase !== "content-review") return;
+  const illustrated = current.request.content.entries.filter((e) => e.drawing),
+    [earlier, later] = illustrated;
+  assert.ok(earlier && later);
+  later.drawing = structuredClone(earlier.drawing);
+  const approvedContent = structuredClone(current.request.content);
+  current.reviews.content.rounds = 1;
+  current.reviews.content.stop = "ready";
+  current.reviews.content.approvedFingerprint =
+    runDesignFingerprint(approvedContent);
+  // This has the exact shape of a durable draft approved before the new
+  // within-run art check. Historical parsing still accepts its content.
+  const restored = parseQualityDraft(JSON.parse(JSON.stringify(current)));
+  const phases: string[] = [];
+  let revisionCaptured = false;
+  const result = await prepareQualityRun(
+    restored,
+    options({
+      capture: (d) => {
+        const saved = parseQualityDraft(d);
+        if (saved.request.phase === "content-revision") {
+          revisionCaptured = true;
+          assert.equal(saved.reviews.content.stop, "pending");
+          assert.equal(saved.reviews.content.approvedFingerprint, null);
+          assert.deepEqual(saved.request.content, approvedContent);
+          assert.deepEqual(
+            saved.request.findings.map((f) => f.target),
+            [`surface:${later.surfaceId}`],
+          );
+        }
+      },
+    }),
+    async (request) => {
+      phases.push(request.phase);
+      if (request.phase === "content-revision") {
+        assert.deepEqual(request.content, approvedContent);
+        assert.deepEqual(
+          request.findings.map((f) => f.target),
+          [`surface:${later.surfaceId}`],
+        );
+        // The usual fixture reply echoes revisions. This response simulates
+        // an author replacing only the duplicate with its original artwork.
+        return {
+          requestId: request.requestId,
+          entries: [
+            structuredClone(
+              design.environment.entries.find(
+                (entry) => entry.surfaceId === later.surfaceId,
+              )!,
+            ),
+          ],
+        };
+      }
+      if (request.phase === "content-review") {
+        assert.deepEqual(
+          request.content.entries.filter(
+            (e) => e.surfaceId !== later.surfaceId,
+          ),
+          approvedContent.entries.filter(
+            (e) => e.surfaceId !== later.surfaceId,
+          ),
+        );
+        assert.deepEqual(
+          request.content.entries.find((e) => e.surfaceId === later.surfaceId),
+          design.environment.entries.find(
+            (e) => e.surfaceId === later.surfaceId,
+          ),
+        );
+        return { requestId: request.requestId, findings: [] };
+      }
+      assert.fail(`Unexpected phase ${request.phase}`);
+    },
+  );
+  assert.equal(revisionCaptured, true);
+  assert.deepEqual(phases, ["content-revision", "content-review"]);
+  assert.deepEqual(result.saved.design, design);
+});

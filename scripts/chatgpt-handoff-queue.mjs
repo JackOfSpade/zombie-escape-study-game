@@ -931,6 +931,9 @@ export function createHandoffQueue({
         ? { firstPolledAt: j.firstPolledAt }
         : {}),
       ...(typeof j.claimedAt === "number" ? { claimedAt: j.claimedAt } : {}),
+      ...(typeof j.lastWorkerActivityAt === "number"
+        ? { lastWorkerActivityAt: j.lastWorkerActivityAt }
+        : {}),
       ...(typeof j.completedAt === "number"
         ? { completedAt: j.completedAt }
         : {}),
@@ -1224,6 +1227,39 @@ export function createHandoffQueue({
         ? { status: "done", answer: structuredClone(job.answer) }
         : { status: "pending" };
     },
+    /** Exact receipt metadata, independent of the bounded recent-job list. */
+    progress(id, digest) {
+      checkEnabled();
+      const job = state.jobs.find((j) => j.id === id && j.hash === digest);
+      if (!job) throw Error("Unknown exact handoff request");
+      checkAutonomous(job.operation, job.payload);
+      return {
+        id: job.id,
+        status: job.status,
+        ...(job.status === "working" && typeof job.claimedAt === "number"
+          ? { claimedAt: job.claimedAt }
+          : {}),
+        ...(job.status === "working" &&
+        typeof job.lastWorkerActivityAt === "number"
+          ? { lastWorkerActivityAt: job.lastWorkerActivityAt }
+          : {}),
+      };
+    },
+    /** A worker read is evidence of contact; game/result polling is not. */
+    workerActivity(worker, id, claim) {
+      checkEnabled();
+      const job = state.jobs.find(
+        (j) =>
+          j.id === id &&
+          j.worker === worker &&
+          safeEqual(claim, j.claim) &&
+          j.status === "working",
+      );
+      if (!job) throw Error("Wrong worker, job or claim");
+      checkAutonomous(job.operation, job.payload);
+      // Like poll timing, this metadata is persisted with the next state write.
+      job.lastWorkerActivityAt = now();
+    },
     discardChatter(id, digest) {
       const job = state.jobs.find((j) => j.id === id && j.hash === digest);
       if (!job) return { status: "discarded" };
@@ -1250,7 +1286,12 @@ export function createHandoffQueue({
      * served, and a claim whose game stopped polling (a reload or a new run)
      * goes back to the queue, so an abandoned turn never blocks a live one.
      */
-    get(worker, requestPrefix, select, { liveWithinMs } = {}) {
+    get(
+      worker,
+      requestPrefix,
+      select,
+      { liveWithinMs, workerActivity = true } = {},
+    ) {
       checkEnabled();
       purgeChatter();
       if (select !== undefined && typeof select !== "function")
@@ -1322,6 +1363,7 @@ export function createHandoffQueue({
             job.worker = worker;
             job.claim = randomUUID();
             job.claimedAt = now();
+            job.lastWorkerActivityAt = now();
           }
           save();
         } catch (error) {
@@ -1334,6 +1376,7 @@ export function createHandoffQueue({
           status: "waiting",
           note: "No released work. Wait for the player's next request; do not invent a task or answer.",
         };
+      if (workerActivity) job.lastWorkerActivityAt = now();
       const text = JSON.stringify(job.payload),
         chunks = chunkPayload(job.payload);
       return {
@@ -1377,6 +1420,7 @@ export function createHandoffQueue({
         throw Error("Wrong worker, job or claim");
       checkAutonomous(job.operation, job.payload);
       restoredLegacyClaims.delete(job.id);
+      job.lastWorkerActivityAt = now();
       const digest = hash(JSON.stringify(answer));
       if (job.status === "done") {
         if (digest !== job.answerHash)
@@ -1421,6 +1465,7 @@ export function createHandoffQueue({
       if (index < 0 || index >= chunks.length)
         throw Error("Unknown payload part");
       restoredLegacyClaims.delete(job.id);
+      job.lastWorkerActivityAt = now();
       job.readParts = [...new Set([...(job.readParts ?? []), index])];
       save();
       return {
@@ -1511,6 +1556,14 @@ export function createHandoffQueue({
   ]) {
     const operation = api[name];
     api[name] = (...args) => {
+      // Contact with the exact authorized worker is transport evidence even
+      // when its answer fails validation or a later durable write rolls back.
+      // Record it before the answer transaction, never for a different claim.
+      if (
+        name === "submit" &&
+        state.jobs.some((job) => job.id === args[1] && job.status === "working")
+      )
+        api.workerActivity(args[0], args[1], args[2]);
       const before = structuredClone(state);
       try {
         return operation(...args);

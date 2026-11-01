@@ -669,7 +669,7 @@ export function createTerminalRelayApp({
     if (s.recent.length > 20) s.recent.shift();
     s.turn = null;
   };
-  const claim = (s, select = isTerminalDialogue) => {
+  const claim = (s, select = isTerminalDialogue, workerActivity = true) => {
     if (!queue.snapshot().enabled) {
       if (s.turn?.status === "claimed") {
         s.turn.status = "released";
@@ -680,6 +680,7 @@ export function createTerminalRelayApp({
     }
     const served = queue.get(s.worker, undefined, select, {
       liveWithinMs: requesterLiveMs,
+      workerActivity,
     });
     if (served.status !== "served") {
       if (s.turn?.status === "claimed") {
@@ -717,7 +718,9 @@ export function createTerminalRelayApp({
       finishTurn(s);
       s.revision++;
     }
-    claim(s);
+    // A card refresh keeps the UI connected, but cannot prove the model is
+    // still processing a previously delivered turn.
+    claim(s, isTerminalDialogue, false);
   };
   const nativeSelect = nativeJob;
   const nativeValue = (s) => {
@@ -885,7 +888,7 @@ export function createTerminalRelayApp({
         (s) =>
           now() - s.updated <= activeWindowMs ||
           (s.turn?.status === "claimed" &&
-            [DIRECT_MODE, "native-preparation"].includes(s.turn.mode) &&
+            s.turn.mode === DIRECT_MODE &&
             queue.snapshot().enabled &&
             queue.requesterLive(s.turn.jobId, requesterLiveMs)),
       ).length,
@@ -1009,6 +1012,7 @@ export function createTerminalRelayApp({
             index >= s.turn.contextChunks.length
           )
             throw Error("Unknown preparation context chunk");
+          queue.workerActivity(s.worker, s.turn.jobId, s.turn.claim);
           s.turn.readChunks.add(index);
           return valueResult({
             relayId: s.id,
@@ -1023,6 +1027,7 @@ export function createTerminalRelayApp({
         }
         if (args.index !== undefined && args.index !== 0)
           throw Error("This context part has only one index");
+        queue.workerActivity(s.worker, s.turn.jobId, s.turn.claim);
         s.turn.readContext.add(args.part);
         return {
           content: [
@@ -1082,6 +1087,20 @@ export function createTerminalRelayApp({
         return result(s);
       }
       if (name === "finish_study_preparation") {
+        // An exact owner's attempted completion proves contact even if its
+        // JSON or response schema needs correction. Wrong receipts must not
+        // freshen another task's activity or claim any replacement work.
+        const pending = s.turn;
+        if (
+          pending?.status === "claimed" &&
+          pending.mode === "native-preparation" &&
+          pending.turnId === args.turnId &&
+          pending.jobFingerprint === args.jobFingerprint
+        ) {
+          checkChat(pending);
+          if (queue.requesterLive(pending.jobId, requesterLiveMs))
+            queue.workerActivity(s.worker, pending.jobId, pending.claim);
+        }
         if (
           !boundedText(args.turnId, 100) ||
           !/^[a-f0-9]{64}$/.test(args.jobFingerprint ?? "") ||

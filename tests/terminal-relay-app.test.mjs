@@ -786,6 +786,43 @@ test("status counts only app sessions that are still calling in as active", () =
   assert.equal(app.status().activeSessions, 1);
 });
 
+test("card refreshes do not invent new model activity on an existing claim", () => {
+  let clock = 1000;
+  const queue = waitingGame(createHandoffQueue({ now: () => clock }));
+  const app = createTerminalRelayApp({ queue, now: () => clock });
+  queue.enable(true);
+  const receipt = queue.enqueue(
+    "tutor",
+    dialoguePayload("card-activity", [human("Synthetic", 1)]),
+  );
+  const session = state(app.call("open_study_terminal", {}, owner));
+  const claimed = state(
+    app.call(
+      "claim_study_terminal_turn",
+      { relayId: session.relayId, revision: session.revision },
+      owner,
+    ),
+  );
+  assert.equal(
+    queue.progress(receipt.id, receipt.hash).lastWorkerActivityAt,
+    1000,
+  );
+  clock += 60_000;
+  queue.result(receipt.id, receipt.hash);
+  const refreshed = state(
+    app.call(
+      "claim_study_terminal_turn",
+      { relayId: session.relayId, revision: claimed.revision },
+      owner,
+    ),
+  );
+  assert.equal(refreshed.turn.turnId, claimed.turn.turnId);
+  assert.equal(
+    queue.progress(receipt.id, receipt.hash).lastWorkerActivityAt,
+    1000,
+  );
+});
+
 test("chunked terminal packets are reassembled and all parts are read before a reply is accepted", () => {
   const { queue, open, claim, reply } = setup({ promptLimit: 2_000_000 });
   queue.enable(true);

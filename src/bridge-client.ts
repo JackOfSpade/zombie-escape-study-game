@@ -52,7 +52,10 @@ export async function checkBridge() {
   }
   return bridgeStatus;
 }
-export type HandoffProgress = "queued" | "working" | "unknown";
+export type HandoffProgress = "queued" | "working" | "stalled" | "unknown";
+/** A claim is not a heartbeat. Quiet design turns remain recoverable, but the
+ * player should check ChatGPT rather than infer activity from a spinner. */
+export const DESIGN_ACTIVITY_GRACE_MS = 5 * 60_000;
 /** How long a queued request keeps waiting through a relay restart or proxy drop. */
 export const BRIDGE_OUTAGE_GRACE_MS = 60_000;
 /** Whether a study terminal app or worker chat is currently serving the relay,
@@ -223,6 +226,16 @@ export async function bridgeRequest<T extends object = Record<string, unknown>>(
     typeof requested === "number" && Number.isFinite(requested) && requested > 0
       ? Math.min(requested, DIRECT_STUDY_TIMEOUT_MS)
       : HANDOFF_TIMEOUT_MS;
+  const deadline = Date.now() + budget;
+  const timeoutError = () =>
+    Error(
+      operation === "design-run"
+        ? "ChatGPT response timed out. Your exact request and completed work are saved. Continue in ChatGPT, then retry this step."
+        : "ChatGPT response timed out. Check the connected chat and retry.",
+    );
+  const checkDeadline = () => {
+    if (handoff && Date.now() >= deadline) throw timeoutError();
+  };
   const timeout = AbortSignal.timeout(
     handoff ? budget : Math.min(budget, 45000),
   );
@@ -254,6 +267,7 @@ export async function bridgeRequest<T extends object = Record<string, unknown>>(
   try {
     let r: Response, submissionOutageAt: number | undefined;
     for (;;) {
+      checkDeadline();
       if (options?.isActive?.() === false)
         throw Error("Study session closed; saved work retained");
       try {
@@ -294,9 +308,13 @@ export async function bridgeRequest<T extends object = Record<string, unknown>>(
       let nextProgressCheck = 0,
         unreachableSince = 0;
       while (r.status === 202) {
+        // Browser timeout signals can pause while the page is suspended. Check
+        // elapsed wall time as well when the player returns to the game.
+        checkDeadline();
         if (options?.isActive?.() === false)
           throw Error("Study session closed; saved work retained");
         await waitForHandoff(signal);
+        checkDeadline();
         if (options?.isActive?.() === false)
           throw Error("Study session closed; saved work retained");
         try {
@@ -325,25 +343,44 @@ export async function bridgeRequest<T extends object = Record<string, unknown>>(
         }
         if (r.status === 202 && onProgress && Date.now() >= nextProgressCheck) {
           nextProgressCheck = Date.now() + 2000;
+          let metadata: unknown =
+            isRecord(data.handoff) &&
+            data.handoff.id === receipt.id &&
+            (data.handoff.status === "queued" ||
+              data.handoff.status === "working")
+              ? data.handoff
+              : undefined;
           try {
-            // Metadata only: this also works with a persistent older relay that
-            // does not include a phase in its result receipt. No payload is read.
+            // Older persistent relays omit exact progress. Only those need the
+            // bounded recent list as a fallback; other jobs must not mask ours.
             const health = await fetch("/api/handoff/status", {
-              signal: AbortSignal.timeout(1500),
+              signal: AbortSignal.any([signal, AbortSignal.timeout(1500)]),
             });
             if (!health.ok) throw Error("Status unavailable");
             const info = await health.json();
             listening = relayServes(info);
-            const phase = info.recent?.find(
-              (job: { id: string }) => job.id === receipt.id,
-            )?.status;
-            onProgress(
-              phase === "queued" || phase === "working" ? phase : "unknown",
-            );
+            if (!metadata && isRecord(info) && Array.isArray(info.recent))
+              metadata = info.recent.find(
+                (job: unknown) => isRecord(job) && job.id === receipt.id,
+              );
           } catch {
             listening = null;
-            onProgress("unknown");
           }
+          const phase = isRecord(metadata) ? metadata.status : undefined;
+          const activityAt = isRecord(metadata)
+            ? (metadata.lastWorkerActivityAt ?? metadata.claimedAt)
+            : undefined;
+          onProgress(
+            phase === "working" &&
+              operation === "design-run" &&
+              typeof activityAt === "number" &&
+              Number.isFinite(activityAt) &&
+              Date.now() - activityAt >= DESIGN_ACTIVITY_GRACE_MS
+              ? "stalled"
+              : phase === "queued" || phase === "working"
+                ? phase
+                : "unknown",
+          );
         }
       }
     }
@@ -352,6 +389,10 @@ export async function bridgeRequest<T extends object = Record<string, unknown>>(
         typeof data.error === "string" ? data.error : "Bridge request failed",
       );
     return data as T;
+  } catch (error) {
+    if (handoff && timeout.aborted && !options?.signal?.aborted)
+      throw timeoutError();
+    throw error;
   } finally {
     if (designReceipt && options?.signal?.aborted) {
       // A user cancellation abandons this exact design. Transport deadlines and

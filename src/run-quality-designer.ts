@@ -29,6 +29,7 @@ import type { RunDesignActivity, RunDesignStage } from "./run-design-progress";
 export const QUALITY_REPAIR_ATTEMPTS = 8;
 export const QUALITY_REVIEW_ROUNDS = 8;
 const STALLED_ROUNDS = 2;
+const FINAL_WORLD_PAUSE = "The final saved world could not be prepared";
 type WorldRequest = Extract<
   QualityRunDesignRequest,
   { structure: RunStructureV3 }
@@ -335,10 +336,15 @@ export function createQualityDraft(identity: {
  * packet and every accepted object. Reload alone never opens another cycle. */
 export function retryQualityDraft(draft: QualityDesignDraft) {
   if (!draft.exhausted) return;
+  const retryFinalWorld = draft.pauseReason.startsWith(FINAL_WORLD_PAUSE);
   draft.exhausted = false;
   draft.pauseReason = "";
   draft.attempts = 1;
   draft.failure = { fingerprint: null, repeats: 0 };
+  // An approved editorial review stays approved when only the local final
+  // world check failed. Retry that exact candidate; do not ask ChatGPT to
+  // revise content for an engine or storage error it cannot diagnose.
+  if (retryFinalWorld) return;
   const stage = currentStage(draft.request),
     candidate = requestCandidate(draft.request, stage),
     previous = draft.reviews[stage];
@@ -572,7 +578,7 @@ export async function prepareQualityRun<T>(
         600,
       );
   };
-  const pause = async (reason: string) => {
+  const pause = async (reason: string): Promise<never> => {
     setPaused(reason);
     await capture();
     throw Error(draft.pauseReason);
@@ -713,33 +719,41 @@ export async function prepareQualityRun<T>(
       request.recentContent,
     );
     if (errors.length) await pause(cleanErrors(errors).join("; "));
-    const design = {
-      ...request.structure,
-      environment: { ...request.content, surfaces: request.surfaces },
-    };
-    const saved = parseSavedRunDesign({
-      version: 1,
-      source: "chatgpt-handoff",
-      requestId: request.requestId,
-      generationId: request.generationId,
-      fingerprint: runDesignFingerprint(design),
-      design,
-    });
-    signal.throwIfAborted();
-    options.progress?.(
-      draft.reviews.content.stop === "plateau"
-        ? "The reviewed run is ready; remaining suggestions reached diminishing returns. Checking its final saved world…"
-        : "The reviewed writing and artwork are ready. Checking the final saved world…",
-    );
-    const finalCandidate = candidate ?? rebuild(request);
-    options.activity?.({
-      stage: "review",
-      state: "checking",
-      detail: "Checking your escape…",
-    });
-    const game = options.finalize!(finalCandidate, saved);
-    signal.throwIfAborted();
-    return { seed: request.seed, saved, game };
+    try {
+      const design = {
+        ...request.structure,
+        environment: { ...request.content, surfaces: request.surfaces },
+      };
+      const saved = parseSavedRunDesign({
+        version: 1,
+        source: "chatgpt-handoff",
+        requestId: request.requestId,
+        generationId: request.generationId,
+        fingerprint: runDesignFingerprint(design),
+        design,
+      });
+      signal.throwIfAborted();
+      options.progress?.(
+        draft.reviews.content.stop === "plateau"
+          ? "The reviewed run is ready; remaining suggestions reached diminishing returns. Checking its final saved world…"
+          : "The reviewed writing and artwork are ready. Checking the final saved world…",
+      );
+      const finalCandidate = candidate ?? rebuild(request);
+      options.activity?.({
+        stage: "review",
+        state: "checking",
+        detail: "Checking your escape…",
+      });
+      const game = options.finalize!(finalCandidate, saved);
+      signal.throwIfAborted();
+      return { seed: request.seed, saved, game };
+    } catch (error) {
+      signal.throwIfAborted();
+      const detail = cleanErrors([
+        error instanceof Error ? error.message : String(error),
+      ])[0];
+      return pause(`${FINAL_WORLD_PAUSE}: ${detail}`);
+    }
   };
 
   for (;;) {
@@ -770,8 +784,48 @@ export async function prepareQualityRun<T>(
       draft.reviews.content.stop !== "pending" &&
       (request.phase === "content-review" ||
         request.phase === "content-revision")
-    )
+    ) {
+      // An older saved draft may have been approved before a new deterministic
+      // content check existed. Repair the named later surface instead of asking
+      // for another empty review of the same already-approved candidate.
+      const repeatedArt = runQualityContentNoveltyErrors(
+        request.content,
+        request.recentContent,
+      )
+        .map((error) =>
+          /^surface:(\S+) repeats artwork from surface:(\S+) within this run;/u.exec(
+            error,
+          ),
+        )
+        .find((match) => match);
+      if (repeatedArt) {
+        const [, later, earlier] = repeatedArt,
+          finding: QualityFinding = {
+            id: "repeated-artwork",
+            priority: "major",
+            target: `surface:${later}`,
+            problem: "This drawing exactly repeats an earlier surface.",
+            evidence: `${later} and ${earlier} have identical drawing data without a shared branding or clue fragment.`,
+            recommendation: `Give ${later} a distinct drawing while preserving the other accepted surfaces.`,
+          },
+          findings = [finding];
+        draft.reviews.content = {
+          ...emptyReview(),
+          findings,
+          issueFingerprint: issueSignature(findings),
+          fingerprints: [runDesignFingerprint(request.content)],
+        };
+        await transition({
+          ...world(request),
+          phase: "content-revision",
+          plan: request.plan,
+          content: request.content,
+          findings,
+        });
+        continue;
+      }
       return finish(request);
+    }
 
     options.progress?.(message(request));
     await capture();
@@ -783,9 +837,11 @@ export async function prepareQualityRun<T>(
       options.progress?.(
         phase === "working"
           ? message(request)
-          : phase === "queued"
-            ? "Waiting for ChatGPT. Continue in the connected chat to finish this run."
-            : "Waiting for the bridge to reconnect. This exact authoring request is saved.",
+          : phase === "stalled"
+            ? "No recent activity from ChatGPT. Check the connected chat and ask it to continue if it stopped. Your exact request is saved."
+            : phase === "queued"
+              ? "Waiting for ChatGPT. Continue in the connected chat to finish this run."
+              : "Waiting for the bridge to reconnect. This exact authoring request is saved.",
       );
     });
     signal.throwIfAborted();

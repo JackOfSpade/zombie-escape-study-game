@@ -107,7 +107,7 @@ import {
   save,
 } from "./persistence";
 import { camera } from "./camera";
-import { rememberVisibleTiles, render } from "./render";
+import { rememberVisibleTiles, render, renderMinimap } from "./render";
 import { canLookInGame, FirstPersonControls } from "./view3d/controls";
 import { FirstPersonHud } from "./view3d/hud";
 import {
@@ -376,7 +376,7 @@ function syncGameView() {
   canvas.setAttribute(
     "aria-label",
     firstPerson
-      ? "Minimap of nearby visible rooms and survivors"
+      ? "Minimap of explored floor layout and player position"
       : "Top-down survival game. Use WASD or arrow keys to move.",
   );
   document.body.classList.toggle("first-person", firstPerson);
@@ -2838,6 +2838,8 @@ $("#import").onchange = async () => {
   if (file) await restoreRunBackup(file);
 };
 async function restoreRunBackup(file: File) {
+  const importStatus = document.getElementById("import-status");
+  if (importStatus) importStatus.textContent = "";
   try {
     const next = recover(decode(await file.text()));
     activateCareerFocus(
@@ -2855,7 +2857,16 @@ async function restoreRunBackup(file: File) {
     resumeNativeQuestions();
     syncDisplayScale();
     completionCursor = 0;
-    await persist();
+    if (!(await persist())) {
+      game.paused = true;
+      game.notice =
+        "Import opened in this tab but could not be saved. Export a full run backup before leaving, then retry the import when storage works.";
+      const message = `${game.notice} ${saveError}`;
+      if (importStatus) importStatus.textContent = message;
+      const recoveryStatus = document.getElementById("save-recovery-status");
+      if (recoveryStatus) recoveryStatus.textContent = message;
+      return;
+    }
     startCard();
     if (spectating(game)) {
       enterSpectator();
@@ -2871,6 +2882,7 @@ async function restoreRunBackup(file: File) {
     setPaused(true);
   } catch (err) {
     game.notice = `Import rejected: ${String(err)}`;
+    if (importStatus) importStatus.textContent = game.notice;
     if (saveRecoveryError)
       setText("#save-recovery-status", `${saveRecoveryError} ${game.notice}`);
   }
@@ -3340,11 +3352,16 @@ function frame(time: number) {
       } catch {
         useClassicFallback();
       }
-      // The cached minimap shares exact player sight, labels and fog with Classic.
-      rememberVisibleTiles(game);
-      if (!firstPersonView || time - lastMinimap >= 100) {
+      if (firstPersonPlaying()) {
+        // Discover tiles every frame even when the orientation map is cached.
+        rememberVisibleTiles(game);
+        if (time - lastMinimap >= 100) {
+          renderMinimap(canvas, game);
+          lastMinimap = time;
+        }
+      } else {
+        // A failed 3D view immediately restores Classic.
         render(canvas, game);
-        lastMinimap = time;
       }
     } else render(canvas, game, spectating(game) ? view : undefined);
   }

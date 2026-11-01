@@ -31,6 +31,85 @@ const payload = (requestId: string) => ({
   messages: [{ text: "PRIVATE_SYNTHETIC_TUTOR_CONTEXT" }],
 });
 
+test("exact progress survives recent-list eviction and advances only for its worker", () => {
+  let clock = 1000;
+  const q = createHandoffQueue({ now: () => clock });
+  q.enable(true);
+  const receipt = q.enqueue("tutor", payload("progress-owner"));
+  assert.deepEqual(q.progress(receipt.id, receipt.hash), {
+    id: receipt.id,
+    status: "queued",
+  });
+  const job = q.get(worker);
+  assert.deepEqual(q.progress(receipt.id, receipt.hash), {
+    id: receipt.id,
+    status: "working",
+    claimedAt: 1000,
+    lastWorkerActivityAt: 1000,
+  });
+  clock += 6 * 60_000;
+  for (let index = 0; index < 6; index++)
+    q.enqueue("tutor", payload(`progress-neighbor-${index}`));
+  q.get(other);
+  q.result(receipt.id, receipt.hash);
+  assert.equal(
+    q
+      .snapshot()
+      .recent.some((entry: { id: string }) => entry.id === receipt.id),
+    false,
+  );
+  assert.equal(q.progress(receipt.id, receipt.hash).lastWorkerActivityAt, 1000);
+  assert.throws(() => q.progress(receipt.id, "wrong"), /Unknown exact/);
+  assert.throws(
+    () => q.workerActivity(other, receipt.id, job.claim),
+    /Wrong worker/,
+  );
+  q.get(worker);
+  assert.equal(
+    q.progress(receipt.id, receipt.hash).lastWorkerActivityAt,
+    clock,
+  );
+  q.submit(worker, job.jobId, job.claim, { text: "Exact synthetic answer." });
+  assert.equal(
+    q.result(receipt.id, receipt.hash).answer.text,
+    "Exact synthetic answer.",
+  );
+});
+
+test("rejected authenticated submissions refresh activity without accepting work or freshening unrelated claims", () => {
+  let clock = 1000;
+  const q = createHandoffQueue({ now: () => clock });
+  q.enable(true);
+  const receipt = q.enqueue("tutor", payload("rejected-activity"));
+  const job = q.get(worker);
+  clock += 6 * 60_000;
+  for (const args of [
+    [other, job.jobId, job.claim],
+    [worker, job.jobId, "wrong-claim"],
+    [worker, "wrong-job", job.claim],
+  ]) {
+    assert.throws(() => q.submit(...args, {}), /Wrong worker/);
+    assert.equal(
+      q.progress(receipt.id, receipt.hash).lastWorkerActivityAt,
+      1000,
+    );
+  }
+  assert.throws(() => q.submit(worker, job.jobId, job.claim, {}), /text/i);
+  assert.equal(
+    q.progress(receipt.id, receipt.hash).lastWorkerActivityAt,
+    clock,
+  );
+  assert.equal(q.result(receipt.id, receipt.hash).status, "pending");
+  assert.equal(q.get(worker).claim, job.claim);
+  q.submit(worker, job.jobId, job.claim, {
+    text: "Corrected synthetic response.",
+  });
+  assert.equal(
+    q.result(receipt.id, receipt.hash).answer.text,
+    "Corrected synthetic response.",
+  );
+});
+
 test("roadmap handoff binds both file hashes and retains its claim after malformed proposals", () => {
   const q = createHandoffQueue();
   const p = {
@@ -275,7 +354,18 @@ test("actual loopback relay queues ChatGPT work without claiming native Study Mo
     ).json();
     assert.equal(job.payload.requestId, "http-tutor");
     const resultUrl = `${base}/api/bridge/result?id=${receipt.id}&hash=${receipt.hash}`;
-    assert.equal((await fetch(resultUrl)).status, 202);
+    const pendingResponse = await fetch(resultUrl);
+    assert.equal(pendingResponse.status, 202);
+    const pending = await pendingResponse.json();
+    assert.equal(pending.status, "pending");
+    assert.equal(pending.handoff.id, receipt.id);
+    assert.equal(pending.handoff.status, "working");
+    assert.ok(Number.isFinite(pending.handoff.claimedAt));
+    assert.ok(Number.isFinite(pending.handoff.lastWorkerActivityAt));
+    assert.equal(
+      JSON.stringify(pending).includes("PRIVATE_SYNTHETIC_TUTOR_CONTEXT"),
+      false,
+    );
     assert.equal(
       (
         await post(

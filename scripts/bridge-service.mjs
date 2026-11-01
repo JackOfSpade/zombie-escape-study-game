@@ -22,6 +22,13 @@ export const defaults = {
   entry: fileURLToPath(new URL("./bridge-server.mjs", import.meta.url)),
 };
 const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+class BridgeTransportError extends Error {}
+const unavailable = (method) =>
+  new BridgeTransportError(
+    method === "POST"
+      ? "Bridge shutdown request was not acknowledged; shutdown may still be in progress. No unrelated process was signalled"
+      : "Bridge service did not respond; no process was stopped or replaced",
+  );
 function readPrivate(path) {
   const s = lstatSync(path);
   assertOwnerOnly(s, {
@@ -64,15 +71,21 @@ async function request(o, owner, method = "GET", retry = true) {
       await pause(25);
       return request(o, owner, method, false);
     }
-    throw Error(
-      "Bridge service did not respond; no process was stopped or replaced",
-    );
+    throw unavailable(method);
   }
   if (!owner || !response.ok)
     throw Error(
       "Bridge port belongs to an unverified listener; refusing to replace it",
     );
-  const data = await response.json();
+  let data;
+  try {
+    data = await response.json();
+  } catch (error) {
+    // A timeout or disconnected socket can also interrupt the response body.
+    // Malformed JSON is an identity failure, never transient silence.
+    if (!(error instanceof SyntaxError)) throw unavailable(method);
+    throw error;
+  }
   if (
     data.root !== o.root ||
     data.instance !== owner.instance ||
@@ -228,13 +241,24 @@ export async function stopBridge(options = {}) {
   verifyRecord(o, owner);
   const live = await request(o, owner);
   if (!live) return { running: false };
-  await request(o, owner, "POST");
-  for (let i = 0; i < 100; i++) {
-    await pause(50);
-    if (!(await request(o, owner))) return { running: false };
+  if (!(await request(o, owner, "POST"))) return { running: false };
+  // Shutdown can synchronously persist a large queue before closing sockets.
+  // Once acknowledged, temporary silence is expected; it is not permission
+  // to kill or replace a listener. Keep all ownership checks on every reply.
+  // One in-flight status request can add at most its one-second timeout.
+  const deadline = Date.now() + 10_000;
+  while (Date.now() < deadline) {
+    await pause(Math.min(50, deadline - Date.now()));
+    if (Date.now() >= deadline) break;
+    try {
+      // The outer loop owns retries, so this read cannot add a second timeout.
+      if (!(await request(o, owner, "GET", false))) return { running: false };
+    } catch (error) {
+      if (!(error instanceof BridgeTransportError)) throw error;
+    }
   }
   throw Error(
-    "Bridge shutdown is still pending; no unrelated process was signalled",
+    "Bridge shutdown was acknowledged but exit is still pending; no unrelated process was signalled",
   );
 }
 if (

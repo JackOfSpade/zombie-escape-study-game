@@ -176,6 +176,130 @@ test("queued tutor progress distinguishes an unclaimed request from worker picku
   assert.equal(health, 1);
 });
 
+test("design progress uses its exact receipt even outside the recent-job window", async (t) => {
+  const original = globalThis.fetch;
+  t.after(() => {
+    globalThis.fetch = original;
+  });
+  const progress: string[] = [];
+  let polls = 0;
+  globalThis.fetch = async (url) => {
+    if (url === "/api/status") return reply("chatgpt-handoff");
+    if (url === "/api/bridge")
+      return Response.json(
+        { handoff: { id: "exact", hash: "saved" } },
+        { status: 202 },
+      );
+    if (url === "/api/handoff/status")
+      return Response.json({
+        recent: [{ id: "unrelated", status: "working" }],
+      });
+    return ++polls === 1
+      ? Response.json(
+          {
+            handoff: {
+              id: "exact",
+              status: "working",
+              lastWorkerActivityAt: Date.now(),
+            },
+          },
+          { status: 202 },
+        )
+      : Response.json({ accepted: true });
+  };
+  await checkBridge();
+  assert.deepEqual(
+    await bridgeRequest("design-run", { requestId: "exact" }, (p) =>
+      progress.push(p),
+    ),
+    { accepted: true },
+  );
+  assert.deepEqual(progress, ["queued", "working"]);
+});
+
+test("old design claims show stalled until actual worker activity resumes, including older relays", async (t) => {
+  const original = globalThis.fetch,
+    originalNow = Date.now;
+  t.after(() => {
+    globalThis.fetch = original;
+    Date.now = originalNow;
+  });
+  for (const exact of [true, false]) {
+    let now = 1_000_000,
+      polls = 0;
+    Date.now = () => now;
+    const progress: string[] = [];
+    const metadata = () => ({
+      id: "stale",
+      status: "working",
+      claimedAt: 1,
+      ...(polls > 1 ? { lastWorkerActivityAt: now } : {}),
+    });
+    globalThis.fetch = async (url) => {
+      if (url === "/api/status") return reply("chatgpt-handoff");
+      if (url === "/api/bridge")
+        return Response.json(
+          { handoff: { id: "stale", hash: "saved" } },
+          { status: 202 },
+        );
+      if (url === "/api/handoff/status")
+        return Response.json({
+          recent: [metadata()],
+          public: { terminalRelay: { activeSessions: 1 } },
+        });
+      polls++;
+      now += 2001;
+      return polls < 3
+        ? Response.json(
+            exact ? { handoff: metadata() } : { status: "pending" },
+            { status: 202 },
+          )
+        : Response.json({ accepted: true });
+    };
+    await checkBridge();
+    assert.deepEqual(
+      await bridgeRequest("design-run", { requestId: "stale" }, (p) =>
+        progress.push(p),
+      ),
+      { accepted: true },
+    );
+    assert.deepEqual(progress, ["queued", "stalled", "working"]);
+  }
+});
+
+test("a suspended page cannot extend a handoff deadline and its exact request stays retained", async (t) => {
+  const original = globalThis.fetch,
+    originalNow = Date.now;
+  t.after(() => {
+    globalThis.fetch = original;
+    Date.now = originalNow;
+  });
+  let now = 1_000_000,
+    polls = 0;
+  Date.now = () => now;
+  const methods: string[] = [];
+  globalThis.fetch = async (url, init) => {
+    if (url === "/api/status") return reply("chatgpt-handoff");
+    methods.push(init?.method ?? "GET");
+    if (url === "/api/bridge") {
+      now += 31 * 60_000;
+      return Response.json(
+        { handoff: { id: "retained", hash: "saved" } },
+        { status: 202 },
+      );
+    }
+    polls++;
+    return Response.json({ accepted: true });
+  };
+  await checkBridge();
+  await assert.rejects(
+    bridgeRequest("design-run", { requestId: "retained" }),
+    /timed out.*saved/i,
+  );
+  assert.equal(polls, 0);
+  assert.deepEqual(methods, ["POST"]);
+});
+
 test("a queued request keeps waiting through a relay restart and only gives up after the grace period", async (t) => {
   const original = globalThis.fetch,
     originalNow = Date.now;

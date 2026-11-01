@@ -13,6 +13,7 @@ import {
   W,
 } from "./model";
 import { BODY_RADIUS } from "./physics";
+import { wall } from "./spatial";
 import {
   drawDebris,
   drawFurniture,
@@ -27,7 +28,12 @@ import { npcSpeechBubble, speechLines } from "./speech-bubbles";
 
 const tileMemory = new WeakMap<
   Game["survivors"][number],
-  { source: string[]; masks: Map<number, Uint8Array>; length: number }
+  {
+    source: string[];
+    masks: Map<number, Uint8Array>;
+    outside: Map<number, Set<string>>;
+    length: number;
+  }
 >();
 /** Sample sight independently of canvas drawing, including between minimap draws. */
 export function rememberVisibleTiles(g: Game) {
@@ -38,17 +44,24 @@ export function rememberVisibleTiles(g: Game) {
   let memory = tileMemory.get(a);
   if (!memory || memory.source !== a.seen || memory.length !== a.seen.length) {
     const masks = new Map<number, Uint8Array>();
+    const outside = new Map<number, Set<string>>();
     for (const id of a.seen) {
-      const m = /^tile-(\d+)-(\d+)-(\d+)$/.exec(id);
+      const m = /^tile-(\d+)-(-?\d+)-(-?\d+)$/.exec(id);
       if (!m) continue;
-      const f = Number(m[1]);
+      const f = Number(m[1]),
+        tx = Number(m[2]),
+        ty = Number(m[3]);
+      if (tx < 0 || tx >= W || ty < 0 || ty >= H) {
+        let tiles = outside.get(f);
+        if (!tiles) outside.set(f, (tiles = new Set()));
+        tiles.add(`${tx},${ty}`);
+        continue;
+      }
       let mask = masks.get(f);
       if (!mask) masks.set(f, (mask = new Uint8Array(W * H)));
-      const tx = Number(m[2]),
-        ty = Number(m[3]);
-      if (tx < W && ty < H) mask[ty * W + tx] = 1;
+      mask[ty * W + tx] = 1;
     }
-    memory = { source: a.seen, masks, length: a.seen.length };
+    memory = { source: a.seen, masks, outside, length: a.seen.length };
     tileMemory.set(a, memory);
   }
   let mask = memory.masks.get(a.floor);
@@ -64,6 +77,26 @@ export function rememberVisibleTiles(g: Game) {
         mask[y * W + x] = 1;
       }
     }
+  // Fresh runs can continue into the physical streets beyond the office grid.
+  // Keep only nearby outside cells in memory as the player walks, rather than
+  // scanning the entire neighbourhood on every frame.
+  if (floor.city) {
+    let outside = memory.outside.get(a.floor);
+    if (!outside) memory.outside.set(a.floor, (outside = new Set()));
+    const r = radius;
+    for (let y = Math.floor(a.y - r); y <= Math.floor(a.y + r); y++)
+      for (let x = Math.floor(a.x - r); x <= Math.floor(a.x + r); x++) {
+        if (x >= 0 && x < W && y >= 0 && y < H) continue;
+        const key = `${x},${y}`;
+        if (outside.has(key)) continue;
+        pt.x = x + 0.5;
+        pt.y = y + 0.5;
+        if (playerCanSee(floor, a, pt, r)) {
+          a.seen.push(`tile-${a.floor}-${x}-${y}`);
+          outside.add(key);
+        }
+      }
+  }
   memory.length = a.seen.length;
 }
 /** In-world object names: the furniture kind, spaced and upper-cased. */
@@ -93,6 +126,78 @@ export const mutation = {
   dim: "#20162e",
 };
 let lightCanvas: HTMLCanvasElement | undefined;
+/** A persistent orientation map. Only the floor cells the player has seen and
+ * the walls bordering those cells are drawn; unexplored space stays blank. */
+export function renderMinimap(canvas: HTMLCanvasElement, g: Game) {
+  const ctx = canvas.getContext("2d")!,
+    dpr = Math.min(devicePixelRatio || 1, 2),
+    rect = canvas.getBoundingClientRect();
+  if (rect.width < 1 || rect.height < 1) return;
+  if (
+    canvas.width !== Math.floor(rect.width * dpr) ||
+    canvas.height !== Math.floor(rect.height * dpr)
+  ) {
+    canvas.width = Math.floor(rect.width * dpr);
+    canvas.height = Math.floor(rect.height * dpr);
+  }
+  const a = human(g),
+    f = g.floors[a.floor],
+    p = g.surge.state === "active" ? mutation : normal;
+  rememberVisibleTiles(g);
+  const memory = tileMemory.get(a),
+    mask = memory?.masks.get(a.floor),
+    outside = memory?.outside.get(a.floor),
+    known = (x: number, y: number) =>
+      x >= 0 && x < W && y >= 0 && y < H
+        ? !!mask?.[y * W + x]
+        : !!outside?.has(`${x},${y}`),
+    open = (x: number, y: number) => !wall(f, x + 0.5, y + 0.5),
+    { scale, ox, oy } = camera(
+      rect.width,
+      rect.height,
+      a,
+      displayScale(g.settings.displayScale),
+    );
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.fillStyle = p.sky;
+  ctx.fillRect(0, 0, rect.width, rect.height);
+  ctx.save();
+  ctx.translate(ox, oy);
+  ctx.scale(scale, scale);
+  const bounds = f.city?.bounds,
+    x1 = Math.max(Math.floor(-ox / scale) - 1, Math.floor(bounds?.left ?? 0)),
+    x2 = Math.min(
+      Math.ceil((rect.width - ox) / scale) + 1,
+      Math.ceil(bounds?.right ?? W),
+    ),
+    y1 = Math.max(Math.floor(-oy / scale) - 1, Math.floor(bounds?.top ?? 0)),
+    y2 = Math.min(
+      Math.ceil((rect.height - oy) / scale) + 1,
+      Math.ceil(bounds?.bottom ?? H),
+    );
+  // Every discovered cell keeps the same brightness after the player leaves.
+  // Unknown cells receive no overlay, texture, or outline.
+  ctx.fillStyle = p.wall;
+  for (let y = y1; y < y2; y++)
+    for (let x = x1; x < x2; x++)
+      if (known(x, y) && open(x, y)) ctx.fillRect(x, y, 1, 1);
+  ctx.fillStyle = p.edge;
+  for (let y = y1; y < y2; y++)
+    for (let x = x1; x < x2; x++)
+      if (
+        !open(x, y) &&
+        ((known(x - 1, y) && open(x - 1, y)) ||
+          (known(x + 1, y) && open(x + 1, y)) ||
+          (known(x, y - 1) && open(x, y - 1)) ||
+          (known(x, y + 1) && open(x, y + 1)))
+      )
+        ctx.fillRect(x, y, 1, 1);
+  ctx.fillStyle = p.accent;
+  ctx.beginPath();
+  ctx.arc(a.x, a.y, 0.48, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
+}
 /** Draw the player's view, or, with a spectator view after the run ends, the
  * whole of one floor: no fog, no light mask, no interaction prompts. */
 export function render(

@@ -1,5 +1,7 @@
 import { expect, test, type Page } from "@playwright/test";
 import { readFile } from "node:fs/promises";
+import { startDesignedRun } from "./helpers/designed-run";
+import { openGameMenu } from "./helpers/game-menu";
 import { flushNativeSave, mockNativeStudy } from "./native-study-harness";
 
 async function rawDurableSave(page: Page) {
@@ -11,6 +13,75 @@ async function rawDurableSave(page: Page) {
     return readDurable("dead-air-save-v1");
   });
 }
+
+test("a failed full-run import stays open with a clear unsaved warning", async ({
+  page,
+}) => {
+  await page.goto("/");
+  await startDesignedRun(page);
+  await openGameMenu(page);
+  await page.locator("#settings-toggle").click();
+  const { candidate, originalTick, originalLocal } = await page.evaluate(
+    async () => {
+      const root = "/src/",
+        { decode, encode, flushSaves } = await import(root + "persistence.ts");
+      await flushSaves();
+      const current = (window as any).__deadAir.game,
+        copy = decode(encode(current));
+      copy.tick = current.tick + 321;
+      return {
+        candidate: encode(copy),
+        originalTick: current.tick,
+        originalLocal: localStorage.getItem("dead-air-save-v1"),
+      };
+    },
+  );
+  await page.evaluate(() => {
+    const originalSetItem = Storage.prototype.setItem,
+      originalTransaction = IDBDatabase.prototype.transaction;
+    Storage.prototype.setItem = function (key, value) {
+      if (key === "dead-air-save-v1")
+        throw new DOMException(
+          "Synthetic local save denial",
+          "QuotaExceededError",
+        );
+      return originalSetItem.call(this, key, value);
+    };
+    IDBDatabase.prototype.transaction = function (
+      this: IDBDatabase,
+      ...args: Parameters<IDBDatabase["transaction"]>
+    ) {
+      if (args[1] === "readwrite")
+        throw new DOMException(
+          "Synthetic durable save denial",
+          "SecurityError",
+        );
+      return originalTransaction.apply(this, args);
+    } as typeof IDBDatabase.prototype.transaction;
+  });
+  await page.locator("#import").setInputFiles({
+    name: "synthetic-unsaved-import.json",
+    mimeType: "application/json",
+    buffer: Buffer.from(candidate),
+  });
+  await expect(page.locator("#import-status")).toContainText(
+    "Import opened in this tab but could not be saved",
+  );
+  await expect(page.locator("#settings")).toBeVisible();
+  await expect(page.locator("#export")).toBeVisible();
+  expect(
+    await page.evaluate(() => ({
+      tick: (window as any).__deadAir.game.tick,
+      paused: (window as any).__deadAir.game.paused,
+      local: localStorage.getItem("dead-air-save-v1"),
+    })),
+  ).toEqual({ tick: originalTick + 321, paused: true, local: originalLocal });
+  await page.reload();
+  await page.waitForFunction(() => !!(window as any).__deadAir?.game);
+  expect(await page.evaluate(() => (window as any).__deadAir.game.tick)).toBe(
+    originalTick,
+  );
+});
 
 test("hiding a paused study tab synchronously checkpoints incomplete local work", async ({
   page,

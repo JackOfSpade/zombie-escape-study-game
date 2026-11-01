@@ -618,6 +618,138 @@ test("new quality flow rejects recent normalized prose and exact artwork while r
   );
 });
 
+test("quality authoring rejects repeated drawings on later surfaces unless shared art is explicit", () => {
+  const drawing = {
+    version: 1 as const,
+    background: "transparent",
+    primitives: [
+      {
+        kind: "rect" as const,
+        x: 0.12,
+        y: 0.18,
+        w: 0.76,
+        h: 0.64,
+        rotation: 0,
+        fill: "#336699",
+        stroke: null,
+        width: 0.02,
+        opacity: 1,
+      },
+    ],
+  };
+  const repeated = content(entries);
+  for (const i of [0, 1])
+    repeated.entries[i] = {
+      ...repeated.entries[i],
+      layout: "mixed",
+      drawing: structuredClone(drawing),
+      description: [
+        "A blue rectangular map of local docks.",
+        "A cobalt block marks the storage aisle.",
+      ][i],
+    };
+  repeated.entries[1].drawing = {
+    primitives: structuredClone(drawing.primitives),
+    background: drawing.background,
+    version: drawing.version,
+  };
+  // The historical save parser remains compatible; the new guard belongs to
+  // the quality authoring flow that receives the complete accepted prefix.
+  assert.doesNotThrow(() =>
+    parseEnvironmentContent(repeated, structure, surfaces),
+  );
+  const errors = runQualityContentNoveltyErrors(repeated, []);
+  assert.equal(errors.length, 1);
+  assert.match(
+    errors[0],
+    new RegExp(
+      `^surface:${surfaces[1].id} repeats artwork from surface:${surfaces[0].id} within this run`,
+    ),
+  );
+  assert.throws(
+    () => mergeQualityEntries(batch(), repeated.entries.slice(0, 2)),
+    /repeats artwork.*within this run/,
+  );
+  const acceptedFirstBatch = mergeQualityEntries(batch(), [
+    repeated.entries[0],
+    entries[1],
+  ]);
+  const laterArt: SurfaceContent = {
+    ...entries[2],
+    layout: "mixed",
+    drawing: structuredClone(drawing),
+    description: "A blue block indexes harbor freight.",
+  };
+  assert.throws(
+    () =>
+      mergeQualityEntries(batch(1, acceptedFirstBatch.entries), [
+        laterArt,
+        entries[3],
+      ]),
+    new RegExp(`surface:${surfaces[2].id} repeats artwork.*within this run`),
+  );
+
+  for (const kind of ["branding", "clue"] as const) {
+    const shared = structuredClone(repeated);
+    shared.fragments = [
+      {
+        id: "seal",
+        kind,
+        text: "Harbor archive seal",
+        reason: "Both posters show the same institutional mark.",
+        surfaces: [surfaces[0].id, surfaces[1].id],
+      },
+    ];
+    for (const i of [0, 1]) {
+      shared.entries[i].title = [{ fragmentId: "seal" }];
+      shared.entries[i].description =
+        "The same cobalt seal marks both posters.";
+    }
+    assert.doesNotThrow(() =>
+      parseEnvironmentContent(shared, structure, surfaces),
+    );
+    assert.deepEqual(runQualityContentNoveltyErrors(shared, []), []);
+  }
+
+  const oneSided = structuredClone(repeated);
+  oneSided.fragments = [
+    {
+      id: "seal",
+      kind: "branding",
+      text: "Harbor archive seal",
+      reason: "Both posters belong to the same institution.",
+      surfaces: [surfaces[0].id, surfaces[1].id],
+    },
+  ];
+  oneSided.entries[0].title = [{ fragmentId: "seal" }];
+  assert.match(
+    runQualityContentNoveltyErrors(oneSided, [])[0],
+    /repeats artwork.*within this run/,
+    "declared membership alone does not permit reuse without both references",
+  );
+
+  const direction = structuredClone(repeated);
+  direction.fragments = [
+    {
+      id: "route",
+      kind: "direction",
+      fact: "rooftop-extraction",
+      reason: "Both posters carry the approved extraction fact.",
+      surfaces: [surfaces[0].id, surfaces[1].id],
+    },
+  ];
+  for (const i of [0, 1])
+    direction.entries[i].title = [{ fragmentId: "route" }];
+  assert.doesNotThrow(() =>
+    parseEnvironmentContent(direction, structure, surfaces),
+  );
+  assert.match(
+    runQualityContentNoveltyErrors(direction, [])[0],
+    /repeats artwork.*within this run/,
+    "a direction fact does not license repeated artwork",
+  );
+});
+
 test("partial authoring retains global drawing complexity limits before completion", () => {
   const many = Array.from({ length: 86 }, (_, i) => ({
     ...surfaces[0],

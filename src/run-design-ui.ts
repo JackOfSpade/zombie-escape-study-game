@@ -80,6 +80,7 @@ export async function chooseRunDesign(
     const busy =
       activity?.state === "working" || activity?.state === "checking";
     const reconnecting = activity?.state === "unknown";
+    const stalled = activity?.state === "stalled";
     // A later saved phase proves that an earlier reply was accepted. A click,
     // bridge handshake or unrelated chat does not prove this chat connected.
     const accepted =
@@ -89,36 +90,45 @@ export async function chooseRunDesign(
         : draft.version === 2
           ? draft.request.phase === "content" || !!draft.request.repair
           : !!draft.request.repair);
-    connected ||= busy || !!accepted;
+    connected ||= busy || stalled || !!accepted;
     dialog.dataset.state = reconnecting
       ? "reconnecting"
-      : busy
-        ? activity!.state
-        : "waiting";
+      : stalled
+        ? "stalled"
+        : busy
+          ? activity!.state
+          : "waiting";
     title.textContent = reconnecting
       ? "Connection interrupted"
-      : busy
-        ? "Preparing your escape"
-        : connected
-          ? "Waiting for ChatGPT"
-          : "Connect ChatGPT";
+      : stalled
+        ? "Check ChatGPT"
+        : busy
+          ? "Preparing your escape"
+          : connected
+            ? "Waiting for ChatGPT"
+            : "Connect ChatGPT";
     message.textContent = reconnecting
       ? "Waiting for the bridge to reconnect."
-      : busy
-        ? activity!.detail
-        : connected
-          ? "Waiting for ChatGPT. Continue in the connected chat."
-          : openChat.hasAttribute("href")
-            ? "Waiting for ChatGPT. Press Send in the opened chat."
-            : activity?.state === "queued"
-              ? "Waiting for ChatGPT. Open the chat and press Send."
-              : "Open ChatGPT and press Send to begin.";
+      : stalled
+        ? `${activity!.detail}. No recent activity from ChatGPT. If it is still thinking, you can wait; if it stopped, ask it to continue. Your completed steps are saved.`
+        : busy
+          ? activity!.detail
+          : connected
+            ? "Waiting for ChatGPT. Continue in the connected chat."
+            : openChat.hasAttribute("href")
+              ? "Waiting for ChatGPT. Press Send in the opened chat."
+              : activity?.state === "queued"
+                ? "Waiting for ChatGPT. Open the chat and press Send."
+                : "Open ChatGPT and press Send to begin.";
     loading.hidden = !busy;
     if (busy) loading.setAttribute("aria-valuetext", activity!.detail);
     else loading.removeAttribute("aria-valuetext");
     retry.hidden = true;
-    connectButton.textContent =
-      reconnecting || connected ? "Reconnect ChatGPT ↗" : "Connect ChatGPT ↗";
+    connectButton.textContent = stalled
+      ? "Resume in ChatGPT ↗"
+      : reconnecting || connected
+        ? "Reconnect ChatGPT ↗"
+        : "Connect ChatGPT ↗";
     connectButton.hidden =
       busy || (openChat.hasAttribute("href") && !reconnecting);
     handoff.hidden = busy || reconnecting || !openChat.hasAttribute("href");

@@ -41,6 +41,7 @@ async function designer(page: Page) {
     failedPoll = false,
     outage = false,
     working = false,
+    workerActivityAt: number | undefined,
     unrelatedWorker = false;
   let answer = (_body: any) => harbor;
   let editReply = (_body: any, response: any) => response;
@@ -113,6 +114,12 @@ async function designer(page: Page) {
               : working
                 ? "working"
                 : "queued",
+            ...(workerActivityAt === undefined
+              ? {}
+              : {
+                  claimedAt: workerActivityAt,
+                  lastWorkerActivityAt: workerActivityAt,
+                }),
           })),
         ],
       });
@@ -150,7 +157,21 @@ async function designer(page: Page) {
         return json({ error: "Synthetic design request interrupted" }, 409);
       return results.has(id)
         ? json(results.get(id))
-        : json({ handoff: { id, status: "queued" } }, 202);
+        : json(
+            {
+              handoff: {
+                id,
+                status: working ? "working" : "queued",
+                ...(workerActivityAt === undefined
+                  ? {}
+                  : {
+                      claimedAt: workerActivityAt,
+                      lastWorkerActivityAt: workerActivityAt,
+                    }),
+              },
+            },
+            202,
+          );
     }
     return json({ error: "No synthetic route" }, 404);
   });
@@ -176,6 +197,9 @@ async function designer(page: Page) {
     },
     setWorking(value: boolean) {
       working = value;
+    },
+    setWorkerActivityAt(value: number) {
+      workerActivityAt = value;
     },
     setUnrelatedWorker(value: boolean) {
       unrelatedWorker = value;
@@ -549,6 +573,66 @@ test("setup progress follows this chat's claimed job and completed stages, stopp
   await prepared(page);
   expect((await state(page)).status).toBe("ready");
   expect((await gameplayState(page)).time).toBe(0);
+});
+
+test("a silent design worker exposes recovery, preserves its saved batch on reload and accepts a late reply", async ({
+  page,
+}) => {
+  const relay = await designer(page);
+  relay.setQueued(true, "content-batch");
+  relay.setWorking(true);
+  relay.setWorkerActivityAt(Date.now());
+  await open(page);
+  const original = await state(page);
+  await page.locator("#start").click();
+  await expect
+    .poll(() => relay.calls.at(-1)?.payload.phase)
+    .toBe("content-batch");
+  const batch = relay.calls.at(-1),
+    dialog = page.locator("#run-design-dialog");
+  await expect(dialog).toHaveAttribute("data-state", "working");
+  relay.setWorkerActivityAt(Date.now() - 6 * 60_000);
+  await expect(dialog).toHaveAttribute("data-state", "stalled");
+  await expect(page.locator("#run-design-loading")).toBeHidden();
+  await expect(page.locator("#run-design-title")).toHaveText("Check ChatGPT");
+  await expect(page.locator("#run-design-status")).toContainText(
+    "if it stopped, ask it to continue",
+  );
+  await expect(
+    page.getByRole("button", { name: "Resume in ChatGPT" }),
+  ).toBeVisible();
+  await expect(
+    page.locator('#run-design-steps [data-step="details"]'),
+  ).toHaveAttribute("data-state", "active");
+  expect(await state(page)).toEqual(original);
+  expect(relay.cancelled).toEqual([]);
+  await dialog.screenshot({
+    path: ".artifacts/handoff/design/stalled-worker-recovery.png",
+  });
+
+  await page.reload();
+  await page.getByRole("button", { name: "Prepare game" }).click();
+  await expect(page.locator("#run-design-dialog")).toHaveAttribute(
+    "data-state",
+    "stalled",
+  );
+  expect(relay.calls.at(-1)).toEqual(batch);
+  expect(relay.cancelled).toEqual([]);
+  relay.setWorkerActivityAt(Date.now());
+  await expect(page.locator("#run-design-dialog")).toHaveAttribute(
+    "data-state",
+    "working",
+  );
+  relay.setQueued(false);
+  relay.finish(batch);
+  await prepared(page);
+  expect((await state(page)).status).toBe("ready");
+  expect((await gameplayState(page)).time).toBe(0);
+  await page.locator("#start").click();
+  await expect.poll(async () => (await state(page)).status).toBe("playing");
+  await expect
+    .poll(async () => (await gameplayState(page)).time)
+    .toBeGreaterThan(0);
 });
 
 test("prepared runs wait for an explicit Start before gameplay and across reload", async ({

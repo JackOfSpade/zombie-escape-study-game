@@ -174,6 +174,86 @@ const finishDirect = (f, turn) =>
     knowledge: { facets: [{ id: "scope", status: "demonstrated" }] },
   });
 
+test("game polling does not keep a silent preparation worker active or refresh its work timestamp", () => {
+  const f = setup();
+  const receipt = f.enqueue(
+    "generate",
+    gen("worker-activity", scope, {
+      curriculum: "Synthetic source ".repeat(5000),
+    }),
+  );
+  const turn = f.value("get_current_study_question");
+  assert.equal(f.app.status().activeSessions, 1);
+  const claimedAt = 1000;
+  f.tick(6 * 60_000);
+  f.queue.result(receipt.id, receipt.hash);
+  assert.equal(f.app.status().activeSessions, 0);
+  assert.equal(
+    f.app.status().pendingTurns,
+    1,
+    "silence retains the exact claim",
+  );
+  assert.equal(
+    f.queue.progress(receipt.id, receipt.hash).lastWorkerActivityAt,
+    claimedAt,
+  );
+  f.value("read_study_terminal_context", {
+    relayId: turn.relayId,
+    turnId: turn.turnId,
+    part: "payload",
+    index: 0,
+  });
+  assert.equal(f.app.status().activeSessions, 1);
+  assert.equal(
+    f.queue.progress(receipt.id, receipt.hash).lastWorkerActivityAt,
+    claimedAt + 6 * 60_000,
+  );
+  assert.equal(f.value("get_current_study_question").turnId, turn.turnId);
+});
+
+test("rejected exact native completion records contact while unrelated identities cannot fake activity", () => {
+  const f = setup();
+  const receipt = f.enqueue("generate", gen("rejected-native-activity"));
+  const turn = f.value("get_current_study_question");
+  const args = {
+    relayId: turn.relayId,
+    turnId: turn.turnId,
+    jobFingerprint: turn.jobFingerprint,
+    response: "{}",
+  };
+  f.tick(6 * 60_000);
+  f.queue.result(receipt.id, receipt.hash);
+  for (const [changes, grant] of [
+    [{ turnId: "wrong-turn" }, owner],
+    [{ jobFingerprint: "a".repeat(64) }, owner],
+    [{}, other],
+  ]) {
+    assert.throws(() =>
+      f.value("finish_study_preparation", { ...args, ...changes }, grant),
+    );
+    assert.equal(
+      f.queue.progress(receipt.id, receipt.hash).lastWorkerActivityAt,
+      1000,
+    );
+  }
+  let expectedActivity = 361000;
+  for (const response of ["not JSON", "{}"]) {
+    f.tick(1000);
+    expectedActivity += 1000;
+    assert.throws(() =>
+      f.value("finish_study_preparation", { ...args, response }),
+    );
+    assert.equal(
+      f.queue.progress(receipt.id, receipt.hash).lastWorkerActivityAt,
+      expectedActivity,
+    );
+    assert.equal(f.queue.result(receipt.id, receipt.hash).status, "pending");
+  }
+  assert.equal(f.value("get_current_study_question").turnId, turn.turnId);
+  f.finish(turn);
+  assert.equal(f.queue.result(receipt.id, receipt.hash).status, "done");
+});
+
 test("modern preparation schema uses explicit native claim identity and frozen payload, never legacy worker sessions", () => {
   const f = setup();
   const receipt = f.enqueue("generate", gen());

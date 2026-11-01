@@ -323,9 +323,11 @@ export async function prepareDesignedRun<T>(
       options.progress?.(
         phase === "working"
           ? "ChatGPT is designing your escape…"
-          : phase === "queued"
-            ? "Waiting for ChatGPT. Connect a chat with the request below to continue."
-            : "Waiting for the bridge to reconnect. Your exact request is saved.",
+          : phase === "stalled"
+            ? "No recent activity from ChatGPT. Check the connected chat and ask it to continue if it stopped. Your exact request is saved."
+            : phase === "queued"
+              ? "Waiting for ChatGPT. Connect a chat with the request below to continue."
+              : "Waiting for the bridge to reconnect. Your exact request is saved.",
       );
     });
     options.signal.throwIfAborted();
@@ -439,9 +441,11 @@ async function prepareAuthoredRun<T>(
           ? request.phase === "structure"
             ? "ChatGPT is designing the building and its occupants…"
             : "ChatGPT is writing and illustrating the objects in this building…"
-          : phase === "queued"
-            ? "Waiting for ChatGPT. Continue in the connected chat to finish this run."
-            : "Waiting for the bridge to reconnect. Your exact request is saved.",
+          : phase === "stalled"
+            ? "No recent activity from ChatGPT. Check the connected chat and ask it to continue if it stopped. Your exact request is saved."
+            : phase === "queued"
+              ? "Waiting for ChatGPT. Continue in the connected chat to finish this run."
+              : "Waiting for the bridge to reconnect. Your exact request is saved.",
       );
     });
     options.signal.throwIfAborted();
