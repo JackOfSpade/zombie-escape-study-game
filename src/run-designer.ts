@@ -34,6 +34,7 @@ import {
   type QualityDesignDraft,
 } from "./run-quality-designer";
 import { summarizeQualityEnvironment } from "./environment-history";
+import type { RunDesignActivity } from "./run-design-progress";
 
 type LegacyRequest = Extract<RunDesignRequest, { version: 1 }>;
 interface DraftIdentity {
@@ -266,6 +267,7 @@ export interface DesignOptions<
   capture: (draft: DesignDraft) => void | Promise<void>;
   signal: AbortSignal;
   progress?: (text: string) => void;
+  activity?: (activity: RunDesignActivity) => void;
   preview?: (seed: number, structure: RunStructureV3) => ProvisionalRun;
   finalize?: (candidate: ProvisionalRun, saved: SavedRunDesign) => T;
   send?: (
@@ -309,15 +311,23 @@ export async function prepareDesignedRun<T>(
     options.signal.throwIfAborted();
     await options.capture(draft);
     options.signal.throwIfAborted();
-    const reply = await send(draft.request, draft, options.signal, (phase) =>
+    const activity = (state: HandoffProgress) =>
+      options.activity?.({
+        stage: "design",
+        state,
+        detail: "Designing your escape…",
+      });
+    activity("queued");
+    const reply = await send(draft.request, draft, options.signal, (phase) => {
+      activity(phase);
       options.progress?.(
         phase === "working"
           ? "ChatGPT is designing your escape…"
           : phase === "queued"
             ? "Waiting for ChatGPT. Connect a chat with the request below to continue."
             : "Waiting for the bridge to reconnect. Your exact request is saved.",
-      ),
-    );
+      );
+    });
     options.signal.throwIfAborted();
     const { design } = parseRunDesignReply(reply, draft.request);
     const saved: SavedRunDesign = {
@@ -333,6 +343,11 @@ export async function prepareDesignedRun<T>(
       options.progress?.(
         "Checking routes, terminal space, stair access and saved design…",
       );
+      options.activity?.({
+        stage: "review",
+        state: "checking",
+        detail: "Checking your escape…",
+      });
       try {
         const game = options.build(draft.request.seed, saved);
         options.signal.throwIfAborted();
@@ -382,6 +397,11 @@ async function prepareAuthoredRun<T>(
     );
   let candidate: ProvisionalRun | undefined;
   const rebuild = (request: ContentRunDesignRequest) => {
+    options.activity?.({
+      stage: "design",
+      state: "checking",
+      detail: "Checking the building…",
+    });
     const preview = options.preview!(request.seed, request.structure);
     if (
       preview.structureFingerprint !== request.structureFingerprint ||
@@ -402,7 +422,18 @@ async function prepareAuthoredRun<T>(
     await options.capture(draft);
     options.signal.throwIfAborted();
     const request = draft.request;
-    const reply = await send(request, draft, options.signal, (phase) =>
+    const activity = (state: HandoffProgress) =>
+      options.activity?.({
+        stage: request.phase === "structure" ? "design" : "details",
+        state,
+        detail:
+          request.phase === "structure"
+            ? "Designing the building…"
+            : "Writing room details…",
+      });
+    activity("queued");
+    const reply = await send(request, draft, options.signal, (phase) => {
+      activity(phase);
       options.progress?.(
         phase === "working"
           ? request.phase === "structure"
@@ -411,8 +442,8 @@ async function prepareAuthoredRun<T>(
           : phase === "queued"
             ? "Waiting for ChatGPT. Continue in the connected chat to finish this run."
             : "Waiting for the bridge to reconnect. Your exact request is saved.",
-      ),
-    );
+      );
+    });
     options.signal.throwIfAborted();
     let repair: unknown;
     let errors: string[] = [];
@@ -425,6 +456,11 @@ async function prepareAuthoredRun<T>(
           options.progress?.(
             "Checking routes and identifying the objects that need writing and artwork…",
           );
+          options.activity?.({
+            stage: "design",
+            state: "checking",
+            detail: "Checking the building…",
+          });
           candidate = options.preview(request.seed, structure);
           options.signal.throwIfAborted();
           const contentRequest = parseRunDesignRequest({
@@ -484,7 +520,13 @@ async function prepareAuthoredRun<T>(
           options.progress?.(
             "Checking the writing, artwork and saved object bindings…",
           );
-          const game = options.finalize(candidate ?? rebuild(request), saved);
+          const finalCandidate = candidate ?? rebuild(request);
+          options.activity?.({
+            stage: "review",
+            state: "checking",
+            detail: "Checking your escape…",
+          });
+          const game = options.finalize(finalCandidate, saved);
           options.signal.throwIfAborted();
           return { seed: request.seed, saved, game };
         } catch (error) {

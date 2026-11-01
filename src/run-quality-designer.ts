@@ -23,6 +23,7 @@ import {
   type QualityRunDesignRequest,
 } from "./run-quality-contract.mjs";
 import type { ProvisionalRun } from "./world";
+import type { RunDesignActivity, RunDesignStage } from "./run-design-progress";
 
 /** These are runaway guards, not a target number of calls or a quality score. */
 export const QUALITY_REPAIR_ATTEMPTS = 8;
@@ -64,6 +65,7 @@ interface QualityOptions<T> {
   signal: AbortSignal;
   capture: (draft: QualityDesignDraft) => void | Promise<void>;
   progress?: (text: string) => void;
+  activity?: (activity: RunDesignActivity) => void;
   preview?: (seed: number, structure: RunStructureV3) => ProvisionalRun;
   finalize?: (candidate: ProvisionalRun, saved: SavedRunDesign) => T;
 }
@@ -458,6 +460,47 @@ function message(request: QualityRunDesignRequest) {
   }
 }
 
+function activityDetail(
+  request: QualityRunDesignRequest,
+): Pick<RunDesignActivity, "stage" | "detail"> {
+  const stage: RunDesignStage = request.phase.startsWith("content")
+    ? request.phase === "content-review" || request.phase === "content-revision"
+      ? "review"
+      : "details"
+    : "design";
+  let detail: string;
+  switch (request.phase) {
+    case "concepts":
+      detail = "Exploring settings…";
+      break;
+    case "selection":
+      detail = "Choosing a setting…";
+      break;
+    case "structure":
+      detail = "Designing the building…";
+      break;
+    case "structure-review":
+      detail = "Reviewing the building…";
+      break;
+    case "content-plan":
+      detail = "Planning room details…";
+      break;
+    case "content-batch": {
+      const batches = qualityContentBatches(request.surfaces),
+        index = batches.findIndex((b) => b.targets[0] === request.targets[0]);
+      detail = `Writing details · group ${index + 1} of ${batches.length}`;
+      break;
+    }
+    case "content-review":
+      detail = "Reviewing writing and artwork…";
+      break;
+    case "content-revision":
+      detail = "Refining details…";
+      break;
+  }
+  return { stage, detail };
+}
+
 /** The caller alone installs the returned completed game. This routine never
  * changes a live run or contacts a model itself. */
 export async function prepareQualityRun<T>(
@@ -502,6 +545,11 @@ export async function prepareQualityRun<T>(
     await capture();
   };
   const rebuild = (request: WorldRequest) => {
+    options.activity?.({
+      stage: "design",
+      state: "checking",
+      detail: "Checking the building…",
+    });
     const rebuilt = options.preview!(request.seed, request.structure);
     if (
       rebuilt.structureFingerprint !== request.structureFingerprint ||
@@ -683,7 +731,13 @@ export async function prepareQualityRun<T>(
         ? "The reviewed run is ready; remaining suggestions reached diminishing returns. Checking its final saved world…"
         : "The reviewed writing and artwork are ready. Checking the final saved world…",
     );
-    const game = options.finalize!(candidate ?? rebuild(request), saved);
+    const finalCandidate = candidate ?? rebuild(request);
+    options.activity?.({
+      stage: "review",
+      state: "checking",
+      detail: "Checking your escape…",
+    });
+    const game = options.finalize!(finalCandidate, saved);
     signal.throwIfAborted();
     return { seed: request.seed, saved, game };
   };
@@ -699,6 +753,11 @@ export async function prepareQualityRun<T>(
         continue;
       }
       if (request.phase === "structure" && request.repair) {
+        options.activity?.({
+          stage: "design",
+          state: "checking",
+          detail: "Checking the building…",
+        });
         candidate = options.preview(request.seed, request.repair.candidate);
         await transition({
           ...structureWorld(request, request.repair.candidate, candidate),
@@ -716,15 +775,19 @@ export async function prepareQualityRun<T>(
 
     options.progress?.(message(request));
     await capture();
-    const raw = await send(request, draft, signal, (phase) =>
+    const activity = (state: HandoffProgress) =>
+      options.activity?.({ ...activityDetail(request), state });
+    activity("queued");
+    const raw = await send(request, draft, signal, (phase) => {
+      activity(phase);
       options.progress?.(
         phase === "working"
           ? message(request)
           : phase === "queued"
             ? "Waiting for ChatGPT. Continue in the connected chat to finish this run."
             : "Waiting for the bridge to reconnect. This exact authoring request is saved.",
-      ),
-    );
+      );
+    });
     signal.throwIfAborted();
     let reply;
     try {
@@ -759,6 +822,11 @@ export async function prepareQualityRun<T>(
       let next: ProvisionalRun | undefined;
       if (!errors.length) {
         try {
+          options.activity?.({
+            stage: "design",
+            state: "checking",
+            detail: "Checking the building…",
+          });
           next = options.preview(request.seed, structure);
         } catch (error) {
           errors.push(error instanceof Error ? error.message : String(error));

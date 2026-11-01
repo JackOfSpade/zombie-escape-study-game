@@ -16,6 +16,7 @@ import { runDesignFingerprint } from "../src/run-design-contract.mjs";
 import { previewDesignedRun, finalizeDesignedRun } from "../src/world";
 import { encode, decode } from "../src/persistence";
 import type { Roadmap } from "../src/model";
+import type { RunDesignActivity } from "../src/run-design-progress";
 import { environmentDesignFixture } from "./helpers/environment-design";
 import { qualityFixtureReply } from "./helpers/quality-design";
 
@@ -112,8 +113,14 @@ function revisedEntry(
 test("quality generation explores, selects, reviews and authors each coherent object batch before activating the complete world", async () => {
   const current = draft(),
     phases: string[] = [],
-    captured: string[] = [];
-  let activations = 0;
+    captured: string[] = [],
+    activities: RunDesignActivity[] = [],
+    requestedStages: RunDesignActivity["stage"][] = [],
+    batches = qualityContentBatches(design.environment.surfaces);
+  let activations = 0,
+    workingSignals = 0,
+    authoredBatches = 0,
+    previews = 0;
   const result = await prepareQualityRun(
     current,
     options({
@@ -121,19 +128,66 @@ test("quality generation explores, selects, reviews and authors each coherent ob
         const parsed = parseQualityDraft(d);
         captured.push(`${parsed.request.phase}:${parsed.reviews.content.stop}`);
       },
+      activity: (event) => activities.push(event),
+      preview: (seed, structure) => {
+        assert.equal(activities.at(-1)?.state, "checking");
+        assert.equal(activities.at(-1)?.stage, "design");
+        previews++;
+        return previewDesignedRun(seed, roadmap, undefined, structure);
+      },
       finalize: (candidate, saved) => {
         assert.equal(phases.at(-1), "content-review");
         assert.ok(captured.includes("content-review:ready"));
+        assert.equal(activities.at(-1)?.state, "checking");
+        assert.equal(activities.at(-1)?.stage, "review");
         activations++;
         return finalizeDesignedRun(candidate, saved);
       },
     }),
-    async (request, ...args) => {
+    async (request, currentDraft, signal, progress) => {
       phases.push(request.phase);
-      return send(request, ...args);
+      const queued = activities.at(-1)!;
+      assert.equal(
+        queued.state,
+        "queued",
+        "every captured request waits for pickup before showing activity",
+      );
+      requestedStages.push(queued.stage);
+      assert.equal(
+        activities.filter((event) => event.state === "working").length,
+        workingSignals,
+        "starting or accepting requests cannot invent worker activity",
+      );
+      await Promise.resolve();
+      assert.equal(activities.at(-1), queued);
+      if (request.phase === "content-batch") {
+        assert.equal(queued.stage, "details");
+        assert.ok(
+          queued.detail.includes(
+            `group ${++authoredBatches} of ${batches.length}`,
+          ),
+          "batch progress follows the actual accepted object groups",
+        );
+      }
+      workingSignals++;
+      progress("working");
+      assert.equal(activities.at(-1)?.state, "working");
+      assert.equal(activities.at(-1)?.stage, queued.stage);
+      if (request.phase === "concepts") {
+        progress("unknown");
+        const disconnected = activities.at(-1)!;
+        assert.equal(disconnected.state, "unknown");
+        assert.equal(disconnected.stage, queued.stage);
+        await Promise.resolve();
+        assert.equal(
+          activities.at(-1),
+          disconnected,
+          "loss of transport confirmation stays idle until a real event",
+        );
+      }
+      return send(request, currentDraft, signal, progress);
     },
   );
-  const batches = qualityContentBatches(design.environment.surfaces);
   assert.deepEqual(phases, [
     "concepts",
     "selection",
@@ -148,6 +202,19 @@ test("quality generation explores, selects, reviews and authors each coherent ob
     "hundreds of objects receive focused authoring calls",
   );
   assert.ok(batches.every((b) => b.targets.length <= 24));
+  assert.equal(authoredBatches, batches.length);
+  assert.equal(previews, 1);
+  assert.equal(
+    activities.filter((event) => event.state === "working").length,
+    workingSignals,
+  );
+  assert.deepEqual(
+    requestedStages.filter(
+      (stage, index) => stage !== requestedStages[index - 1],
+    ),
+    ["design", "details", "review"],
+    "accepted preparation transitions advance through the player-facing stages",
+  );
   assert.equal(activations, 1);
   assert.deepEqual(result.saved.design, design);
   const game = result.game as ReturnType<typeof finalizeDesignedRun>;

@@ -38,7 +38,10 @@ async function designer(page: Page) {
     queued = false,
     queuedPhase = "concepts",
     delayed = false,
-    failedPoll = false;
+    failedPoll = false,
+    outage = false,
+    working = false,
+    unrelatedWorker = false;
   let answer = (_body: any) => harbor;
   let editReply = (_body: any, response: any) => response;
   const reply = (body: any, proposed: any) => {
@@ -92,17 +95,26 @@ async function designer(page: Page) {
       return json({
         enabled: capable,
         queued: calls.length,
-        working: 0,
+        working: working || unrelatedWorker ? 1 : 0,
         done: results.size,
         public: {
           configured: false,
-          workerActive: false,
-          terminalRelay: { activeSessions: 0 },
+          workerActive: working || unrelatedWorker,
+          terminalRelay: { activeSessions: working || unrelatedWorker ? 1 : 0 },
         },
-        recent: calls.map((c) => ({
-          id: c.payload.requestId,
-          status: results.has(c.payload.requestId) ? "done" : "queued",
-        })),
+        recent: [
+          ...(unrelatedWorker
+            ? [{ id: "another-chat-request", status: "working" }]
+            : []),
+          ...calls.map((c) => ({
+            id: c.payload.requestId,
+            status: results.has(c.payload.requestId)
+              ? "done"
+              : working
+                ? "working"
+                : "queued",
+          })),
+        ],
       });
     if (url.pathname === "/api/bridge" && request.method() === "POST") {
       const body = request.postDataJSON();
@@ -128,6 +140,12 @@ async function designer(page: Page) {
         cancelled.push(id);
         return json({ cancelled: true });
       }
+      if (outage)
+        return route.fulfill({
+          status: 503,
+          contentType: "text/html",
+          body: "Synthetic proxy unavailable",
+        });
       if (failedPoll)
         return json({ error: "Synthetic design request interrupted" }, 409);
       return results.has(id)
@@ -152,6 +170,15 @@ async function designer(page: Page) {
     },
     setFailedPoll(value: boolean) {
       failedPoll = value;
+    },
+    setOutage(value: boolean) {
+      outage = value;
+    },
+    setWorking(value: boolean) {
+      working = value;
+    },
+    setUnrelatedWorker(value: boolean) {
+      unrelatedWorker = value;
     },
     setAnswer(value: (body: any) => any) {
       answer = value;
@@ -328,6 +355,17 @@ for (const { clipboardDenied, popupBlocked } of [
       await chat.close();
     }
     const dialog = page.locator("#run-design-dialog");
+    await expect(dialog).toHaveAttribute("data-state", "waiting");
+    await expect(page.locator("#run-design-loading")).toBeHidden();
+    await expect(page.locator("#run-design-status")).toContainText(
+      "Waiting for ChatGPT",
+    );
+    await expect(
+      page.locator('#run-design-steps [data-step="connect"]'),
+    ).toHaveAttribute("data-state", "active");
+    await expect(
+      page.locator('#run-design-steps [data-state="complete"]'),
+    ).toHaveCount(0);
     await expect(dialog.locator("textarea, details")).toHaveCount(0);
     await expect(
       dialog.getByRole("button", { name: "Copy request" }),
@@ -351,6 +389,168 @@ for (const { clipboardDenied, popupBlocked } of [
   });
 }
 
+test("the fallback ChatGPT link retries failed connector setup without advancing the pending design", async ({
+  page,
+  context,
+}) => {
+  const relay = await designer(page);
+  relay.setQueued(true);
+  await context.route("https://chatgpt.com/**", (route) =>
+    route.fulfill({
+      contentType: "text/html",
+      body: "<title>Synthetic recovery chat</title>",
+    }),
+  );
+  await page.addInitScript(() => {
+    // The initial click must retain a usable fallback when a popup is blocked.
+    window.open = () => null;
+  });
+  await open(page);
+  const before = await state(page);
+  await page.evaluate(async () => {
+    const { chooseRunDesign } = await import("/src/run-design-ui.ts" as string),
+      app = (window as any).__deadAir;
+    (window as any).__designRecoveryConnectCalls = 0;
+    void chooseRunDesign(app.game, app.roadmap, async () => {
+      const call = ++(window as any).__designRecoveryConnectCalls;
+      if (call === 1) throw Error("Synthetic connector startup failed");
+    });
+  });
+  await expect.poll(() => relay.calls.length).toBe(1);
+  await page.locator("#run-design-connect").click();
+  await expect
+    .poll(() =>
+      page.evaluate(() => (window as any).__designRecoveryConnectCalls),
+    )
+    .toBe(1);
+  const fallback = page.locator("#run-design-open"),
+    url = await fallback.getAttribute("href");
+  await expect(fallback).toBeVisible();
+  const popup = page.waitForEvent("popup");
+  await fallback.click();
+  const chat = await popup;
+  await chat.waitForURL(url!);
+  await expect(chat).toHaveTitle("Synthetic recovery chat");
+  await chat.close();
+  await expect
+    .poll(() =>
+      page.evaluate(() => (window as any).__designRecoveryConnectCalls),
+    )
+    .toBe(2);
+  await expect(page.locator("#run-design-dialog")).toHaveAttribute(
+    "data-state",
+    "waiting",
+  );
+  await expect(page.locator("#run-design-loading")).toBeHidden();
+  await expect(
+    page.locator('#run-design-steps [data-state="complete"]'),
+  ).toHaveCount(0);
+  expect(relay.calls).toHaveLength(1);
+  expect(await state(page)).toEqual(before);
+  await page.locator("#run-design-cancel").click();
+  await expect(page.locator("#run-design-dialog")).toHaveCount(0);
+  await expect
+    .poll(() => relay.cancelled)
+    .toContain(relay.calls[0].payload.requestId);
+  expect(await state(page)).toEqual(before);
+});
+
+test("setup progress follows this chat's claimed job and completed stages, stopping during a bridge outage", async ({
+  page,
+}) => {
+  const relay = await designer(page);
+  relay.setQueued(true);
+  relay.setUnrelatedWorker(true);
+  await open(page);
+  const original = await state(page);
+  await page.locator("#start").click();
+  await expect.poll(() => relay.calls.length).toBe(1);
+  const dialog = page.locator("#run-design-dialog"),
+    loading = page.locator("#run-design-loading"),
+    step = (name: string) =>
+      page.locator(`#run-design-steps [data-step="${name}"]`);
+  await expect(dialog).toHaveAttribute("data-state", "waiting");
+  await expect(loading).toBeHidden();
+  await expect(page.getByRole("progressbar")).not.toBeVisible();
+  await expect(page.locator("#run-design-retry")).toBeHidden();
+  await expect(step("connect")).toHaveAttribute("data-state", "active");
+  await expect(step("connect")).toHaveAttribute("aria-current", "step");
+  await expect(step("design")).toHaveAttribute("data-state", "pending");
+  // An active worker in another chat is not evidence this request was claimed.
+  await expectFrozen(page);
+  await expect(loading).toBeHidden();
+  await dialog.screenshot({
+    path: ".artifacts/handoff/design/reactive-setup-waiting.png",
+  });
+
+  relay.setWorking(true);
+  await expect(dialog).toHaveAttribute("data-state", "working");
+  await expect(loading).toBeVisible();
+  await expect(page.getByRole("progressbar")).toBeVisible();
+  await expect(step("connect")).toHaveAttribute("data-state", "complete");
+  await expect(step("design")).toHaveAttribute("data-state", "active");
+  await expect(step("design")).toHaveAttribute("aria-current", "step");
+  await expect(step("details")).toHaveAttribute("data-state", "pending");
+  await expect(step("review")).toHaveAttribute("data-state", "pending");
+  await dialog.screenshot({
+    path: ".artifacts/handoff/design/reactive-setup-working.png",
+  });
+
+  relay.setOutage(true);
+  await expect(dialog).toHaveAttribute("data-state", "reconnecting");
+  await expect(loading).toBeHidden();
+  await expect(step("design")).toHaveAttribute("data-state", "active");
+  await expect(step("details")).toHaveAttribute("data-state", "pending");
+  expect(await state(page)).toEqual(original);
+
+  relay.setWorking(false);
+  relay.setOutage(false);
+  relay.setQueued(true, "content-batch");
+  relay.finish(relay.calls[0]);
+  await expect
+    .poll(() => relay.calls.at(-1)?.payload.phase)
+    .toBe("content-batch");
+  await expect(dialog).toHaveAttribute("data-state", "waiting");
+  await expect(loading).toBeHidden();
+  await expect(step("connect")).toHaveAttribute("data-state", "complete");
+  await expect(step("design")).toHaveAttribute("data-state", "complete");
+  await expect(step("details")).toHaveAttribute("data-state", "active");
+  await expect(step("review")).toHaveAttribute("data-state", "pending");
+  expect(await state(page)).toEqual(original);
+
+  relay.setWorking(true);
+  await expect(dialog).toHaveAttribute("data-state", "working");
+  await expect(loading).toBeVisible();
+  await expect(page.locator("#run-design-status")).toContainText(/group 1 of/);
+  await page.setViewportSize({ width: 390, height: 844 });
+  const bounds = await dialog.boundingBox();
+  expect(bounds).not.toBeNull();
+  expect(bounds!.x).toBeGreaterThanOrEqual(0);
+  expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(390);
+  await expect
+    .poll(() =>
+      dialog.evaluate((element) => element.scrollWidth <= element.clientWidth),
+    )
+    .toBe(true);
+  await dialog.screenshot({
+    path: ".artifacts/handoff/design/reactive-setup-working-narrow.png",
+  });
+
+  relay.setQueued(true, "content-review");
+  relay.finish(relay.calls.at(-1));
+  await expect
+    .poll(() => relay.calls.at(-1)?.payload.phase)
+    .toBe("content-review");
+  await expect(step("details")).toHaveAttribute("data-state", "complete");
+  await expect(step("review")).toHaveAttribute("data-state", "active");
+  await expect(step("review")).not.toHaveAttribute("data-state", "complete");
+  relay.setQueued(false);
+  relay.finish(relay.calls.at(-1));
+  await prepared(page);
+  expect((await state(page)).status).toBe("ready");
+  expect((await gameplayState(page)).time).toBe(0);
+});
+
 test("prepared runs wait for an explicit Start before gameplay and across reload", async ({
   page,
 }) => {
@@ -360,8 +560,11 @@ test("prepared runs wait for an explicit Start before gameplay and across reload
   await page.locator("#start").click();
   await expect.poll(() => relay.calls.length).toBe(1);
   await expect(page.locator("#run-design-dialog")).toBeVisible();
-  await expect(page.getByRole("progressbar")).toBeVisible();
-  await expect(page.locator("#run-design-dialog")).toContainText("press Start");
+  await expect(page.getByRole("progressbar")).not.toBeVisible();
+  await expect(page.locator("#run-design-dialog")).toHaveAttribute(
+    "data-state",
+    "waiting",
+  );
   const loading = await expectFrozen(page);
   expect(loading.time).toBe(0);
   const viewport = page.viewportSize()!;
