@@ -1,6 +1,7 @@
 import { chooseDesignedRun } from "./helpers/designed-run";
 import { expect, test, type Page } from "./helpers/offline-test";
 import { enterLegacyBuilding } from "./helpers/legacy-world";
+import { environmentDesignFixture } from "../helpers/environment-design";
 import {
   flushNativeSave,
   mockNativeStudy,
@@ -305,10 +306,13 @@ test("restart saves learning before the new run; save and quit shows the saved r
   await expect(page.locator("#pause-menu")).not.toBeVisible();
   const restarted = await page.evaluate(() => {
     const g = (window as any).__deadAir.game;
-    return { id: g.id, notice: g.notice };
+    return { id: g.id, notice: g.notice, opening: g.design?.design.opening };
   });
   expect(restarted.id).not.toBe(first);
-  expect(restarted.notice).toBe("Learning progress saved. New run started.");
+  expect(restarted.opening).toBe(environmentDesignFixture().opening);
+  expect(restarted.notice).toBe(
+    `${restarted.opening} Zombies are already approaching. The entrance is behind you; they will reach it in about three minutes. Learning progress saved. New run started.`,
+  );
 
   await page.keyboard.press("Escape");
   await page.locator("#save-quit").click();
